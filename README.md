@@ -14,10 +14,10 @@ compiler, and every bit set in it was read out of the datasheet and the device p
 but nobody has executed it on a board or measured a signal with it. Treat it as a
 clean scaffold with measurement points, not as a reference implementation.
 
-It was also **written with Claude Code** (Anthropic's AI tool for software
-development), under our direction and review. Register names, bitfields and value
-ranges do not come from the model's memory: they were extracted from datasheet
-**DS70005591D** and from the ATDF files of the **dsPIC33AK-MP_DFP** device pack.
+Parts of this example were **AI-assisted**. All register names, bitfields and value
+ranges were taken from datasheet **DS70005591D** and from the ATDF files of the
+**dsPIC33AK-MP_DFP** device pack, and each one is cited at the point of use — so every
+setting can be checked against the primary source.
 
 ## Getting started
 
