@@ -1,0 +1,31 @@
+# Build artefacts
+*.elf
+*.hex
+*.map
+*.o
+*.d
+*.bak
+memoryfile.xml
+setup_verify.elf
+
+# MPLAB X build output
+adc_dma_40msps.X/build/
+adc_dma_40msps.X/dist/
+adc_dma_40msps.X/debug/
+adc_dma_40msps.X/.generated_files/
+
+# MPLAB X generated makefile fragments and per-user settings.
+#
+# These are DERIVED from nbproject/configurations.xml (which IS tracked) and
+# they contain absolute paths of the machine that generated them, e.g.
+#   C:\Program Files\Microchip\xc-dsc\v3.21\bin
+#   C:/Program Files/Microchip/MPLABX/v6.35/packs/...
+# Committed, they would be wrong on every other machine - and wrong in the
+# expensive way: the build starts, then fails on a missing tool.
+#
+# Opening the project in MPLAB X recreates them. No IDE session is needed to
+# get them either: MPLAB X ships prjMakefilesGenerator.bat for exactly this
+# (see tools/_test_mplabx.bat).
+adc_dma_40msps.X/nbproject/Makefile-*.mk
+adc_dma_40msps.X/nbproject/Makefile-genesis.properties
+adc_dma_40msps.X/nbproject/private/

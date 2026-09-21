@@ -1,0 +1,16 @@
+%%{init: {'theme':'neutral', 'flowchart':{'curve':'basis','nodeSpacing':30,'rankSpacing':40,'htmlLabels':true}}}%%
+flowchart LR
+
+    REQ{{"trigger<br/>DMA0SEL = 0x2F<br/>ADC1 Done CH0"}} --> BUS["⚠ <b>ONE shared DMA data bus</b><br/>all 8 channels arbitrate<br/>for this one path to RAM<br/><i>§13.4.4, p825</i>"]
+    BUS --> CFG["SIZE = 1 → 2 byte per sample<br/>SAMODE = 0 → source fixed<br/>DAMODE = 1 → dst++<br/>TRMODE = 3 → repeated continuous"]
+    CFG --> BA["buf_a<br/>1024 × 2 byte<br/>= 25.6 µs"]
+    CFG --> BB["buf_b<br/>1024 × 2 byte<br/>= 25.6 µs"]
+
+    classDef adc  fill:#e6f4ea,stroke:#34a853
+    classDef dma  fill:#fef7e0,stroke:#f9ab00
+    classDef warn fill:#fff3f2,stroke:#d93025,stroke-width:2px
+    classDef buf  fill:#ffffff,stroke:#5f6368
+
+    class REQ,CFG dma
+    class BUS warn
+    class BA,BB buf

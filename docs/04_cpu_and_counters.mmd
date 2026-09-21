@@ -1,0 +1,20 @@
+%%{init: {'theme':'neutral', 'flowchart':{'curve':'basis','nodeSpacing':30,'rankSpacing':40,'htmlLabels':true}}}%%
+flowchart LR
+
+    BUFS["buf_a / buf_b<br/>one is filling,<br/>the other is free"] == "block full" ==> ISR["<b>DMA0 ISR</b><br/>repoint DMA0DST<br/>to the other buffer<br/>read error flags"]
+    ISR --> CNT[["<b>What to read in the debugger</b><br/>blocks_done × 1024 / time = actual rate<br/><b>dma_overrun</b> → must stay 0<br/><b>late_service</b> → must stay 0<br/>last_sample changes = data is moving"]]
+    ISR --> PROC["process_buffer()<br/>the '+ and −' maths<br/>on the idle buffer"]
+    CNT --> ANS(["<b>The question this answers:</b><br/>3 ch × 40 MSPS × 2 B = 240 MB/s<br/>5 ch = 400 MB/s<br/>over that one bus —<br/>the datasheet gives no figure"])
+    PROC -. "if it cannot keep up" .-> FIX(["ACCNUM averages<br/>4 / 16 / 64 / 256 samples<br/>inside the ADC:<br/>16× → 240 MB/s becomes 15 MB/s<br/>result still fits in 2 byte"])
+
+    classDef clk  fill:#e8f0fe,stroke:#4285f4
+    classDef adc  fill:#e6f4ea,stroke:#34a853
+    classDef dma  fill:#fef7e0,stroke:#f9ab00
+    classDef cpu  fill:#fce8e6,stroke:#ea4335
+    classDef warn fill:#fff3f2,stroke:#d93025,stroke-width:2px
+    classDef buf  fill:#ffffff,stroke:#5f6368
+
+    class BUFS buf
+    class ISR,PROC cpu
+    class CNT,ANS warn
+    class FIX adc
