@@ -59,6 +59,70 @@ The `tools/` folder builds the same file from the command line without the IDE. 
 can ignore it** — we use it to check that the code compiles against different
 compiler and pack versions.
 
+## First run on hardware
+
+Since this has never run on silicon, here is what to expect and where it is most
+likely to trip you up.
+
+### Step 1 — check that anything runs at all, no signal needed
+
+Program the board, let it run, then halt it and look at four variables:
+
+| Variable | Should be |
+|---|---|
+| `blocks_done` | increasing — at 40 MSPS a block completes every 25.6 µs, so this climbs fast |
+| `last_sample` | changing |
+| `dma_overrun` | **0** |
+| `late_service` | **0** |
+
+An unconnected pin gives you noise around some level. As a sign of life that is
+perfectly sufficient — it proves clock, ADC, DMA and the ISR are working together.
+
+### Step 2 — feed a signal in
+
+**Which pin.** The code samples `AD1AN0` (`PINSEL = 0`). Look up which physical pin
+that is on your package and check it is free on your board — if something is already
+connected there, you will be looking at that instead of your signal. The input map is
+Table 16-2 of DS70005591D, from page 1224.
+
+**What level.** 0 to 3.3 V, single ended against AVSS, unipolar (`DIFF = 0`). Anything
+with a negative excursion gets clipped at the bottom.
+
+**What frequency.** This matters more than people expect. One buffer is 1024 samples,
+which at 40 MSPS is **25.6 µs**. A 1 kHz sine fills 2.5 % of one period — in the buffer
+that is a straight line. For a recognisable waveform use something in the **100 kHz to
+a few MHz** range, then several periods fit in the window.
+
+**Source impedance — the most likely reason for odd values.** `SAMC = 0` means a sample
+time of 0.5 TAD = 6.25 ns, and in that time your source has to charge the hold
+capacitor. A 50 Ω function generator manages; a high-impedance divider or a long cable
+does not, and you get values that are too small or smeared. If the picture looks wrong,
+**`ADC1_SAMC` at the top of the source is the first knob to turn** — raise it and see
+whether the amplitude comes up.
+
+### Step 3 — look at the buffer
+
+The buffers refill 39 000 times per second, so you have to stop the capture to see
+anything: set a breakpoint in the DMA0 ISR, then view `buf_a` / `buf_b` in the watch
+window or as a memory view.
+
+Which one to look at: `active_buf` points at the buffer currently **being filled**, so
+the *other* one holds the complete block.
+
+### If it does not work
+
+| Symptom | Where to look first |
+|---|---|
+| stuck before `main()`, or nothing counts up | clock configuration — a wait loop in `clock_init()` never exits |
+| `blocks_done` stays 0 | ADC not converting (`ADRDY`?) or wrong DMA trigger (`DMA0SEL`) |
+| `dma_overrun` counting up | the shared DMA bus is not keeping up — see below, this is the interesting result |
+| values far too small or flat | source impedance, raise `ADC1_SAMC` |
+| values look like a straight line | signal frequency too low for a 25.6 µs window |
+| `late_service` counting up | the ISR is not keeping up, reduce the processing or enlarge `SAMPLES_PER_BUF` |
+
+Note that `dma_overrun` counting up is not a bug in this code — it is the measurement
+this example exists for.
+
 ## How it works
 
 ### 1. Clock tree
