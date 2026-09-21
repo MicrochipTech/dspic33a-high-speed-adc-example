@@ -123,6 +123,11 @@ the *other* one holds the complete block.
 Note that `dma_overrun` counting up is not a bug in this code — it is the measurement
 this example exists for.
 
+**If you get stuck, read [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).** It goes
+through each wait loop and what being stuck there means, lists the symptoms in the order
+you are likely to meet them, and — most usefully — **names the places where we are least
+sure of our own code**, so you do not spend time on the parts that are solid.
+
 ## How it works
 
 ### 1. Clock tree
@@ -324,6 +329,7 @@ The fix is not to guess the value but to align the versions. This project carrie
 |---|---|
 | `adc_dma_40msps.c` | the entire code, commented with datasheet references |
 | `adc_dma_40msps.X/` | MPLAB X project — build, program and debug from here |
+| `docs/TROUBLESHOOTING.md` | **what to do when it does not work** — including where we doubt our own code |
 | `docs/*.png`, `docs/*.mmd` | the block diagrams above, with their Mermaid sources |
 | `tools/` | command-line build without the IDE; **ignore this unless you want it** |
 
