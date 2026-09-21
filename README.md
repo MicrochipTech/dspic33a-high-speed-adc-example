@@ -38,6 +38,23 @@ Verified on 2026-09-21 with:
 There is exactly **one** source file, `adc_dma_40msps.c`, in the repository root. The
 MPLAB X project references it; nothing is duplicated.
 
+**This needs real hardware — the simulator will not run it.** MPLAB X's simulator
+model for dsPIC33A covers PPS, ports, pull-ups, TMR1/TMR2, UART1-3, the watchdog and
+context switching. It does *not* model the clock generators, the PLLs, the ADC or the
+DMA, which are the four things this example is about. In the simulator the code
+therefore stops at the first wait loop: `PLL1CONbits.OSWEN` gets written but nothing
+ever clears it, because there is no PLL to switch. `AD1CONbits.ADRDY` would behave the
+same way.
+
+Skipping those loops under conditional compilation would not help: the ADC would not
+convert, the DMA would not transfer and the ISR would never fire, so the run would
+show that the code starts — not that the configuration works. The number that matters,
+`dma_overrun` staying at 0 at full rate, only exists on silicon.
+
+One part *is* worth simulating: `process_buffer()`. Write test values into `buf_a`,
+call it on its own, and you can check your arithmetic and its cycle count without a
+board.
+
 The `tools/` folder builds the same file from the command line without the IDE. **You
 can ignore it** — we use it to check that the code compiles against different
 compiler and pack versions.
