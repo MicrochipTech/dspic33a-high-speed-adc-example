@@ -208,7 +208,7 @@ How to read it:
 
 | Line | What it tells you |
 |---|---|
-| `INTTREG.VECNUM` | **which** vector fired. `1` = CPU/FPU, i.e. a genuine CPU trap — the cause is then in the `INTCON*` bits below. `0` = the collapsed COMMON vector. Anything else is a peripheral raising an interrupt this example does not handle; look the number up in the pack's ATDF interrupt list |
+| `INTTREG.VECNUM` | **which** vector fired. `1` = CPU/FPU, i.e. a genuine CPU trap — the cause is then in the `INTCON*` bits below. `0` = the collapsed COMMON vector. Anything else is a peripheral raising an interrupt this example does not handle — the numbers worth knowing are in the table below |
 | `reached boot stage` / `last step completed` | **where** in start-up it happened, even if the console did not exist yet. Stage 4 means `clock_init()` finished, so the clocks are not the suspect |
 | `INTCON1.ADDRERR` | an illegal address was used — a bad pointer, or a DMA/linker address outside RAM |
 | `INTCON1.STKERR` | stack overflow or underflow |
@@ -216,6 +216,22 @@ How to read it:
 | `INTCON3.DMABET` / `CPUBET` | bus error trap from the DMA or the CPU |
 | `INTCON4.DIV0ERR` | division by zero |
 | `INTCON5.WDTE` / `DMTE` | watchdog or deadman timer expired |
+
+**The vector numbers to expect on this device** (from the pack's ATDF interrupt list —
+the authoritative source; `VECNUM` is the IRQ number, no offset to apply):
+
+| VECNUM | Name | Why it could fire here |
+|---|---|---|
+| 201 | `AD3CH0Interrupt` | **the first suspect.** `adc_init()` sets `IRQSEL = 0`, so the ADC raises a channel-done event per conversion — that event is the DMA trigger and is meant to stay in the peripheral. If it also reaches the CPU, it arrives 40 million times a second on a vector with no handler. `IEC6` bit 9 is the enable; this code never sets it, so it should be masked — if VECNUM is 201 anyway, that assumption is wrong and is the bug |
+| 202 … 212 | `AD3CMP0` … `AD3CH5` | other ADC3 sources, same family |
+| 77 | `DMA0Interrupt` | ours — should never appear here |
+| 102 | `U2RXInterrupt` | ours — should never appear here |
+| 1 | `CPUFPUInterrupt` | a real CPU trap; read the `INTCON*` bits |
+| 0 | `COMMONInterrupt` | collapsed vector |
+
+Any other number: look it up in
+`packs/Microchip/dsPIC33AK-MP_DFP/<ver>/atdf/dsPIC33AK512MPS512.atdf`, search for
+`interrupt index="<number>"`.
 
 `boot_stage`, `trap_seen`, `trap_vec` and `trap_stage` live in **persistent RAM**, so
 they survive the reset that a trap causes when no debugger is attached. If the previous
