@@ -74,7 +74,11 @@
  *   after clock_init(), PLL2 at 200 MHz: 100 MHz -> BRG 868, 115 207 baud
  * Both are within 1 % of 115 200. */
 #define UART_BRG_FRC      35u
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+#define UART_BRG_PLL      UART_BRG_FRC   /* the simulator never leaves the 8 MHz FRC */
+#else
 #define UART_BRG_PLL      868u
+#endif
 
 #define UART_RX_PRIORITY  1u      /* below the DMA interrupt (4)        */
 
@@ -196,6 +200,9 @@ static size_t console_write(const char *data, size_t len)
  * reply are dropped. */
 static void console_yield(void)
 {
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+    return;     /* the simulator has no UART receiver: RXBE never rises */
+#endif
     while (!U2STATbits.RXBE) {
         if ((uint8_t)U2RXB == 0x03u) {
             cmd_parser_abort();

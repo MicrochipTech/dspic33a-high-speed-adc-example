@@ -32,7 +32,11 @@
 
 /* Bound for every hardware wait loop, in loop iterations. A step that
  * needs longer than this has failed; fail() then reports which one. */
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+#define WAIT_LIMIT        20000u     /* simulator runs at ~1/80 real time */
+#else
 #define WAIT_LIMIT        2000000u
+#endif
 
 /* ---- Measurement state (defined in adc_dma_40msps.c) ---- */
 extern volatile uint16_t buf[SAMPLES_PER_BUF];

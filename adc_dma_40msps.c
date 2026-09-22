@@ -424,7 +424,16 @@ void fail(uint32_t code)
     }
 }
 
-/* Wait until a condition becomes false, or give up with a code. */
+/* Wait until a condition becomes false, or give up with a code.
+ *
+ * Simulator build: no waiting at all. The MPLAB X simulator has no PLL,
+ * no ADC conversion and no DMA transfer, so every one of these conditions
+ * would time out and end the run in fail(1) before anything of interest
+ * had executed. The register writes stay exactly as on hardware; only the
+ * waits go - the same pattern MCC's clock.c uses. */
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+#define WAIT_WHILE(cond, code)  do { (void)(cond); } while (0)
+#else
 #define WAIT_WHILE(cond, code)                              \
     do {                                                    \
         uint32_t n_ = WAIT_LIMIT;                           \
@@ -432,6 +441,7 @@ void fail(uint32_t code)
             if (--n_ == 0u) { fail(code); }                 \
         }                                                   \
     } while (0)
+#endif
 
 /* ------------------------------------------------------------------ *
  * Clock setup
