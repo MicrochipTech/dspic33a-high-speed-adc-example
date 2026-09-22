@@ -315,7 +315,11 @@ static const char *const boot_text[] = {
 static void trap_report(uint32_t vec)
 {
     if (boot_stage >= 2u) {
-        console_sync_baud();
+        /* Not console_sync_baud(): that only corrects the baud divider and
+         * trusts the console to be otherwise intact. A trap can have
+         * disturbed the pins, the PPS mapping or the UART itself, so put
+         * the whole path back up before relying on it. */
+        console_force_up();
         console_puts("\r\n[TRAP] unhandled vector or CPU trap\r\n");
         console_kv("[TRAP] INTTREG.VECNUM", vec);
         console_kv("[TRAP] INTTREG.ILR", (uint32_t)INTTREGbits.ILR);
@@ -365,6 +369,13 @@ void __attribute__((interrupt, no_auto_psv)) _DefaultInterrupt(void)
     IEC2bits.DMA0IE = 0;
     DMA0CHbits.CHEN = 0;
     INTCON1bits.GIE = 0;
+
+    /* LED on before the first character is attempted. Printing needs a
+     * working UART and a sane clock; this needs neither, so a lit LED0
+     * with nothing on the terminal is itself the message "trapped, and
+     * the console did not survive it". */
+    LED_TRIS = 0u;
+    LED_ON();
 
     trap_report(vec);
 

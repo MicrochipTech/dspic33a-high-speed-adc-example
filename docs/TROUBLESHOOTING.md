@@ -231,6 +231,29 @@ run ended in a trap, the next start-up says so up front:
 That is what turns "the board just keeps restarting" into a located fault. With the
 debugger you can read the same four variables in the *Variables* window at any time.
 
+**Can a trapped core still talk on the UART?** Yes, and the handler is built for it.
+The break itself does not disable the transmitter: the core is halted by the debugger
+*after* the handler runs, and without a debugger nothing halts at all. What could
+swallow the message is the console's own state, so three things are deliberate:
+
+- The handler calls `console_force_up()`, not `console_sync_baud()`. Pins, the PPS
+  mapping (`_U2RXR`, `_RP114R`) and the whole UART are written again from scratch, and
+  the baud divider is picked from the clock the CPU is actually on. A trap inside
+  `clock_init()` therefore still prints — at FRC speed, which is the correct rate at
+  that point.
+- Every transmit wait is bounded (`TX_WAIT_LIMIT` in `cli.c`). This matters more than
+  it looks: `console_puts()` used to spin on `U2STATbits.TXBF` forever, so a UART that
+  was *not* transmitting would have hung inside the very report that explains the
+  fault — the failure would have hidden its own diagnosis. A garbled line beats none.
+- **LED0 is switched on before the first character is attempted.** Lighting it needs
+  neither a working UART nor a sane clock. So a steady-lit LED0 with an empty terminal
+  is itself a message: trapped, and the console did not survive it. After the report
+  the LED blinks code 9.
+
+If the terminal stays empty and LED0 is lit, read `trap_vec`, `trap_stage` and
+`boot_stage` with the debugger — they hold the same information the console would have
+printed, and they survive a reset.
+
 ### 2.1 The LED blinks a code — it stopped at a checkpoint
 
 Nothing in this code waits forever. Every hardware wait is bounded by `WAIT_LIMIT`

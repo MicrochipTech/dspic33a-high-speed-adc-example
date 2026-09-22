@@ -107,20 +107,62 @@ void console_early_init(void)
     console_puts("\r\n[boot] uart up on FRC, 115200 8N1\r\n");
 }
 
+/* How long to wait for the transmitter, in polling iterations. One
+ * character takes 87 us at 115200 baud; on the 8 MHz FRC that is a few
+ * hundred cycles, at 200 MHz about 17 000. 200 000 is far more than
+ * either and still finite - which is the whole point: console_puts() is
+ * called from _DefaultInterrupt() to report a trap, and if the UART is
+ * not actually transmitting (wrong baud divider, ON bit cleared, clock
+ * gone) an unbounded wait would silently swallow the one message that
+ * explains the fault. Better a garbled line than none. */
+#define TX_WAIT_LIMIT     200000u
+
 /* Blocking output, usable at any time after console_early_init(): from
- * main(), from fail(), and from the receive interrupt (the parser's own
- * output goes through console_write() below instead). */
+ * main(), from fail(), from _DefaultInterrupt() and from the receive
+ * interrupt (the parser's own output goes through console_write()
+ * below instead). Never blocks forever - see TX_WAIT_LIMIT. */
 void console_puts(const char *s)
 {
     while (*s) {
-        while (U2STATbits.TXBF) { }
+        uint32_t n = TX_WAIT_LIMIT;
+        while (U2STATbits.TXBF && (--n != 0u)) { }
         U2TXB = (uint8_t)*s++;
     }
 }
 
 static void console_drain(void)
 {
-    while (!U2STATbits.TXMTIF) { }    /* shift register empty too       */
+    uint32_t n = TX_WAIT_LIMIT;
+    while (!U2STATbits.TXMTIF && (--n != 0u)) { }   /* shift reg empty too */
+}
+
+/* Bring the console back up from scratch, assuming nothing about the
+ * current state of the pins, the PPS mapping or the UART.
+ *
+ * This is what _DefaultInterrupt() calls before it reports a trap. A trap
+ * can have happened anywhere, including inside clock_init() or after some
+ * other code disturbed the peripheral, and in that situation
+ * console_sync_baud() is not enough: it only fixes the baud divider, and
+ * it trusts CLK1CON to say what the clock is. Here the routing is written
+ * again and the baud rate is picked from the clock the CPU is actually
+ * on, so the one message that explains the fault has the best chance of
+ * getting out.
+ *
+ * Safe to call when the console is already up - it re-writes the same
+ * values - and safe from interrupt context: no waiting except the bounded
+ * drain. */
+void console_force_up(void)
+{
+    console_drain();                   /* bounded; keep a partial line    */
+
+    TRISHbits.TRISH1 = 0u;
+    TRISDbits.TRISD1 = 1u;
+    RPCONbits.IOLOCK = 0u;
+    _U2RXR  = 50u;
+    _RP114R = 21u;
+    RPCONbits.IOLOCK = 1u;
+
+    uart2_setup((CLK1CONbits.COSC == 0x6u) ? UART_BRG_PLL : UART_BRG_FRC);
 }
 
 /* Make the baud generator match whatever clock the CPU is on right now.

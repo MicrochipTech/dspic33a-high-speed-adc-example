@@ -131,6 +131,10 @@ void console_early_init(void);
 void cli_init(void);
 /* Baud generator re-matched to the current CPU clock; used by fail(). */
 void console_sync_baud(void);
+/* Re-establish pins, PPS and UART from scratch, assuming nothing about
+ * the current state. Used by the trap handler, which cannot rely on the
+ * console still being intact. */
+void console_force_up(void);
 /* Blocking trace output, safe from main() and from fail(). */
 void console_puts(const char *s);
 void console_kv(const char *key, uint32_t v);        /* "key: 123"        */
