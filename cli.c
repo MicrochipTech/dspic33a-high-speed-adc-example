@@ -244,37 +244,50 @@ static char *copy_str(char *out, const char *s)
     return out;
 }
 
-/* "key: value" lines. The console_* variants go out blocking through
- * console_puts() (trace, fail, dump); put_kv() goes through the parser
- * and is for command replies. */
+/* "key: value" lines.
+ *
+ * The key is NOT copied into the line buffer. It used to be, into a
+ * char[48], and two callers overflowed it: the self-test's
+ * "[selftest] mean on internal 15/16 VDD (expect ~3840)" is 52
+ * characters, so with the value and CRLF it wrote 67 bytes into 48 - a
+ * stack overrun on the *success* path, which would have corrupted the
+ * return address at the exact moment the board reported that everything
+ * worked. Printing the key straight out and formatting only the number
+ * removes the failure mode instead of enlarging the buffer: the value is
+ * at most 10 digits or 10 hex characters, so 16 bytes is provably enough
+ * no matter how long a key some later caller passes.
+ *
+ * The console_* variants go out blocking through console_puts() (trace,
+ * fail, trap, dump); put_kv() goes through the parser and is for command
+ * replies. */
 void console_kv(const char *key, uint32_t v)
 {
-    char line[48];
-    char *p = copy_str(line, key);
-    *p++ = ':'; *p++ = ' ';
-    p = u32_to_str(p, v);
+    char num[16];
+    char *p = u32_to_str(num, v);
     copy_str(p, "\r\n");
-    console_puts(line);
+    console_puts(key);
+    console_puts(": ");
+    console_puts(num);
 }
 
 void console_kv_hex(const char *key, uint32_t v)
 {
-    char line[48];
-    char *p = copy_str(line, key);
-    *p++ = ':'; *p++ = ' ';
-    p = u32_to_hex(p, v);
+    char num[16];
+    char *p = u32_to_hex(num, v);
     copy_str(p, "\r\n");
-    console_puts(line);
+    console_puts(key);
+    console_puts(": ");
+    console_puts(num);
 }
 
 static void put_kv(const char *key, uint32_t v)
 {
-    char line[48];
-    char *p = copy_str(line, key);
-    *p++ = ':'; *p++ = ' ';
-    p = u32_to_str(p, v);
+    char num[16];
+    char *p = u32_to_str(num, v);
     copy_str(p, "\r\n");
-    cmd_parser_write(line);
+    cmd_parser_write(key);
+    cmd_parser_write(": ");
+    cmd_parser_write(num);
 }
 
 static void put_line(const char *s)
