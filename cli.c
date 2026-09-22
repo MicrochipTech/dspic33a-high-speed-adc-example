@@ -299,7 +299,7 @@ static void put_line(const char *s)
 /* One status line, blocking, for the periodic trace from main(). */
 void console_status_line(void)
 {
-    char line[160];
+    char line[176];                       /* 163 used with every field at max */
     char *p = copy_str(line, "[stat] blocks=");
     p = u32_to_str(p, blocks_done);
     p = copy_str(p, " overrun=");  p = u32_to_str(p, dma_overrun);
@@ -311,6 +311,11 @@ void console_status_line(void)
     p = copy_str(p, " input=");    p = u32_to_str(p, capture_pinsel());
     p = copy_str(p, " samc=");     p = u32_to_str(p, capture_samc());
     p = copy_str(p, " run=");      p = u32_to_str(p, capture_running() ? 1u : 0u);
+    /* Does the ADC's channel-done event reach the CPU side at all? It is
+     * the DMA trigger and stays masked (IEC6 = 0), so this flag being 1
+     * while the DMA runs says the event is visible to the CPU - the
+     * precondition for the vector-201 trap TROUBLESHOOTING 2.0b describes. */
+    p = copy_str(p, " ad3if=");    p = u32_to_str(p, (uint32_t)IFS6bits.AD3CH0IF);
     copy_str(p, "\r\n");
     console_puts(line);
 }

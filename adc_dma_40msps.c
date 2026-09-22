@@ -241,6 +241,7 @@ static uint32_t         seen_blocks    = 0;
  *   7     self-test value out of range               self-test
  *   8     DMA channel switched itself off (CHEN = 0) self-test / run
  *   9     CPU trap or unhandled interrupt            _DefaultInterrupt()
+ *   10    clock fail: FSCM moved the CPU to BFRC     _CLKFInterrupt()
  *
  * Pattern: <code> short blinks, one long pause, repeat. The blink speed
  * depends on which clock the CPU is on at the time; the count is what
@@ -257,6 +258,7 @@ static const char *const fail_text[] = {
     "self-test mean outside 3648..4032",
     "DMA channel switched itself off (CHEN = 0)",
     "CPU trap or unhandled interrupt - see the [TRAP] lines",
+    "clock fail - the FSCM moved the CPU to the backup FRC, see the [CLKF] lines",
 };
 #define FAIL_TEXT_N  (sizeof fail_text / sizeof fail_text[0])
 
@@ -331,6 +333,13 @@ static void trap_report(uint32_t vec)
             console_puts("[TRAP] vector 1 = CPU/FPU: read INTCON1/3/4 below\r\n");
         } else if (vec == 0u) {
             console_puts("[TRAP] vector 0 = COMMON (collapsed) interrupt\r\n");
+        } else if ((vec == 9u) || (vec == 10u)) {
+            console_puts("[TRAP] vector 9/10 = clock fail / clock error: the FSCM saw"
+                         " the system clock stop; OSCCTRL, PLL2CON, CLK1CON below\r\n");
+        } else if ((vec >= 201u) && (vec <= 212u)) {
+            console_puts("[TRAP] vector 201..212 = an ADC3 channel or comparator event"
+                         " reached the CPU; it is meant to trigger only the DMA."
+                         " IEC6 below says whether it was enabled\r\n");
         } else {
             console_puts("[TRAP] a peripheral raised an interrupt we do not handle;"
                          " look up the number in the ATDF interrupt list\r\n");
@@ -390,6 +399,25 @@ void __attribute__((interrupt, no_auto_psv)) _DefaultInterrupt(void)
         }
         __delay32(10u * ms100);
     }
+}
+
+/* IRQ 9, IVT slot 17: the fail-safe clock monitor moved the CPU off the
+ * PLL. The name follows the pack's interrupt list ("CLKFInterrupt");
+ * that the linker put it into slot 17 was checked on the built ELF.
+ * The console is re-initialised from scratch because the CPU is now on
+ * the 8 MHz BFRC and the baud divider was set for 100 MHz. */
+void __attribute__((interrupt, no_auto_psv)) _CLKFInterrupt(void)
+{
+    IFS0bits.CLKFAILIF = 0u;
+    IEC2bits.DMA0IE = 0;
+    DMA0CHbits.CHEN = 0;
+    console_force_up();
+    console_puts("\r\n[CLKF] clock fail: the FSCM switched the CPU to the backup FRC\r\n");
+    console_kv_hex("[CLKF] OSCCTRL", OSCCTRL);
+    console_kv_hex("[CLKF] PLL2CON", PLL2CON);
+    console_kv_hex("[CLKF] CLK1CON", CLK1CON);
+    console_kv("[CLKF] reached boot stage", boot_stage);
+    fail(10u);
 }
 
 void fail(uint32_t code)
@@ -558,6 +586,15 @@ void clock_init(void)
     CLK6DIV = 0u;               /* 320 MHz straight through              */
     CLK6CONbits.OSWEN = 1u;
     WAIT_WHILE(CLK6CONbits.OSWEN, 4u);
+
+    /* The fail-safe clock monitor is on (FSCMEN in the CLK1CON value
+     * above). When it sees the system clock stop it moves the CPU to the
+     * backup FRC and raises IRQ 9 (CLKFAIL). Left masked, that only sets
+     * a flag: the board would carry on at 8 MHz with a garbled console and
+     * a wrong sample rate, and nothing would say why. Enabled, it lands
+     * in _CLKFInterrupt(), which reports the event and stops in fail(10). */
+    IFS0bits.CLKFAILIF = 0u;
+    IEC0bits.CLKFAILIE = 1u;
 }
 
 /* ------------------------------------------------------------------ *
@@ -609,6 +646,17 @@ void adc_init(uint8_t pinsel, uint8_t samc)
 
     pinsel_cur = pinsel;
     samc_cur   = samc;
+
+    /* The channel-done event of this core is the DMA trigger. It must not
+     * also reach the CPU: there is no handler for it, and with IRQSEL = 0
+     * it would arrive on every conversion, 40 million times a second.
+     * IEC6 bit 9 (AD3CH0IE, IRQ 201) resets to 0, but a previous program
+     * or the debugger may have left it set, so clear ADC3's whole enable
+     * word (IRQ 192..223) and its flags before the core starts. If the
+     * trap report ever shows vector 201 with IEC6 = 0, the event reaches
+     * the CPU regardless of the enable, and this assumption is wrong. */
+    IEC6 = 0u;
+    IFS6 = 0u;
 
     ADCREG(CONbits).ON = 1;
     WAIT_WHILE(!ADCREG(CONbits).ADRDY, 5u);    /* wait for the core     */
@@ -981,6 +1029,10 @@ void regs_dump(void)
     console_kv_hex("IEC3", IEC3);           /* U2RX enable,  bit 6       */
     console_kv_hex("IFS3", IFS3);           /* U2RX flag,    bit 6       */
     console_kv_hex("IPC12", IPC12);         /* U2RX priority, bits 26:24 */
+    console_kv_hex("IEC0", IEC0);           /* CLKFAIL enable, bit 9     */
+    console_kv_hex("IFS0", IFS0);           /* CLKFAIL flag,   bit 9     */
+    console_kv_hex("IEC6", IEC6);           /* AD3CH0 enable,  bit 9     */
+    console_kv_hex("IFS6", IFS6);           /* AD3CH0 flag,    bit 9     */
     console_kv_hex("U2CON", U2CON);
     console_kv_hex("U2STAT", U2STAT);
     console_kv_hex("U2BRG", U2BRG);

@@ -224,6 +224,7 @@ the authoritative source; `VECNUM` is the IRQ number, no offset to apply):
 |---|---|---|
 | 201 | `AD3CH0Interrupt` | **the first suspect.** `adc_init()` sets `IRQSEL = 0`, so the ADC raises a channel-done event per conversion — that event is the DMA trigger and is meant to stay in the peripheral. If it also reaches the CPU, it arrives 40 million times a second on a vector with no handler. `IEC6` bit 9 is the enable; this code never sets it, so it should be masked — if VECNUM is 201 anyway, that assumption is wrong and is the bug |
 | 202 … 212 | `AD3CMP0` … `AD3CH5` | other ADC3 sources, same family |
+| 9 | `CLKFInterrupt` | the fail-safe clock monitor saw the system clock stop and moved the CPU to the backup FRC. This build has a handler for it (`[CLKF]` lines, blink code **10**), so 9 should not appear as a trap; 10 (`CLKEInterrupt`, clock error) still would |
 | 77 | `DMA0Interrupt` | ours — should never appear here |
 | 102 | `U2RXInterrupt` | ours — should never appear here |
 | 1 | `CPUFPUInterrupt` | a real CPU trap; read the `INTCON*` bits |
@@ -291,6 +292,7 @@ already contains what the "Where to look" column below asks for.
 | 7 | self-test | mean on the internal reference outside 3648 … 4032 | §2.4, `selftest_mean` |
 | 8 | self-test or main loop | `DMA0CHbits.CHEN` went to 0 on its own | address fault: `dma_addr_err`, `DMALOW`, `DMAHIGH` |
 | 9 | anywhere | CPU trap or an interrupt with no handler | the `[TRAP]` block on the console, §2.0b |
+| 10 | `_CLKFInterrupt()` | the fail-safe clock monitor moved the CPU to the backup FRC (IRQ 9) | `[CLKF]` lines: `OSCCTRL` (is `PLL2RDY` still set?), `PLL2CON`, `CLK1CON.COSC`; a supply dip or a PLL2 divider outside its limits are the usual causes |
 
 The blink *speed* depends on which clock the CPU is on when it stops (8 MHz FRC for
 codes 1 and 2, 200 MHz afterwards); the code is chosen so that it reads the same either
