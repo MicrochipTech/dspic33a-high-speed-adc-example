@@ -41,15 +41,41 @@
 
 int main(void)
 {
+    /* Persistent RAM is undefined on the very first power-up (no start-up
+     * code clears it, which is the point). A value outside the known
+     * range means "no usable history", so normalise it before anything
+     * reads it. */
+    if (boot_stage > 9u) { boot_stage = 0u; trap_seen = 0u; trap_vec = 0u; trap_stage = 0u; }
+
     led_init();
+    boot_mark(1u);
     console_early_init();
+    boot_mark(2u);
     console_puts("[boot] adc_dma_40msps " __DATE__ " " __TIME__ "\r\n");
 
+    /* Did the previous run end in a trap? boot_stage/trap_* live in
+     * persistent RAM, so say so now - an unhandled trap ends in "reset"
+     * when no debugger is attached, and without this the board would just
+     * appear to restart for no reason. */
+    if (trap_seen != 0u) {
+        console_puts("[boot] WARNING the previous run ended in a trap\r\n");
+        console_kv("[boot] trap count", trap_seen);
+        console_kv("[boot] last trap vector", trap_vec);
+        console_kv("[boot] boot stage when it hit", trap_stage);
+        console_puts("[boot] see [TRAP] in the earlier log, or docs/TROUBLESHOOTING.md 2.0b\r\n");
+        trap_seen = 0u;          /* reported once; the next trap re-arms it */
+    }
+
+    boot_mark(3u);
     clock_init();
+    boot_mark(4u);
     cli_init();
+    boot_mark(5u);
 
     adc_init(ADC_PINSEL, ADC_SAMC);
+    boot_mark(6u);
     dma0_init();
+    boot_mark(7u);
 
     console_puts("[boot] self-test on the internal reference\r\n");
     {
@@ -58,9 +84,11 @@ int main(void)
             fail(rc);
         }
     }
+    boot_mark(8u);
 
     console_puts("[boot] self-test passed, measurement running on the external input\r\n");
     capture_start();
+    boot_mark(9u);
     led_mode(2u);                     /* heartbeat                       */
 
     uint32_t idle = 0;

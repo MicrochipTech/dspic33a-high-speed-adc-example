@@ -190,6 +190,17 @@ volatile uint32_t selftest_mean = 0;   /* mean seen on ADxAN6, ~3840       */
 volatile uint32_t fail_code     = 0;   /* != 0: stopped, see fail()        */
 volatile int32_t  proc_result   = 0;   /* output of process_buffer()       */
 
+/* How far start-up got. Written at every step (boot_mark()) and printed
+ * by the trap handler, so that a trap which happens *before* the console
+ * exists - or one that reboots the part before anything drains - can
+ * still be located afterwards. Deliberately not initialised: it lives in
+ * the no-init section so a reset does not wipe it, which is what makes
+ * the "it just reboots in a loop" case readable. See trap_report(). */
+volatile uint32_t boot_stage __attribute__((persistent));
+volatile uint32_t trap_seen  __attribute__((persistent));
+volatile uint32_t trap_vec   __attribute__((persistent));
+volatile uint32_t trap_stage __attribute__((persistent));
+
 /* Note 1: errata DS80001162E item 2 - BRERR is only set when RETEN = 1,
  * and RETEN also raises a trap. This example leaves RETEN = 0, so
  * dma_bus_err effectively counts write errors (BWERR) only. */
@@ -229,6 +240,7 @@ static uint32_t         seen_blocks    = 0;
  *   6     no DMA blocks arrived (nothing moves)      self-test / run
  *   7     self-test value out of range               self-test
  *   8     DMA channel switched itself off (CHEN = 0) self-test / run
+ *   9     CPU trap or unhandled interrupt            _DefaultInterrupt()
  *
  * Pattern: <code> short blinks, one long pause, repeat. The blink speed
  * depends on which clock the CPU is on at the time; the count is what
@@ -244,7 +256,130 @@ static const char *const fail_text[] = {
     "no DMA blocks arrived, or the stream stopped",
     "self-test mean outside 3648..4032",
     "DMA channel switched itself off (CHEN = 0)",
+    "CPU trap or unhandled interrupt - see the [TRAP] lines",
 };
+#define FAIL_TEXT_N  (sizeof fail_text / sizeof fail_text[0])
+
+/* ------------------------------------------------------------------ *
+ * Traps and unhandled interrupts
+ *
+ * Why this exists: the start-up code links a weak __DefaultInterrupt
+ * into all 364 vector slots, and it is literally two instructions,
+ * "break" followed by "reset". With a debugger attached the break halts
+ * the core - MPLAB X drops into a break session on a line nobody set a
+ * breakpoint on - and without one the part silently reboots. Either way
+ * the reason is lost. Only two slots are ours (DMA0 = IRQ 77, U2RX =
+ * IRQ 102), so every other event on this device lands there.
+ *
+ * __DefaultInterrupt is weak, so defining it here takes over all 362
+ * remaining slots at once. What we can say about the cause:
+ *
+ *   INTTREG.VECNUM  the vector number that fired (bits 8:0, read-only).
+ *                   Subtract nothing - this is the IRQ number, and
+ *                   Table 4-x / the pack's ATDF names it. 0 = the
+ *                   collapsed "COMMON" vector, 1 = CPU/FPU (this is
+ *                   where the CPU traps arrive on dsPIC33A - there is no
+ *                   separate address-error or stack-error slot as on
+ *                   dsPIC33C).
+ *   INTTREG.ILR     the priority level it came in at.
+ *   INTCON1         ADDRERR (bit 3), STKERR (bit 4), BADOPERR (bit 2).
+ *   INTCON3         bus-error traps: XRAMBET, YRAMBET, DMABET, CPUBET.
+ *   INTCON4         maths: DIV0ERR, plus accumulator overflow bits.
+ *   INTCON5         DMTE / WDTE - deadman timer and watchdog.
+ *
+ * The handler prints all of that, keeps a copy in persistent RAM (so it
+ * survives the reset a second trap would cause) and then blinks code 9.
+ * It must not return: the condition that caused a trap is still there.
+ * ------------------------------------------------------------------ */
+void boot_mark(uint32_t stage)
+{
+    boot_stage = stage;
+}
+
+static const char *const boot_text[] = {
+    "before main()",                     /* 0 - persistent RAM was clear */
+    "led_init() done",
+    "console_early_init() done",
+    "clock_init() entered",
+    "clock_init() done",
+    "cli_init() done",
+    "adc_init() done",
+    "dma0_init() done",
+    "self-test done",
+    "main loop running",
+};
+
+/* Print what is known about a trap. Blocking, and the console may not
+ * exist yet - console_early_init() is stage 2, so anything below that
+ * has no output and only the persistent copy plus the LED. */
+static void trap_report(uint32_t vec)
+{
+    if (boot_stage >= 2u) {
+        console_sync_baud();
+        console_puts("\r\n[TRAP] unhandled vector or CPU trap\r\n");
+        console_kv("[TRAP] INTTREG.VECNUM", vec);
+        console_kv("[TRAP] INTTREG.ILR", (uint32_t)INTTREGbits.ILR);
+        console_kv("[TRAP] reached boot stage", boot_stage);
+        console_puts("[TRAP] last step completed: ");
+        console_puts((boot_stage < 10u) ? boot_text[boot_stage] : "unknown");
+        console_puts("\r\n");
+        if (vec == 1u) {
+            console_puts("[TRAP] vector 1 = CPU/FPU: read INTCON1/3/4 below\r\n");
+        } else if (vec == 0u) {
+            console_puts("[TRAP] vector 0 = COMMON (collapsed) interrupt\r\n");
+        } else {
+            console_puts("[TRAP] a peripheral raised an interrupt we do not handle;"
+                         " look up the number in the ATDF interrupt list\r\n");
+        }
+        console_kv_hex("[TRAP] INTCON1", INTCON1);
+        console_kv_hex("[TRAP] INTCON3", INTCON3);
+        console_kv_hex("[TRAP] INTCON4", INTCON4);
+        console_kv_hex("[TRAP] INTCON5", INTCON5);
+        /* The named bits, so nobody has to decode the words by hand. */
+        console_kv("[TRAP] INTCON1.ADDRERR", (uint32_t)INTCON1bits.ADDRERR);
+        console_kv("[TRAP] INTCON1.STKERR", (uint32_t)INTCON1bits.STKERR);
+        console_kv("[TRAP] INTCON1.BADOPERR", (uint32_t)INTCON1bits.BADOPERR);
+        console_kv("[TRAP] INTCON3.DMABET", (uint32_t)INTCON3bits.DMABET);
+        console_kv("[TRAP] INTCON3.CPUBET", (uint32_t)INTCON3bits.CPUBET);
+        console_kv("[TRAP] INTCON4.DIV0ERR", (uint32_t)INTCON4bits.DIV0ERR);
+        console_kv("[TRAP] INTCON5.WDTE", (uint32_t)INTCON5bits.WDTE);
+        console_kv("[TRAP] INTCON5.DMTE", (uint32_t)INTCON5bits.DMTE);
+        console_kv("[TRAP] trap_seen count", trap_seen);
+        regs_dump();
+        console_puts("[TRAP] LED0 blinks 9 from now on; send this log back\r\n");
+    }
+}
+
+void __attribute__((interrupt, no_auto_psv)) _DefaultInterrupt(void)
+{
+    const uint32_t vec = (uint32_t)INTTREGbits.VECNUM;
+
+    /* Persistent first: if printing itself traps, the next boot can still
+     * be told what happened. */
+    trap_seen++;
+    trap_vec   = vec;
+    trap_stage = boot_stage;
+
+    /* Stop the measurement, so a 40 MSPS stream does not keep hammering
+     * the bus while we print. */
+    IEC2bits.DMA0IE = 0;
+    DMA0CHbits.CHEN = 0;
+    INTCON1bits.GIE = 0;
+
+    trap_report(vec);
+
+    fail_code = 9u;
+    const uint32_t ms100 = (CLK1CONbits.COSC == NOSC_PLL2_OUT)
+                           ? 20000000ul : 800000ul;
+    LED_TRIS = 0u;
+    for (;;) {
+        for (uint32_t i = 0; i < 9u; i++) {
+            LED_ON();  __delay32(2u * ms100);
+            LED_OFF(); __delay32(2u * ms100);
+        }
+        __delay32(10u * ms100);
+    }
+}
 
 void fail(uint32_t code)
 {
@@ -259,7 +394,7 @@ void fail(uint32_t code)
     console_puts("\r\n");
     console_kv("[FAIL] code", code);
     console_puts("[FAIL] ");
-    console_puts((code < 9u) ? fail_text[code] : "unknown code");
+    console_puts((code < FAIL_TEXT_N) ? fail_text[code] : "unknown code");
     console_puts("\r\n");
     regs_dump();
     console_puts("[FAIL] LED0 blinks the code from now on\r\n");

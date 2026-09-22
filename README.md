@@ -216,6 +216,7 @@ The stop codes:
 | 6 | no DMA blocks arrived, or the stream stopped later | `AD3CH0CNT.CNTSTAT`, `DMA0CNT`, `DMA0SEL`, `IEC2` |
 | 7 | self-test value out of range | `selftest_mean` — expected ≈ 3840, window 3648 … 4032 |
 | 8 | the DMA channel switched itself off | `dma_addr_err`, `DMALOW`, `DMAHIGH` |
+| 9 | a CPU trap or an interrupt with no handler | the `[TRAP]` block on the console — it names the vector, the boot stage and the `INTCON*` cause bits. `docs/TROUBLESHOOTING.md` §2.0b |
 
 **What the self-test proves.** Before the external pin is used, the code runs the
 identical clock, ADC, DMA and interrupt chain on the ADC's internal 15/16·VDD reference
@@ -273,6 +274,7 @@ Which half to look at: `ready_half` says which one was completed last (0 = `buf[
 
 | Symptom | Where to look first |
 |---|---|
+| MPLAB X halts on a line nobody set a breakpoint on ("break session") | a CPU trap or an unhandled interrupt. This build catches them: LED code 9 and a `[TRAP]` block naming the vector, the boot stage and the cause bits — `docs/TROUBLESHOOTING.md` §2.0b |
 | LED blinks a code 1 … 5 | clock or ADC configuration — the code says which step; the registers to read are in the table above |
 | LED code 6 right after programming | ADC not converting (`CNTSTAT` stays 0?), or wrong DMA trigger (`DMA0SEL`) |
 | LED code 6 after a moment of blinking | the burst restart in the ISR did not take — `docs/TROUBLESHOOTING.md` §1.1 |

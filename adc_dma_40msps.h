@@ -47,6 +47,17 @@ extern volatile uint16_t last_sample;    /* last value of the completed half */
 extern volatile uint32_t ready_half;     /* 0 or 1: which half is complete */
 extern volatile uint32_t selftest_mean;  /* last self-test result (~3840)  */
 extern volatile uint32_t fail_code;      /* != 0: stopped, see fail()      */
+
+/* Start-up progress and the last trap, in persistent RAM so both survive
+ * the reset that an unhandled trap would otherwise hide. boot_mark() is
+ * called at each step of main(); _DefaultInterrupt() prints the lot and
+ * blinks code 9. trap_seen != 0 at start-up means the previous run hit a
+ * trap - main() reports that before doing anything else. */
+extern volatile uint32_t boot_stage;
+extern volatile uint32_t trap_seen;
+extern volatile uint32_t trap_vec;
+extern volatile uint32_t trap_stage;
+void boot_mark(uint32_t stage);
 extern volatile int32_t  proc_result;    /* output of process_buffer()     */
 
 /* ---- Initialisation (implemented in adc_dma_40msps.c), in this order ---- */

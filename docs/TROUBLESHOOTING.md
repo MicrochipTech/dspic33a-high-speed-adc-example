@@ -180,6 +180,57 @@ someone added it. The decisive check on hardware: LED0 either blinks slowly (goo
 blinks a code (the reason is in the terminal log). A dark LED0 after programming means
 the code is not on the board.
 
+### 2.0b "It lands in a break session" — a trap or an unhandled interrupt
+
+MPLAB X halts on a line where nobody set a breakpoint, the Dashboard says *Halted*
+instead of *Running*. That is not a mystery and not a debugger problem: the start-up
+code links a weak `__DefaultInterrupt` into every one of the 364 vector slots, and it
+is two instructions — `break` followed by `reset`. With a debugger attached the `break`
+halts the core; without one the part reboots silently. Only two slots are ours (DMA0 =
+IRQ 77, U2RX = IRQ 102), so **any** other event on the device ends up there.
+
+**This build takes that vector over and reports the cause.** Instead of `break` you get
+a `[TRAP]` block on the console and blink code **9**:
+
+```
+[TRAP] unhandled vector or CPU trap
+[TRAP] INTTREG.VECNUM: 1
+[TRAP] INTTREG.ILR: 1
+[TRAP] reached boot stage: 4
+[TRAP] last step completed: clock_init() done
+[TRAP] vector 1 = CPU/FPU: read INTCON1/3/4 below
+[TRAP] INTCON1: 0x00008008
+...
+[TRAP] INTCON1.ADDRERR: 1
+```
+
+How to read it:
+
+| Line | What it tells you |
+|---|---|
+| `INTTREG.VECNUM` | **which** vector fired. `1` = CPU/FPU, i.e. a genuine CPU trap — the cause is then in the `INTCON*` bits below. `0` = the collapsed COMMON vector. Anything else is a peripheral raising an interrupt this example does not handle; look the number up in the pack's ATDF interrupt list |
+| `reached boot stage` / `last step completed` | **where** in start-up it happened, even if the console did not exist yet. Stage 4 means `clock_init()` finished, so the clocks are not the suspect |
+| `INTCON1.ADDRERR` | an illegal address was used — a bad pointer, or a DMA/linker address outside RAM |
+| `INTCON1.STKERR` | stack overflow or underflow |
+| `INTCON1.BADOPERR` | illegal opcode — usually a jump into data or through a null function pointer |
+| `INTCON3.DMABET` / `CPUBET` | bus error trap from the DMA or the CPU |
+| `INTCON4.DIV0ERR` | division by zero |
+| `INTCON5.WDTE` / `DMTE` | watchdog or deadman timer expired |
+
+`boot_stage`, `trap_seen`, `trap_vec` and `trap_stage` live in **persistent RAM**, so
+they survive the reset that a trap causes when no debugger is attached. If the previous
+run ended in a trap, the next start-up says so up front:
+
+```
+[boot] WARNING the previous run ended in a trap
+[boot] trap count: 1
+[boot] last trap vector: 1
+[boot] boot stage when it hit: 4
+```
+
+That is what turns "the board just keeps restarting" into a located fault. With the
+debugger you can read the same four variables in the *Variables* window at any time.
+
 ### 2.1 The LED blinks a code — it stopped at a checkpoint
 
 Nothing in this code waits forever. Every hardware wait is bounded by `WAIT_LIMIT`
@@ -200,6 +251,7 @@ already contains what the "Where to look" column below asks for.
 | 6 | self-test or main loop | no buffer half completed within the limit | §2.2 |
 | 7 | self-test | mean on the internal reference outside 3648 … 4032 | §2.4, `selftest_mean` |
 | 8 | self-test or main loop | `DMA0CHbits.CHEN` went to 0 on its own | address fault: `dma_addr_err`, `DMALOW`, `DMAHIGH` |
+| 9 | anywhere | CPU trap or an interrupt with no handler | the `[TRAP]` block on the console, §2.0b |
 
 The blink *speed* depends on which clock the CPU is on when it stops (8 MHz FRC for
 codes 1 and 2, 200 MHz afterwards); the code is chosen so that it reads the same either
