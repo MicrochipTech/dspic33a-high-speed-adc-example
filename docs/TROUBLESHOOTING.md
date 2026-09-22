@@ -139,7 +139,7 @@ So you do not hunt here first. Each was read from a primary source and cross-che
   package (Table 16-2), the datasheet samples it the same way (Example 16-3).
 - **The command parser** — `cmd_parser.c` is unchanged from its repository, where it
   has a PC test harness and has run on two other microcontrollers.
-- **`FICD_NOBTSWP` values** — read from both pack versions, see the README.
+- **`FICD_NOBTSWP` and `FWDT_RCLKSEL` values** — read from both pack versions, see the README.
 
 ---
 
@@ -155,7 +155,8 @@ error: unknown value for configuration setting 'FICD_NOBTSWP': 'BTSWP_ENABLED'
 ```
 
 The symbolic names changed between pack versions (`ON`/`OFF` in 1.3.x,
-`BTSWP_ENABLED`/`BTSWP_DISABLED` in 1.4.x). If MCC generated the file against one pack
+`BTSWP_ENABLED`/`BTSWP_DISABLED` in 1.4.x; likewise `FWDT_RCLKSEL` is `BFRC256` in
+1.3.x and `BFRC244` in 1.4.x). If MCC generated the file against one pack
 and your build uses another, you get this. The fix is either to align the versions or
 to write the bit numerically, which is what this project does — see the README.
 

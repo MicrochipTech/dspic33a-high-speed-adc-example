@@ -667,14 +667,16 @@ details.
 
 ## One trap worth knowing about
 
-The symbolic values for `FICD_NOBTSWP` were **renamed between pack versions**:
+The symbolic values of two configuration bits were **renamed between pack versions**
+(all other names are identical in both packs — ATDF value-groups compared):
 
-| Pack | Accepted values |
-|---|---|
-| dsPIC33AK-MP_DFP 1.3.185 | `ON` / `OFF` |
-| dsPIC33AK-MP_DFP 1.4.260 | `BTSWP_ENABLED` / `BTSWP_DISABLED` |
+| Bit | dsPIC33AK-MP_DFP 1.3.185 | dsPIC33AK-MP_DFP 1.4.260 |
+|---|---|---|
+| `FICD_NOBTSWP` | `ON` / `OFF` | `BTSWP_ENABLED` / `BTSWP_DISABLED` |
+| `FWDT_RCLKSEL` | `BFRC256` | `BFRC244` |
 
-Both name the same bit (FICD mask 0x8000, value 0x0 = BOOTSWP enabled). If MCC
+Both spellings name the same bits (FICD mask 0x8000, value 0x0 = BOOTSWP enabled; FWDT
+mask 0xC0, value 0x3 = WDT clock BFRC divided down to 32.78 kHz). If MCC
 generates `config_bits.c` against one pack and the build uses another, the compiler
 rejects a value that is perfectly valid elsewhere:
 
@@ -686,16 +688,25 @@ error: unknown value for configuration setting 'FICD_NOBTSWP': 'BTSWP_ENABLED'
 MCC generated it against a different pack than the build is using. The value is not
 wrong — the spelling belongs to another pack version.
 
-This project sidesteps the problem by writing the bit **numerically**:
+This project sidesteps the problem by writing those two bits **numerically**:
 
 ```c
 #pragma config FICD_NOBTSWP = 0x0   /* BOOTSWP enabled */
+#pragma config FWDT_RCLKSEL = 0x3   /* BFRC/244 (1.4.260) = BFRC/256 (1.3.185) */
 ```
 
-Every pack version accepts that. Verified: `0x0` built against packs 1.3.185 and
-1.4.260, and `BTSWP_ENABLED` built against 1.4.260, all produce a **bit-identical HEX
-file**. So the numeric form is not a workaround with side effects — it is the same
-setting, spelled in a way that does not depend on the pack.
+Every pack version accepts that. Verified: `config_bits.c` built against packs 1.3.185
+and 1.4.260 produces a **bit-identical configuration area** in the HEX file (the only
+bytes that differ between the two builds are the `__TIME__` string). So the numeric
+form is not a workaround with side effects — it is the same setting, spelled in a way
+that does not depend on the pack.
+
+`config_bits.c` sets **every** configuration word of the device explicitly, so the
+programmed state does not depend on what the programmer does with words a project
+leaves out. Apart from the two above and `FWDT_WDTEN = SW` (watchdog off unless the
+software turns it on), every value is the erased default; the file says for each
+register why that is right for this example. The one to never change by accident is
+`FPED_ICSPPED`: `ON` would stop the PKOB4 from programming the part.
 
 The same trick works for any configuration bit whose symbolic names have moved: look
 the value up in the ATDF (`<value-group name="FICD_NOBTSWP">`) and write the number.
@@ -706,7 +717,7 @@ the value up in the ATDF (`<value-group name="FICD_NOBTSWP">`) and write the num
 |---|---|
 | `main.c` | start-up sequence and the main loop — the order of the inits, and why |
 | `board.h` | everything board-specific: the compile-time choices (`ADC_INSTANCE`, `ADC_PINSEL`, `ADC_SAMC`), the LED pin, the console pins |
-| `config_bits.c` | configuration bits — and why one of them is written as a number |
+| `config_bits.c` | every configuration word of the device, with the reason for each value — and why two of them are written as numbers |
 | `clock.c`, `clock.h` | FRC → PLL1 320 MHz (ADC) and PLL2 200 MHz (CPU), the switching order, the clock-fail interrupt |
 | `adc.c`, `adc.h` | the ADC core: channel 0 in Integration mode, burst trigger, input/sample-time register |
 | `capture.c`, `capture.h` | the measurement: DMA channel, the ISR with every error counter, start/stop/input, self-test, per-half processing — what the console may read and control |
