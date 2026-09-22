@@ -1,11 +1,11 @@
 %%{init: {'theme':'neutral', 'flowchart':{'curve':'basis','nodeSpacing':30,'rankSpacing':40,'htmlLabels':true}}}%%
 flowchart LR
 
-    PIN(["AD1AN0<br/>analog input"]) --> SH["Sample &amp; hold<br/>SAMC = 0.5 TAD<br/>= 6.25 ns"]
+    PIN(["AD3AN5 = RA0<br/>mikroBUS A pin AN<br/>(ADC_INSTANCE 3, ADC_PINSEL 5)"]) --> SH["Sample &amp; hold<br/>SAMC = 0.5 TAD<br/>= 6.25 ns"]
     SH --> CORE["12-bit SAR core<br/><b>40 MSPS</b><br/><i>AD50/AD51, p2034</i>"]
     TRG["<b>MODE = 2</b> Integration, CNT = 2048<br/>TRG1SRC = 1: software trigger starts a burst<br/>TRG2SRC = 2: back-to-back continues it<br/><i>§16.4.5 p1322, Tables 16-3/16-4</i>"] -. "burst of CNT conversions" .-> CORE
-    CORE --> RES["AD1CH0RES<br/>RES[11:0] = one conversion<br/>(AD1CH0DATA is the burst accumulator)"]
-    RES --> OUTP(["IRQSEL = 0: event per conversion<br/>→ triggers DMA0"])
+    CORE --> RES["AD3CH0RES<br/>RES[11:0] = one conversion<br/>(AD3CH0DATA is the burst accumulator)"]
+    RES --> OUTP(["IRQSEL = 0: event per conversion<br/>→ triggers DMA0 (CHSEL 0x3B)"])
 
     classDef adc  fill:#e6f4ea,stroke:#34a853
     classDef dma  fill:#fef7e0,stroke:#f9ab00

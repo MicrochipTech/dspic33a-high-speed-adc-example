@@ -1,13 +1,16 @@
-# dsPIC33AK512MPS506 Curiosity Nano — ADC at 40 MSPS into RAM via DMA
+# dsPIC33AK512MPS512 on the dsPIC33 Curiosity Platform — ADC at 40 MSPS into RAM via DMA
 
 A small, complete MPLAB X project showing **how to configure the device** so the
 ADC runs at its maximum rate and the DMA moves the samples into RAM — and **how to
-measure whether it really keeps up**.
+measure whether it really keeps up**. A command console on the board's USB-UART
+channel controls it from a terminal or a script.
 
-It is cut to the **EV17P63A** (dsPIC33AK512MPS506 Curiosity Nano, about 30 USD, USB-C,
-debugger on board): order the board, open the project, press Program, and the LED tells
-you whether the chain works — before you connect any signal. The source builds
-unchanged for the dsPIC33AK512MPS512; only the project's device selection differs.
+It is cut to the **EV74H48A** (dsPIC33 Curiosity Platform Development Board) with the
+**dsPIC33AK512MPS512 General Purpose DIM** plugged in — the same hardware Microchip's own
+40 MSPS example runs on. Order the two, open the project, press Program, and the LED
+tells you whether the chain works, before you connect any signal. The source builds
+unchanged for the other dsPIC33AK512MPS5xx parts; only the project's device selection and
+the pin table differ.
 
 Bare metal, no MCC. Every register write in the source cites the datasheet table or
 page it comes from, so nothing has to be taken on trust.
@@ -42,10 +45,13 @@ To be precise about how much of this code rests on something that has run on sil
 | Part of this code | Origin | Has run on hardware? |
 |---|---|---|
 | Clock setup: PLL1/PLL2 divider values, CLKGEN1/CLKGEN6 settings, switching sequence | bit-identical to the MCC-generated `clock.c` of [dspic33ak-curiosity-adc-40msps](https://github.com/microchip-pic-avr-examples/dspic33ak-curiosity-adc-40msps) | yes, in that example |
-| ADC trigger scheme: Integration mode, software trigger starts a burst, back-to-back re-trigger continues it (`MODE = 2`, `TRG1SRC = 1`, `TRG2SRC = 2`, `AD1SWTRG`) | the same example and datasheet Example 16-6 (p1331) | yes — but that example reads one 800-sample burst from `AD3CH0RES` in an assembler loop, **without DMA and without restarting the burst** |
+| ADC trigger scheme: Integration mode, software trigger starts a burst, back-to-back re-trigger continues it (`MODE = 2`, `TRG1SRC = 1`, `TRG2SRC = 2`, `AD3SWTRG`) | the same example and datasheet Example 16-6 (p1331) | yes — but that example reads one 800-sample burst from `AD3CH0RES` in an assembler loop, **without DMA and without restarting the burst** |
 | DMA basics: `DMALOW`/`DMAHIGH` window, status flags cleared by writing 0, control register layout | MCC `dma.c` of [dspic33a-dac-dma-sinewave](https://github.com/microchip-pic-avr-examples/dspic33a-dac-dma-sinewave) and datasheet Examples 13-1 to 13-4 (p832 ff.) | yes — but memory-to-DAC in Repeated One-Shot mode, the opposite direction and a far lower rate |
 | **ADC burst → DMA in Repeated Continuous mode → one buffer with `HALF`/`DONE` interrupts → burst restarted from the `DONE` ISR** | **our own construction**, assembled from datasheet §13.4.8 (Example 13-4, p835), §13.6.1.2 (HALF interrupt, p848) and §16.4.5 (p1322) | **no.** There is no Microchip example for this combination. This is the part `docs/TROUBLESHOOTING.md` §1.1 flags as the remaining risk |
-| Self-test on the internal 15/16·VDD reference (AD1AN6) | the input and its sample time come from datasheet Example 16-3 (p1328), which uses it for gain calibration; the pass/fail logic is ours | the input yes, the check no |
+| Self-test on the internal 15/16·VDD reference (ADxAN6) | the input and its sample time come from datasheet Example 16-3 (p1328), which uses it for gain calibration; the pass/fail logic is ours | the input yes, the check no |
+| Board pins, UART1 on the PKOB4 channel, PPS codes, baud generator setting | the MCC-generated `pins.c` and `uart2.c` of the same 40 MSPS example (UART1/UART2 on this board) and the DIM info sheet | yes, in that example |
+| Command parser (`cmd_parser.c/.h`) | [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser), copied unchanged; it has run on a SAM E54 and a PIC32CM there | yes, on other targets — here only in the simulator |
+| Console commands, transport, receive interrupt, simulator mailbox (`cli.c`) | our own | the commands in the simulator, the interrupt no |
 | Measurement counters, ISR, `main()` loop, LED reporting, bounded waits, file structure | our own | no |
 
 Nothing was copied verbatim. The examples served as the reference for register values
@@ -66,12 +72,19 @@ of use — so every setting can be checked against the primary source.
 
 **Revision history**
 
-- **2026-09-22, second revision** — tailored to the EV17P63A so that the first run
-  needs nothing but the board: project retargeted to the dsPIC33AK512MPS506; a
-  **self-test** on the ADC's internal 15/16·VDD reference runs before the external
-  input is used; **LED0 reports** heartbeat, error and a stop code; every hardware wait
-  loop is **bounded** and reports where it gave up instead of hanging; board pin table
-  below.
+- **2026-09-22, third revision** — moved to the **EV74H48A** with the dsPIC33AK512MPS512
+  DIM (the board of Microchip's own 40 MSPS example): ADC3 on the mikroBUS A analog pin,
+  LED0 on RC8, pin table below. A **command console** (`cli.c`, on the parser from
+  [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser)) on the PKOB4 USB-UART
+  channel: `status`, `start`/`stop`, `samc`, `input`, `selftest`, `stats`, `dump`,
+  `clear`, `led`, `reset`. The console runs in the UART receive interrupt below the DMA
+  interrupt. The ADC core is now a compile-time choice (`ADC_INSTANCE`), so the
+  potentiometer on ADC5 is two defines away. The console was **tested in the MPLAB X
+  simulator** through a RAM mailbox, see `docs/SIMULATION.md`.
+- **2026-09-22, second revision** — tailored so that the first run needs nothing but
+  the board: a **self-test** on the ADC's internal 15/16·VDD reference runs before the
+  external input is used; **LED0 reports** heartbeat, error and a stop code; every
+  hardware wait loop is **bounded** and reports where it gave up instead of hanging.
 - **2026-09-22** — full review against the datasheet, the errata and Microchip's MCC
   examples. Four mistakes found and fixed, all of which would have stopped the first
   run dead: (1) the ADC was set to single-conversion mode with a re-trigger source,
@@ -86,19 +99,25 @@ of use — so every setting can be checked against the primary source.
 
 ## Getting started
 
-**You need:** an EV17P63A, a USB-C cable, MPLAB X with the XC-DSC compiler and the
+**You need:** an EV74H48A (dsPIC33 Curiosity Platform Development Board) with the
+dsPIC33AK512MPS512 GP DIM, a USB cable, MPLAB X with the XC-DSC compiler and the
 dsPIC33AK-MP device pack (MPLAB X offers to download the pack when you open the
-project). A signal source is optional — the self-test does not need one.
+project). A signal source is optional — the self-test does not need one. A terminal
+program (Tera Term, PuTTY, MPLAB Data Visualizer's terminal) is optional too — the LED
+and the debugger tell you the same things.
 
-1. Plug the board in. It shows up in MPLAB X as *dsPIC33AK512MPS506 Curiosity Nano*.
+1. Plug the board in. The PKOB4 debugger enumerates, and a second COM port appears for
+   the console (user guide DS70005562D 2.1.2).
 2. Open `adc_dma_40msps.X`, press **Build**, then **Program** (or **Debug**).
 3. The project's tool is set to *Simulator* so that it opens on any machine; MPLAB X
-   asks which tool to use the first time, pick the Curiosity Nano. You can also set it
-   under *Project Properties → Conn.*
-4. Watch LED0 (yellow, next to the switch): **slow blink = everything works.** The
+   asks which tool to use the first time, pick the PKOB4. You can also set it under
+   *Project Properties → Conn.*
+4. Watch LED0 (green, the row of eight): **slow blink = everything works.** The
    self-test on the internal reference has passed, the ADC, the DMA and the interrupt
    are running at 40 MSPS. What the other patterns mean is under "First run on
    hardware".
+5. Open the PKOB4's COM port at 115200 8N1, press Enter, type `status`. The reply is
+   the counter table; `help` lists the rest. See "The console" below.
 
 Verified on 2026-09-22 with:
 
@@ -107,8 +126,8 @@ Verified on 2026-09-22 with:
 | MPLAB X IDE | v6.35 (project format `version="65"`, which v6.25 also reads) |
 | XC-DSC compiler | v3.31.00; the source also builds with v3.21 when the pack supplies the device |
 | Device pack | dsPIC33AK-MP_DFP **1.4.260 and 1.3.185** — the source builds against both, `-Wall -Wextra` clean |
-| Target | dsPIC33AK512MPS506 (project); the source also builds for the dsPIC33AK512MPS512 |
-| Board | EV17P63A, dsPIC33AK512MPS506 Curiosity Nano, user guide DS70005634A |
+| Target | dsPIC33AK512MPS512 (project); the source also builds for the MPS506 |
+| Board | EV74H48A + dsPIC33AK512MPS512 GP DIM, user guide DS70005562D, DIM info sheet DS70005563A |
 
 **If MPLAB X complains about the toolchain version** when you open the project: the
 `.X` has a version recorded in it, and yours will differ. Go to *Project Properties →
@@ -118,20 +137,24 @@ pack version does not matter either (see "One trap worth knowing about" below).
 
 ### The board
 
-Everything this example touches on the EV17P63A, from the user guide DS70005634A
-(Figure 1-3, Tables 4-1 and 4-2) and the device pinout (DS70005591D, 64-pin table):
+Everything this example touches on the EV74H48A with the dsPIC33AK512MPS512 DIM, from
+the DIM info sheet DS70005563A (Table 1, DIM pin → device pin → board function) and the
+board user guide DS70005562D:
 
-| What | Device pin | Where on the board | Note |
-|---|---|---|---|
-| **Analog input** AD1AN0 | RA2 (QFN64 pin 12) | edge connector, labelled **RA2 / AD1AN0** | 0 … 3.3 V against GND; the self-test does not use it |
-| **LED0** | RD0 | yellow LED on the board, also on the edge connector as RD0 | active low: the pin driven to GND lights it |
-| SW0 | RC3 | user switch | not used by this example; no external pull-up |
-| GND | — | several edge pins marked GND | signal ground for the generator |
-| VTG | — | edge pin | target voltage, 3.3 V by default |
-| CDC UART | RC10 (TX), RC11 (RX) | through the debugger's USB virtual COM port | not used by this example |
-| Debugger | — | USB-C | programming, debugging, board identification |
+| What | Device pin | DIM pin | Where on the board | Note |
+|---|---|---|---|---|
+| **Analog input** AD3AN5 (default) | RA0 | P77 | **mikroBUS A, pin AN** | 0 … 3.3 V against GND. Same input as Microchip's 40 MSPS example. `ADC_INSTANCE 3`, `ADC_PINSEL 5` |
+| Potentiometer AD5AN0 | RA7 | P66 | the 10 kΩ pot | for a knob-driven demo: `ADC_INSTANCE 5`, `ADC_PINSEL 0`, and `samc` ≥ 9 — the pot is a high-impedance source |
+| Internal reference ADxAN6 | — | — | inside the ADC | 15/16·VDD, used by the self-test on every core |
+| **LED0** | RC8 | P28 | leftmost of the eight green LEDs | driven high to light. LED1…7 are RC9…RC15 |
+| S1, S2, S3 | RF3, RF0, RB2 | P45, P43, P41 | push buttons | active low, pull-up on the board; not used by this example |
+| **Console UART1** | TX RH0 (RP113), RX RD10 (RP59) | P102, P100 | **PKOB4 USB-UART channel** — second COM port on the debugger's USB | 115200 8N1 |
+| Second UART | TX RH1 (RP114), RX RD1 (RP50) | P98, P96 | MCP2221A USB-UART channel, another COM port | not used; Microchip's example streams to Data Visualizer here |
+| Debugger | — | — | PKOB4 via the USB connector J24 | programming, debugging, and the console's COM port on one cable |
+| GND | — | — | mikroBUS GND pins, test points | signal ground for the generator |
 
-The green PS LED next to the USB connector belongs to the debugger, not to this code.
+AD1AN0 of this device sits on RA2, which the board routes to a capacitive touch pad
+(P38) — that is why the example uses ADC3 here and not ADC1.
 
 There is exactly **one** source file, `adc_dma_40msps.c`, in the repository root. The
 MPLAB X project references it; nothing is duplicated.
@@ -141,7 +164,7 @@ model for dsPIC33A covers PPS, ports, pull-ups, TMR1/TMR2, UART1-3, the watchdog
 context switching. It does *not* model the clock generators, the PLLs, the ADC or the
 DMA, which are the four things this example is about. In the simulator the code
 therefore ends in `fail(1)` — the bounded wait on `PLL1CONbits.PLLSWEN` times out,
-because there is no PLL to perform the switch. `AD1CONbits.ADRDY` would behave the same
+because there is no PLL to perform the switch. `AD3CONbits.ADRDY` would behave the same
 way.
 
 Skipping those loops under conditional compilation would not help: the ADC would not
@@ -181,15 +204,15 @@ The stop codes:
 | 2 | PLL2 (system clock) did not configure or lock | `PLL2DIV`, `OSCCTRL` |
 | 3 | CLKGEN1 did not switch to PLL2 | `CLK1CON` |
 | 4 | CLKGEN6 did not switch to PLL1 | `CLK6CON` |
-| 5 | the ADC core never reported ready | `AD1CON`, `CLK6CON.CLKRDY` |
-| 6 | no DMA blocks arrived, or the stream stopped later | `AD1CH0CNT.CNTSTAT`, `DMA0CNT`, `DMA0SEL`, `IEC2` |
+| 5 | the ADC core never reported ready | `AD3CON`, `CLK6CON.CLKRDY` |
+| 6 | no DMA blocks arrived, or the stream stopped later | `AD3CH0CNT.CNTSTAT`, `DMA0CNT`, `DMA0SEL`, `IEC2` |
 | 7 | self-test value out of range | `selftest_mean` — expected ≈ 3840, window 3648 … 4032 |
 | 8 | the DMA channel switched itself off | `dma_addr_err`, `DMALOW`, `DMAHIGH` |
 
 **What the self-test proves.** Before the external pin is used, the code runs the
 identical clock, ADC, DMA and interrupt chain on the ADC's internal 15/16·VDD reference
-(AD1AN6, Table 16-2) and checks that the mean of a buffer half is 3840 ± 5 %. Only then
-does it switch the channel to AD1AN0 — between two bursts, when the channel is idle. A
+(AD3AN6, Table 16-2) and checks that the mean of a buffer half is 3840 ± 5 %. Only then
+does it switch the channel to AD3AN5 — between two bursts, when the channel is idle. A
 slow blink therefore means the whole chain has been verified on the silicon in front
 of you, with a number, not just "something interrupts".
 
@@ -207,11 +230,12 @@ With a debugger attached you can additionally halt and read the counters:
 
 ### Step 2 — feed a signal in
 
-**Which pin.** The code samples `AD1AN0` (`PINSEL = 0`), which is **RA2** on the
-dsPIC33AK512MPS506 — on the Curiosity Nano the edge-connector position labelled
-*RA2 / AD1AN0* (see "The board" above). Signal to that pin, generator ground to a GND
-pin. On another board or package, the input map is Table 16-2 of DS70005591D, from
-page 1224.
+**Which pin.** The code samples `AD3AN5` (`ADC_INSTANCE 3`, `ADC_PINSEL 5`), which is
+**RA0** — on the Curiosity Platform board the **AN pin of mikroBUS socket A** (see "The
+board" above). Signal to that pin, generator ground to a mikroBUS GND pin. On another
+board or package, the input map is Table 16-2 of DS70005591D, from page 1224. Without a
+generator, turn the potentiometer instead: it is on ADC5, two defines and a longer
+sample time away (table above).
 
 **What level.** 0 to 3.3 V, single ended against AVSS, unipolar (`DIFF = 0`). Anything
 with a negative excursion gets clipped at the bottom.
@@ -249,7 +273,7 @@ Which half to look at: `ready_half` says which one was completed last (0 = `buf[
 | `dma_overrun` counting up | the shared DMA bus is not keeping up — see below, this is the interesting result |
 | values far too small or flat | source impedance, raise `ADC1_SAMC` |
 | values look like a straight line | signal frequency too low for a 25.6 µs window |
-| values above 4095 | `DMA0SRC` points at the accumulator (`AD1CH0DATA`) instead of `AD1CH0RES` |
+| values above 4095 | `DMA0SRC` points at the accumulator (`AD3CH0DATA`) instead of `AD3CH0RES` |
 | `late_service` or `proc_missed` counting up | the ISR or `main()` is not keeping up, reduce the processing or enlarge `SAMPLES_PER_HALF` |
 
 Note that `dma_overrun` counting up is not a bug in this code — it is the measurement
@@ -303,16 +327,16 @@ generators take their PLL output straight through, `CLK1DIV = CLK6DIV = 0`.
 
 | Field | Value | Why |
 |---|---|---|
-| `PINSEL` | 0 | analog input AD1AN0 (Table 16-2, from page 1224) |
+| `PINSEL` | 5 | analog input AD3AN5 = mikroBUS A AN on the EV74H48A (Table 16-2, from page 1224; `ADC_PINSEL`) |
 | `NINSEL` | 0 | negative input on AVSS, i.e. single ended |
 | `DIFF` | 0 | single ended → unsigned result |
 | `FRAC` | 0 | integer, right aligned (page 1265) |
 | `SAMC` | 0 | sample time 0.5 TAD = minimum (page 1266) |
 | `MODE` | 2 | **Integration**: a burst of `CNT` conversions (page 1267) |
-| `CNT` | 2048 | conversions per burst = one DMA buffer (`AD1CH0CNT`, page 1272) |
+| `CNT` | 2048 | conversions per burst = one DMA buffer (`AD3CH0CNT`, page 1272) |
 | `TRG1SRC` | 0x01 | **software trigger** starts the burst (Table 16-3, page 1226) |
 | `TRG2SRC` | 0x02 | **back-to-back** re-trigger for every further conversion (Table 16-4, page 1227) |
-| `IRQSEL` | 0 | channel event **after each conversion**, when `AD1CH0RES` is ready (page 1266) |
+| `IRQSEL` | 0 | channel event **after each conversion**, when `AD3CH0RES` is ready (page 1266) |
 | `EIEN` | 0 | no early interrupt — note 4 on page 1265 forbids it with DMA |
 | `ACCNUM` | 0 | oversampling only, unused in this mode |
 
@@ -337,7 +361,7 @@ little below 40 MSPS. Microchip's own 40 MSPS example uses the same triple (`MOD
 
 Two more consequences of Integration mode that are easy to miss:
 
-- **The per-conversion result is `AD1CH0RES`**, `RES[11:0]`. `AD1CH0DATA` is the
+- **The per-conversion result is `AD3CH0RES`**, `RES[11:0]`. `AD3CH0DATA` is the
   accumulator of the whole burst (page 1270) — pointing the DMA there gives you a
   running sum, not samples.
 - **`IRQSEL` must be 0** so that the channel event fires for every conversion; with
@@ -355,8 +379,8 @@ staggered sequences across several cores.
 | Field | Value | Why |
 |---|---|---|
 | `DMALOW` / `DMAHIGH` | 0x4000 / 0x13FFF | **the data RAM window — mandatory.** Both reset to 0; every transaction is checked against them (page 829, step 5) and an access above `DMAHIGH` sets `ADRERR` and clears `CHEN` (pages 810, 826). Taken from the device header (`__DATA_BASE`, `__DATA_LENGTH`). |
-| `DMA0SEL` | 0x2F | trigger source "ADC1 Done CH0" (ATDF value group `DMA_SEL__CHSEL`) |
-| `DMA0SRC` | `&AD1CH0RES` | the per-conversion result register |
+| `DMA0SEL` | 0x3B | trigger source "ADC3 Done CH0" (ATDF value group `DMA_SEL__CHSEL`; 0x2F … 0x48 for ADC1 … 5, follows `ADC_INSTANCE`) |
+| `DMA0SRC` | `&AD3CH0RES` | the per-conversion result register |
 | `SIZE` | 1 | **16-bit transfers** (page 812) |
 | `SAMODE` | 0 | source address stays put |
 | `DAMODE` | 1 | destination increments |
@@ -365,7 +389,7 @@ staggered sequences across several cores.
 | `HALFEN`, `DONEEN` | 1 | one interrupt when the first half is full, one when the second is (page 848) |
 
 **On 2 bytes per sample:** the DMA handles 8, 16 and 32-bit transactions, selected
-through `SIZE[1:0]`. A 12-bit result therefore costs 2 bytes, not 4. `AD1CH0RES` is
+through `SIZE[1:0]`. A 12-bit result therefore costs 2 bytes, not 4. `AD3CH0RES` is
 32 bits wide with `RES[11:0]` in the low half and `RESF[11:0]` in bits 31:20 (register
 summary, page 1229), so the 16-bit read of the low half is the sample.
 
@@ -393,10 +417,53 @@ the cause of the next overrun.
 
 ![CPU and counters](docs/04_cpu_and_counters.png)
 
+## The console
+
+Open the PKOB4's COM port (115200 8N1) and press Enter — a `> ` prompt answers. The
+console is the [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser) module in
+`cmd_parser.c`, unchanged, with the commands of this example in `cli.c`:
+
+| Command | Does |
+|---|---|
+| `help` | lists the commands |
+| `version` | build date, board, ADC core, default input, whether this is the simulator build |
+| `status` | run state and every counter from "What to measure", plus input, sample time, self-test mean and stop code |
+| `start`, `stop` | start the burst stream / let the current buffer finish and stop |
+| `samc <0..31>` | sample time in TAD steps: (2·SAMC + 0.5) TAD, i.e. 40 / (SAMC + 1) MSPS at 320 MHz. Applied between two bursts |
+| `input <0..15>` | PINSEL of the ADC core; 6 is the internal 15/16·VDD reference. Applied between two bursts |
+| `selftest` | samples the internal reference, prints the mean, NAK if it is outside 3648 … 4032 |
+| `stats` | min, max, mean and peak-to-peak of the completed half |
+| `dump [count] [offset]` | samples of the completed half, eight per line; Ctrl+C aborts |
+| `clear` | zeroes the error counters |
+| `led on`, `led off`, `led auto` | LED0 by hand, or back to the heartbeat |
+| `reset` | software reset |
+
+Two things about it are worth knowing:
+
+- **The console is its own thread.** Received bytes are handled in the UART1 receive
+  interrupt at priority 1; a command runs there, output included. The DMA interrupt
+  (priority 4) preempts it, so the measurement never waits for the console. `main()`
+  does: during a long `dump` it processes no buffer halves, and `proc_missed` says so.
+  That is deliberate — the counter is the measurement, not a bug.
+- **A script can drive it.** After every command the parser sends the prompt followed
+  by one control byte: ACK (0x06) if the command succeeded, NAK (0x15) if it failed.
+  A script reads until that byte, checks it, and only then sends the next line. Usage
+  errors give NAK and a usage line; an unknown command gives NAK. The reference client
+  for that protocol is `test/cmd_parser_host/cmd_console.py` in the parser's repository,
+  and `tools/sim_cli.py` here uses the same rule.
+
+**Tested without a board.** The parser, all commands and their error paths were run in
+the MPLAB X simulator, which cannot run the ADC or the DMA but can run the console: the
+simulator build of the firmware skips the hardware entirely and reads its input from a
+RAM mailbox that `tools/sim_cli.py` fills through the debugger. That test covers the
+parser and the UART transmit path and nothing else — it says nothing about the
+measurement. 20 of 20 checks passed on 2026-09-22; `docs/SIMULATION.md` has the details
+and the limits.
+
 ## Which sample rates you can get
 
-All figures are **per ADC core**; the dsPIC33AK512MPS506 and the MPS512 both have five
-(Table 16-1, page 1223).
+All figures are **per ADC core**; the dsPIC33AK512MPS512 has five (Table 16-1,
+page 1223).
 
 **The basis.** The ADC clock period is TAD = 4 / F_IN, with F_IN allowed from 32 to
 320 MHz, so TAD runs from 12.5 to 125 ns (AD50, page 2034). One conversion takes the
@@ -422,7 +489,7 @@ source (`ADC1_SAMC`), and it is at the same time the remedy for a source impedan
 is too high for a 6.25 ns sample window.
 
 **2. Repeat timer instead of back-to-back** (`TRG2SRC = 3`, period in `RPTCNT[5:0]` of
-`AD1CON`, page 1258). A trigger every k ADC clock cycles, k = 2 … 64, at the 80 MHz
+`AD3CON`, page 1258). A trigger every k ADC clock cycles, k = 2 … 64, at the 80 MHz
 ADC clock: 80 / k MSPS, i.e. 40, 26.7, 20, 16, 13.3, 11.4, 10, 8.9, 8 … down to
 1.25 MSPS. A finer grid than `SAMC`, but **25 MSPS is not on it**.
 
@@ -496,7 +563,7 @@ A sequence we would suggest:
 ## If the bandwidth is not enough
 
 The ADC can average internally, before a DMA transfer even happens — Oversampling mode
-(`MODE = 3`) with `ACCNUM[1:0]` in `AD1CH0CON1` (page 1266):
+(`MODE = 3`) with `ACCNUM[1:0]` in `AD3CH0CON1` (page 1266):
 
 | `ACCNUM` | Samples | Result width |
 |---|---|---|
@@ -507,7 +574,7 @@ The ADC can average internally, before a DMA transfer even happens — Oversampl
 
 At 16× averaging, 240 MB/s becomes 15 MB/s and the result still fits in 2 bytes with
 14 bits. Sampling stays at 40 MSPS; only the output rate drops. In that mode the
-averaged result lives in `AD1CH0DATA` and the channel event with `IRQSEL = 1` fires
+averaged result lives in `AD3CH0DATA` and the channel event with `IRQSEL = 1` fires
 once per average — so `DMA0SRC`, `IRQSEL` and the burst restart change accordingly.
 
 **Whether that is an option depends on your measurement method** — for a pure
@@ -526,7 +593,7 @@ setting channels have a second accumulator for second-order filters.
   and none for the Reference Clock Output either.
 - **No multiple channels.** On purpose: one should be provably working first.
 - **No interrupt prioritisation, no error recovery, no calibration.** The ADC can
-  recalibrate itself periodically (`ACALEN` and `CALRATE` in `AD1CON`) — worth a look
+  recalibrate itself periodically (`ACALEN` and `CALRATE` in `AD3CON`) — worth a look
   for a longer measurement.
 - **No statement on analog input bandwidth.** The datasheet does not give one, and the
   input parameters it does give (hold capacitance, pin capacitance, interconnect
@@ -586,11 +653,15 @@ the value up in the ATDF (`<value-group name="FICD_NOBTSWP">`) and write the num
 
 | Path | Contents |
 |---|---|
-| `adc_dma_40msps.c` | the entire code, commented with datasheet references |
+| `adc_dma_40msps.c` | clock, ADC, DMA, self-test, LED, `main()` — commented with datasheet references |
+| `adc_dma_40msps.h` | what the console may read and control; the compile-time choices (`ADC_INSTANCE`, `ADC_PINSEL`, `ADC_SAMC`) |
+| `cli.c` | the console: UART1 on the PKOB4 channel, the receive interrupt, the commands, the simulator mailbox |
+| `cmd_parser.c`, `cmd_parser.h` | the command parser, unchanged from [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser) (Apache 2.0) |
 | `adc_dma_40msps.X/` | MPLAB X project — build, program and debug from here |
 | `docs/TROUBLESHOOTING.md` | **what to do when it does not work** — including where we doubt our own code |
+| `docs/SIMULATION.md` | how the console is tested in the MPLAB X simulator, and what that proves |
 | `docs/*.png`, `docs/*.mmd` | the block diagrams above, with their Mermaid sources |
-| `tools/` | command-line build without the IDE; **ignore this unless you want it** |
+| `tools/` | command-line build (`build.bat`, `build.bat sim`) and `sim_cli.py`, the simulator console driver |
 
 ### About `tools/`
 
@@ -613,6 +684,6 @@ Two things that cost us time there, in case you build without the IDE:
    otherwise the compiler reports "does not seem to support the selected device"
    although the pack does contain it. `c30_device.info` lives one level down.
 2. The **linker script must be given explicitly** with `-T`
-   (`support/dsPIC33A/gld/p33AK512MPS506.gld` inside the pack). Without it the
+   (`support/dsPIC33A/gld/p33AK512MPS512.gld` inside the pack). Without it the
    compiler links against a 30F architecture and stops with "incompatible with
    30Fxxxx output".

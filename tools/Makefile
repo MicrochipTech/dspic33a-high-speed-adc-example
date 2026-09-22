@@ -1,18 +1,19 @@
-# dsPIC33AK512MPS506 ADC/DMA demo - build without MPLAB X or MCC
+# dsPIC33AK512MPS512 (EV74H48A) ADC/DMA demo - build without MPLAB X or MCC
 #
-# Usage:   make            build the ELF
-#          make hex        build an Intel HEX for the programmer
+# Usage:   make            firmware for the board  -> ../build/adc_dma_40msps.elf
+#          make hex        Intel HEX for the programmer
+#          make sim        simulator build for sim_cli.py -> ../build/adc_dma_40msps_sim.elf
 #          make size       section sizes
 #          make clean
 #
-# Verified working with the versions below on 2026-09-21. If your compiler
+# Verified working with the versions below on 2026-09-22. If your compiler
 # or pack version differs, adjust XC_DSC / DFP - nothing else should need
 # to change.
 
 XC_DSC  ?= C:/Program Files/Microchip/xc-dsc/v3.31
 DFP     ?= C:/Program Files/Microchip/MPLABX/v6.35/packs/Microchip/dsPIC33AK-MP_DFP/1.4.260/xc16
 
-MCU      = 33AK512MPS506
+MCU      = 33AK512MPS512
 GLD      = $(DFP)/support/dsPIC33A/gld/p$(MCU).gld
 
 CC       = $(XC_DSC)/bin/xc-dsc-gcc.exe
@@ -20,7 +21,9 @@ OBJDUMP  = $(XC_DSC)/bin/xc-dsc-objdump.exe
 BIN2HEX  = $(XC_DSC)/bin/xc-dsc-bin2hex.exe
 
 TARGET   = adc_dma_40msps
-SRC      = ../$(TARGET).c
+SRC      = ../adc_dma_40msps.c ../cli.c ../cmd_parser.c
+HDR      = ../adc_dma_40msps.h ../cmd_parser.h
+OUTDIR   = ../build
 
 # -mdfp must point at the xc16 SUBDIRECTORY of the pack, not the pack root.
 # Pointing at the root gives "does not seem to support the selected device",
@@ -28,18 +31,28 @@ SRC      = ../$(TARGET).c
 CFLAGS   = -mcpu=$(MCU) -mdfp="$(DFP)" -O1 -Wall -Wextra
 LDFLAGS  = -T"$(GLD)"
 
-.PHONY: all hex size clean
+.PHONY: all hex sim size clean
 
-all: $(TARGET).elf
+all: $(OUTDIR)/$(TARGET).elf
 
-$(TARGET).elf: $(SRC)
+$(OUTDIR):
+	mkdir -p $(OUTDIR)
+
+$(OUTDIR)/$(TARGET).elf: $(SRC) $(HDR) | $(OUTDIR)
 	"$(CC)" $(CFLAGS) $(LDFLAGS) $(SRC) -o $@
 
-hex: $(TARGET).elf
-	"$(BIN2HEX)" $(TARGET).elf
+# Same sources, but the simulator flavour: no clock/ADC/DMA, console from
+# the RAM mailbox, debug symbols for sim_cli.py.
+sim: $(OUTDIR)/$(TARGET)_sim.elf
 
-size: $(TARGET).elf
-	"$(OBJDUMP)" -h $(TARGET).elf
+$(OUTDIR)/$(TARGET)_sim.elf: $(SRC) $(HDR) | $(OUTDIR)
+	"$(CC)" $(CFLAGS) -g -D__MPLAB_DEBUGGER_SIMULATOR=1 $(LDFLAGS) $(SRC) -o $@
+
+hex: $(OUTDIR)/$(TARGET).elf
+	"$(BIN2HEX)" $(OUTDIR)/$(TARGET).elf
+
+size: $(OUTDIR)/$(TARGET).elf
+	"$(OBJDUMP)" -h $(OUTDIR)/$(TARGET).elf
 
 clean:
-	rm -f $(TARGET).elf $(TARGET).hex
+	rm -f $(OUTDIR)/$(TARGET).elf $(OUTDIR)/$(TARGET).hex $(OUTDIR)/$(TARGET)_sim.elf $(OUTDIR)/*.uart.txt

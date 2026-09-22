@@ -22,9 +22,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-MCU = "33AK512MPS506"
+MCU = "33AK512MPS512"
 PACK_NAME = "dsPIC33AK-MP_DFP"
-SOURCE = "adc_dma_40msps.c"      # lives one level up, next to the .X project
+SOURCES = ["adc_dma_40msps.c", "cli.c", "cmd_parser.c"]   # one level up, next to the .X project
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent              # repo root: holds the single .c file
@@ -212,9 +212,10 @@ def find_make():
 # Test build - proves the selected combination really works.
 # --------------------------------------------------------------------------
 def verify(compiler, pack):
-    src = ROOT / SOURCE
-    if not src.is_file():
-        print(f"  ! {SOURCE} not found, test build skipped")
+    srcs = [ROOT / s for s in SOURCES]
+    missing = [s.name for s in srcs if not s.is_file()]
+    if missing:
+        print(f"  ! {missing} not found, test build skipped")
         return None
 
     out = HERE / "setup_verify.elf"
@@ -224,7 +225,7 @@ def verify(compiler, pack):
         f'-mdfp={pack["dfp"]}',
         "-O1", "-Wall",
         f'-T{pack["gld"]}',
-        str(src), "-o", str(out),
+        *[str(s) for s in srcs], "-o", str(out),
     ]
     print("\nRunning test build ...")
     try:

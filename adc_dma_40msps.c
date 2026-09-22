@@ -1,27 +1,28 @@
 /*
  * adc_dma_40msps.c
  *
- * dsPIC33AK512MPS506 Curiosity Nano (EV17P63A) - ADC at 40 MSPS into RAM
- * via DMA, bare metal. Builds unchanged for the dsPIC33AK512MPS512.
+ * dsPIC33AK512MPS512 on the dsPIC33 Curiosity Platform Development Board
+ * (EV74H48A) - ADC at 40 MSPS into RAM via DMA, bare metal.
  *
  * Purpose
  *   Minimal, readable starting point to measure what the device really
  *   sustains: one ADC core at full rate, DMA into a double buffer, and
- *   counters for every error the hardware can report.
+ *   counters for every error the hardware can report. A command console
+ *   on the board's PKOB4 USB-UART channel (cli.c) controls it.
  *
  *   This is a measurement harness, not a product. Nothing here has run on
  *   silicon - see README.md.
  *
  * What you see on the board
- *   LED0 (RD0) is the only output. Slow blink (1 Hz) = everything runs and
- *   no error counter has moved. Fast blink (5 Hz) = running, but an error
- *   counter is non-zero. A counted blink pattern with a pause = the code
- *   stopped at a checkpoint; the count is the error code (table at
+ *   LED0 (RC8) is the status output. Slow blink (1 Hz) = everything runs
+ *   and no error counter has moved. Fast blink (5 Hz) = running, but an
+ *   error counter is non-zero. A counted blink pattern with a pause = the
+ *   code stopped at a checkpoint; the count is the error code (table at
  *   fail() below, also in docs/TROUBLESHOOTING.md).
  *
  * Self-test
  *   Before the external input is used, the same chain samples the ADC's
- *   internal 15/16 * VDD reference (AD1AN6, DS70005591D Table 16-2) and
+ *   internal 15/16 * VDD reference (ADxAN6, DS70005591D Table 16-2) and
  *   checks that the mean of a buffer half is where it must be (~3840).
  *   That proves clock, ADC, DMA and ISR together without a signal source.
  *
@@ -34,8 +35,8 @@
  * Data path
  *   The ADC channel runs in Integration mode: a software trigger starts a
  *   burst, the back-to-back trigger keeps it going for CNT conversions,
- *   and each conversion raises the "ADC1 Done CH0" event that triggers
- *   the DMA. The DMA copies the 12-bit result from AD1CH0RES into one
+ *   and each conversion raises the "ADCn Done CH0" event that triggers
+ *   the DMA. The DMA copies the 12-bit result from ADnCH0RES into one
  *   buffer of two halves; its HALF and DONE flags tell the CPU which half
  *   is complete. At DONE the ISR starts the next burst.
  *
@@ -46,15 +47,19 @@
  *   and there it is bounded by CNT (max 65535), so the burst has to be
  *   restarted. Tying CNT to the DMA buffer keeps ADC and DMA in step.
  *
+ * Simulator build (SIM_BUILD, see adc_dma_40msps.h)
+ *   The MPLAB X simulator models neither the PLLs nor the ADC nor the DMA,
+ *   so main() would stop at the first clock wait. In that build main()
+ *   runs nothing but the console, from a RAM mailbox, so the command
+ *   parser can be exercised without a board (tools/sim_cli.py).
+ *
  * Every register write below cites the datasheet table or page it comes from.
- * Revision 2026-09-22: reviewed against DS70005591D and errata DS80001162E,
- * then tailored to the EV17P63A; see README "Revision history".
+ * Revision history in README.md.
  */
 
 #include <xc.h>
 #include <libpic30.h>       /* __delay32()                                 */
-#include <stdint.h>
-#include <stdbool.h>
+#include "adc_dma_40msps.h"
 
 /* ------------------------------------------------------------------ *
  * Configuration bits
@@ -90,50 +95,55 @@
 #pragma config FWDT_WDTEN = SW
 
 /* ------------------------------------------------------------------ *
+ * ADC core selection
+ *
+ * The five ADC cores have identical register sets, only the prefix
+ * differs (AD1..., AD5...). ADCREG(x) expands to the register of the core
+ * selected by ADC_INSTANCE in adc_dma_40msps.h, e.g. ADCREG(CH0CON1bits).
+ * The DMA trigger code follows from the ATDF value-group DMA_SEL__CHSEL:
+ * "ADCn Done CH0" = 0x2F, 0x35, 0x3B, 0x41, 0x48 for n = 1..5.
+ * ------------------------------------------------------------------ */
+#define ADC_CAT_(a, b, c)  a##b##c
+#define ADC_CAT(a, b, c)   ADC_CAT_(a, b, c)
+#define ADCREG(suffix)     ADC_CAT(AD, ADC_INSTANCE, suffix)
+
+#if   ADC_INSTANCE == 1
+#define DMA_TRIG_ADC_CH0   0x2Fu
+#elif ADC_INSTANCE == 2
+#define DMA_TRIG_ADC_CH0   0x35u
+#elif ADC_INSTANCE == 3
+#define DMA_TRIG_ADC_CH0   0x3Bu
+#elif ADC_INSTANCE == 4
+#define DMA_TRIG_ADC_CH0   0x41u
+#elif ADC_INSTANCE == 5
+#define DMA_TRIG_ADC_CH0   0x48u
+#else
+#error "ADC_INSTANCE must be 1..5"
+#endif
+
+/* ------------------------------------------------------------------ *
  * Tunables
  * ------------------------------------------------------------------ */
 
-/* Samples per buffer half. The DMA fills one buffer of 2 x 1024 samples
- * (4 KiB) and raises HALF after the first half and DONE after the second,
- * so the CPU always has one complete half while the other one fills.
- * At 40 MSPS a half is 25.6 us of signal and the interrupt rate is
- * 39 kHz. One ADC burst (CNT) fills the whole buffer, so the burst is
- * restarted every 51.2 us. */
-#define SAMPLES_PER_HALF  1024u
-#define SAMPLES_PER_BUF   (2u * SAMPLES_PER_HALF)
-
-/* Analog input to sample: ADC1 positive input 0 (AD1AN0). On the
- * dsPIC33AK512MPS506 that is pin RA2, on the Curiosity Nano the edge
- * connector position labelled "RA2 / AD1AN0" (user guide DS70005634A,
- * Figure 1-3). Input availability per package: DS70005591D Table 16-2. */
-#define ADC1_PINSEL       0u
-
-/* Sample time in TAD units, SAMC[4:0] in AD1CH0CON1 (DS70005591D p1266):
- * sample time = (2 * SAMC + 0.5) TAD, conversion period = (2 * SAMC + 2)
- * TAD, so the rate is 40 / (SAMC + 1) MSPS at a 320 MHz input clock.
- * 0 = 0.5 TAD, the minimum, for maximum throughput. A real signal source
- * with non-negligible impedance will need more - that is the first knob
- * to turn if the results look wrong. */
-#define ADC1_SAMC         0u
-
-/* Self-test input and window. AD1AN6 is the internal 15/16 * VDD
- * reference (Table 16-2, p1224), which the datasheet itself samples for
- * gain calibration (Example 16-3, p1328) - with SAMC = 3, because an
- * internal reference is not a 50 ohm source. Expected mean: 15/16 * 4096
- * = 3840; the window below allows +-5 % for gain and offset error. */
+/* Self-test input and window. ADxAN6 is the internal 15/16 * VDD
+ * reference on every core and package (Table 16-2, p1224), which the
+ * datasheet itself samples for gain calibration (Example 16-3, p1328) -
+ * with SAMC = 3, because an internal reference is not a 50 ohm source.
+ * Expected mean: 15/16 * 4096 = 3840; the window allows +-5 %. */
 #define SELFTEST_PINSEL   6u
 #define SELFTEST_SAMC     3u      /* 6.5 TAD = 81 ns, as in Example 16-3 */
-#define SELFTEST_HALVES   4u      /* halves to skip before judging      */
+#define SELFTEST_HALVES   6u      /* halves to let the switch settle    */
 #define SELFTEST_MIN      3648u   /* 3840 - 5 %                          */
 #define SELFTEST_MAX      4032u   /* 3840 + 5 %                          */
 
-/* LED0 on the Curiosity Nano is RD0 and lights when the pin is driven
- * low (DS70005634A 4.2.1: "driving the connected I/O line to GND ...
- * activates the LED"). Port D has no analog function, so no ANSEL. */
-#define LED_TRIS          TRISDbits.TRISD0
-#define LED_LAT           LATDbits.LATD0
-#define LED_ON()          (LED_LAT = 0u)
-#define LED_OFF()         (LED_LAT = 1u)
+/* LED0 on the Curiosity Platform Development Board is RC8, DIM pin 28
+ * (DIM info sheet DS70005563A, Table 1). The green LEDs are driven high
+ * to light (user guide DS70005562D 2.5; Microchip's own example on this
+ * board reports "LED0 HIGH during sampling"). Port C has no ANSEL. */
+#define LED_TRIS          TRISCbits.TRISC8
+#define LED_LAT           LATCbits.LATC8
+#define LED_ON()          (LED_LAT = 1u)
+#define LED_OFF()         (LED_LAT = 0u)
 #define LED_TOGGLE()      (LED_LAT = (uint8_t)!LED_LAT)
 
 /* Heartbeat: LED toggles every N completed halves. 39 062 halves per
@@ -142,22 +152,28 @@
 #define HEARTBEAT_ERR     3906u
 
 /* Bound for every hardware wait loop, in loop iterations. A step that
- * needs longer than this has failed; fail() then reports which one. */
+ * needs longer than this has failed; fail() then reports which one. The
+ * simulator runs about 80 times slower than the silicon, so its bound is
+ * shorter - it only exists to make "no data" come back in seconds. */
+#if SIM_BUILD
+#define WAIT_LIMIT        20000u
+#else
 #define WAIT_LIMIT        2000000u
+#endif
 
 /* ------------------------------------------------------------------ *
  * Sample buffer
  *
  * One buffer, two halves. 16-bit words because the DMA is configured for
- * 16-bit transfers (SIZE = 1) and the 12-bit result in AD1CH0RES[11:0]
+ * 16-bit transfers (SIZE = 1) and the 12-bit result in ADxCH0RES[11:0]
  * fits. Aligned to 4 bytes: the DMA writes through a 32-bit path and
  * unaligned buffers are asking for trouble.
  * ------------------------------------------------------------------ */
-static volatile uint16_t buf[SAMPLES_PER_BUF] __attribute__((aligned(4)));
+volatile uint16_t buf[SAMPLES_PER_BUF] __attribute__((aligned(4)));
 
 /* RAM window for the DMA address limit registers. __DATA_BASE and
  * __DATA_LENGTH come from the device header (0x4000 and 0x10000 for the
- * 64 KB parts, matching p33AK512MPS506.gld), so the window follows the
+ * 64 KB parts, matching p33AK512MPS512.gld), so the window follows the
  * device instead of being a magic number. */
 #if !defined(__DATA_BASE) || !defined(__DATA_LENGTH)
 #error "__DATA_BASE / __DATA_LENGTH not provided by the device header"
@@ -166,10 +182,10 @@ static volatile uint16_t buf[SAMPLES_PER_BUF] __attribute__((aligned(4)));
 /* ------------------------------------------------------------------ *
  * Measurement counters - the actual point of this program
  *
- * Read these with the debugger after a run. dma_overrun is the number
- * that answers "does the bus keep up": the datasheet documents a single
- * shared DMA data bus (DS70005591D 13.4.4, p825) but gives no throughput
- * figure.
+ * Read these with the debugger or the "status" command. dma_overrun is
+ * the number that answers "does the bus keep up": the datasheet documents
+ * a single shared DMA data bus (DS70005591D 13.4.4, p825) but gives no
+ * throughput figure.
  * ------------------------------------------------------------------ */
 volatile uint32_t blocks_done   = 0;   /* completed buffer halves          */
 volatile uint32_t dma_overrun   = 0;   /* DMA0STAT.OVERRUN seen            */
@@ -179,18 +195,30 @@ volatile uint32_t late_service  = 0;   /* HALF and DONE pending together   */
 volatile uint32_t proc_missed   = 0;   /* main() skipped a completed half  */
 volatile uint16_t last_sample   = 0;   /* sanity check: is data moving?    */
 volatile uint32_t ready_half    = 0;   /* 0 = buf[0..], 1 = buf[1024..]    */
-volatile uint32_t selftest_mean = 0;   /* mean seen on AD1AN6, ~3840       */
+volatile uint32_t selftest_mean = 0;   /* mean seen on ADxAN6, ~3840       */
 volatile uint32_t fail_code     = 0;   /* != 0: stopped, see fail()        */
+volatile int32_t  proc_result   = 0;   /* output of process_buffer()       */
 
 /* Note 1: errata DS80001162E item 2 - BRERR is only set when RETEN = 1,
  * and RETEN also raises a trap. This example leaves RETEN = 0, so
  * dma_bus_err effectively counts write errors (BWERR) only. */
 
-/* Channel reconfiguration requested by main(), applied by the ISR
- * between two bursts, when the channel is idle. */
-static volatile bool    pinsel_switch_pending = false;
-static volatile uint8_t pinsel_next = ADC1_PINSEL;
-static volatile uint8_t samc_next   = ADC1_SAMC;
+/* Run control. run_enabled is what the console sets; burst_active says
+ * whether a burst is in flight, so that "start" during a burst does not
+ * trigger a second one on top. */
+static volatile bool    run_enabled  = false;
+static volatile bool    burst_active = false;
+
+/* Channel reconfiguration requested by the console or the self-test,
+ * applied by the ISR between two bursts, when the channel is idle. */
+static volatile bool    switch_pending = false;
+static volatile uint8_t pinsel_next    = ADC_PINSEL;
+static volatile uint8_t samc_next      = ADC_SAMC;
+static volatile uint8_t pinsel_cur     = ADC_PINSEL;
+static volatile uint8_t samc_cur       = ADC_SAMC;
+
+static volatile uint8_t led_auto       = 2u;   /* 0 off, 1 on, 2 auto     */
+static uint32_t         seen_blocks    = 0;
 
 /* NOSC values, from the ATDF value-group CLK1_CON__COSC. */
 #define NOSC_FRC        0x1u
@@ -206,7 +234,7 @@ static volatile uint8_t samc_next   = ADC1_SAMC;
  *   2     PLL2 (system clock) did not configure/lock clock_init()
  *   3     CLKGEN1 did not switch to PLL2             clock_init()
  *   4     CLKGEN6 did not switch to PLL1             clock_init()
- *   5     ADC core never became ready (ADRDY)        adc1_init()
+ *   5     ADC core never became ready (ADRDY)        adc_init()
  *   6     no DMA blocks arrived (nothing moves)      self-test / run
  *   7     self-test value out of range               self-test
  *   8     DMA channel switched itself off (CHEN = 0) self-test / run
@@ -215,7 +243,7 @@ static volatile uint8_t samc_next   = ADC1_SAMC;
  * depends on which clock the CPU is on at the time; the count is what
  * counts.
  * ------------------------------------------------------------------ */
-static void fail(uint32_t code)
+void fail(uint32_t code)
 {
     fail_code = code;
     IEC2bits.DMA0IE = 0;
@@ -270,8 +298,9 @@ static void fail(uint32_t code)
  * POSTDIV2.
  *
  * The divider values below are the ones Microchip's own MCC-generated
- * example uses for this part, which is the reason to prefer them over an
- * equally valid arithmetic alternative - they have run on hardware:
+ * example uses for this part on this board, which is the reason to prefer
+ * them over an equally valid arithmetic alternative - they have run on
+ * hardware:
  *   https://github.com/microchip-pic-avr-examples/dspic33ak-curiosity-adc-40msps
  *
  *   PLL1DIV = 0x0100C829 : N1=1, M=200, POSTDIV1=5, POSTDIV2=1
@@ -285,7 +314,7 @@ static void fail(uint32_t code)
  * Constraints checked against Table 40-23 and page 777: F_PFD >= 5 MHz,
  * F_VCO 500...1600 MHz, M in 16...320, POSTDIV1 >= POSTDIV2.
  * ------------------------------------------------------------------ */
-static void clock_init(void)
+static void __attribute__((unused)) clock_init(void)
 {
     /* If the system clock is currently running off a PLL, park it on the
      * FRC first. Changing PLL settings underneath a running CPU clock can
@@ -348,7 +377,7 @@ static void clock_init(void)
 }
 
 /* ------------------------------------------------------------------ *
- * ADC1 setup - one channel, Integration mode, back-to-back inside a burst
+ * ADC setup - one channel, Integration mode, back-to-back inside a burst
  *
  * DS70005591D 16.4.4 (p1321) and 16.4.5 (p1322):
  *   - MODE = 10 (Integration): CNT conversions per burst, "the first
@@ -365,56 +394,61 @@ static void clock_init(void)
  *     conversion event is what triggers the DMA. IRQSEL = 1 would fire
  *     only once per burst.
  *   - EIEN = 0: note 4 on p1265, no early interrupt with DMA transfers.
- *   - The per-conversion result is AD1CH0RES[11:0]; AD1CH0DATA is the
+ *   - The per-conversion result is ADxCH0RES[11:0]; ADxCH0DATA is the
  *     accumulator of the burst (p1270) and is not what we want.
  *
  * The same pattern (MODE = 2, CNT = n, TRG1SRC = 1, TRG2SRC = 2, then a
- * software trigger) is what Microchip's 40 MSPS example uses on
- * hardware, and what datasheet Example 16-6 (p1331) does.
+ * software trigger) is what Microchip's 40 MSPS example uses on this
+ * board, and what datasheet Example 16-6 (p1331) does.
  * ------------------------------------------------------------------ */
-static void adc1_init(uint8_t pinsel, uint8_t samc)
+static void __attribute__((unused)) adc_init(uint8_t pinsel, uint8_t samc)
 {
-    AD1CONbits.ON = 0;
+    ADCREG(CONbits).ON = 0;
 
-    /* Channel 0 configuration, AD1CH0CON1 (DS70005591D p1265 f.) */
-    AD1CH0CON1bits.PINSEL  = pinsel;      /* positive input select      */
-    AD1CH0CON1bits.NINSEL  = 0u;          /* negative input = AVSS      */
-    AD1CH0CON1bits.DIFF    = 0u;          /* single ended -> unsigned   */
-    AD1CH0CON1bits.FRAC    = 0u;          /* integer, right aligned     */
-    AD1CH0CON1bits.SAMC    = samc;        /* sample time in TAD         */
-    AD1CH0CON1bits.MODE    = 2u;          /* Integration: CNT per burst */
-    AD1CH0CON1bits.ACCNUM  = 0u;          /* oversampling only, unused  */
-    AD1CH0CON1bits.IRQSEL  = 0u;          /* event per conversion (RES) */
-    AD1CH0CON1bits.EIEN    = 0u;          /* no early interrupt w/ DMA  */
-    AD1CH0CON1bits.TRG1SRC = 0x01u;       /* software trigger starts    */
-    AD1CH0CON1bits.TRG2SRC = 0x02u;       /* back-to-back continues     */
+    /* Channel 0 configuration, ADxCH0CON1 (DS70005591D p1265 f.) */
+    ADCREG(CH0CON1bits).PINSEL  = pinsel;      /* positive input select */
+    ADCREG(CH0CON1bits).NINSEL  = 0u;          /* negative input = AVSS */
+    ADCREG(CH0CON1bits).DIFF    = 0u;          /* single ended, unsigned*/
+    ADCREG(CH0CON1bits).FRAC    = 0u;          /* integer, right aligned*/
+    ADCREG(CH0CON1bits).SAMC    = samc;        /* sample time in TAD    */
+    ADCREG(CH0CON1bits).MODE    = 2u;          /* Integration           */
+    ADCREG(CH0CON1bits).ACCNUM  = 0u;          /* oversampling only     */
+    ADCREG(CH0CON1bits).IRQSEL  = 0u;          /* event per conversion  */
+    ADCREG(CH0CON1bits).EIEN    = 0u;          /* no early IRQ with DMA */
+    ADCREG(CH0CON1bits).TRG1SRC = 0x01u;       /* software trigger      */
+    ADCREG(CH0CON1bits).TRG2SRC = 0x02u;       /* back-to-back          */
 
     /* Conversions per burst. One burst fills the whole DMA buffer, so
      * the DMA DONE interrupt is also the moment to start the next one.
-     * CNT[15:0] in AD1CH0CNT (p1272), max 65535. */
-    AD1CH0CNT = SAMPLES_PER_BUF;
+     * CNT[15:0] in ADxCH0CNT (p1272), max 65535. */
+    ADCREG(CH0CNT) = SAMPLES_PER_BUF;
 
-    AD1CONbits.ON = 1;
-    WAIT_WHILE(!AD1CONbits.ADRDY, 5u);    /* wait for the core          */
+    pinsel_cur = pinsel;
+    samc_cur   = samc;
+
+    ADCREG(CONbits).ON = 1;
+    WAIT_WHILE(!ADCREG(CONbits).ADRDY, 5u);    /* wait for the core     */
 }
 
-/* Start one burst of SAMPLES_PER_BUF conversions. Reading AD1CH0DATA
+/* Start one burst of SAMPLES_PER_BUF conversions. Reading ADxCH0DATA
  * first clears CH0RDY from the previous burst, as datasheet Example 16-6
  * does before re-triggering. */
-static inline void adc1_start_burst(void)
+static inline void adc_start_burst(void)
 {
-    (void)AD1CH0DATA;
-    AD1SWTRGbits.CH0TRG = 1u;
+    (void)ADCREG(CH0DATA);
+    burst_active = true;
+    ADCREG(SWTRGbits).CH0TRG = 1u;
 }
 
 /* ------------------------------------------------------------------ *
- * DMA channel 0: ADC1 channel 0 result -> RAM
+ * DMA channel 0: ADCn channel 0 result -> RAM
  *
- * CHSEL = 0x2F is "ADC1 Done CH0" (ATDF value-group DMA_SEL__CHSEL).
- * SIZE = 1 selects 16-bit transfers; the DMA supports 8, 16 and 32 bit
- * (DS70005591D 13.4.2, p824 and p812), so a 12-bit result costs 2 bytes.
- * AD1CH0RES holds RES[11:0] in the low half and RESF[11:0] in bits
- * 31:20 (p1229), so the 16-bit read of the low half is the sample.
+ * CHSEL = "ADCn Done CH0" (ATDF value-group DMA_SEL__CHSEL, see the
+ * table at ADCREG above). SIZE = 1 selects 16-bit transfers; the DMA
+ * supports 8, 16 and 32 bit (DS70005591D 13.4.2, p824 and p812), so a
+ * 12-bit result costs 2 bytes. ADxCH0RES holds RES[11:0] in the low half
+ * and RESF[11:0] in bits 31:20 (p1229), so the 16-bit read of the low
+ * half is the sample.
  *
  * DMALOW / DMAHIGH MUST be set. They reset to 0, every transaction is
  * checked against them (13.4.8.1 p829, step 5), and an access above
@@ -430,7 +464,7 @@ static inline void adc1_start_burst(void)
  * DMAxSTAT flags are "R/C/HS" - clearable by writing 0 (legend p815,
  * Example 13-4 p835: "DMA0STATbits.DONE=0"). Writing 1 does not clear.
  * ------------------------------------------------------------------ */
-static void dma0_init(void)
+static void __attribute__((unused)) dma0_init(void)
 {
     DMACONbits.ON = 0;
     DMA0CHbits.CHEN = 0;
@@ -439,11 +473,11 @@ static void dma0_init(void)
     DMALOW  = (uint32_t)__DATA_BASE;
     DMAHIGH = (uint32_t)__DATA_BASE + (uint32_t)__DATA_LENGTH - 1u; /* 0x13FFF */
 
-    DMA0SEL = 0x2Fu;                  /* ADC1 Done CH0                  */
-    DMA0SRC = (uint32_t)&AD1CH0RES;   /* per-conversion result          */
-    DMA0DST = (uint32_t)buf;          /* RAM destination                */
-    DMA0CNT = SAMPLES_PER_BUF;        /* transactions per block         */
-    DMA0STAT = 0u;                    /* clear any stale flags          */
+    DMA0SEL = DMA_TRIG_ADC_CH0;             /* ADCn Done CH0            */
+    DMA0SRC = (uint32_t)&ADCREG(CH0RES);    /* per-conversion result    */
+    DMA0DST = (uint32_t)buf;                /* RAM destination          */
+    DMA0CNT = SAMPLES_PER_BUF;              /* transactions per block   */
+    DMA0STAT = 0u;                          /* clear any stale flags    */
 
     DMA0CH = 0u;
     DMA0CHbits.SIZE    = 1u;          /* 16-bit transfers               */
@@ -470,8 +504,11 @@ static void dma0_init(void)
  *
  * HALF: the first half is complete, the DMA is filling the second.
  * DONE: the second half is complete, the DMA has reloaded to the start
- *       and the ADC burst has ended - apply a pending input change and
- *       start the next burst here.
+ *       and the ADC burst has ended - apply a pending input change and,
+ *       if the stream is enabled, start the next burst here.
+ *
+ * Priority 4 (IPC9 default). The console's UART receive interrupt runs
+ * at priority 1, so this ISR preempts a running command.
  *
  * Deliberately short. Everything this counts is a hardware flag, so a
  * long ISR would itself become the reason for the next overrun.
@@ -517,16 +554,85 @@ void __attribute__((interrupt, no_auto_psv)) _DMA0Interrupt(void)
 
         /* The channel is idle between bursts: this is the only safe
          * moment to change its input or sample time. */
-        if (pinsel_switch_pending) {
-            AD1CH0CON1bits.PINSEL = pinsel_next;
-            AD1CH0CON1bits.SAMC   = samc_next;
-            pinsel_switch_pending = false;
+        if (switch_pending) {
+            ADCREG(CH0CON1bits).PINSEL = pinsel_next;
+            ADCREG(CH0CON1bits).SAMC   = samc_next;
+            pinsel_cur = pinsel_next;
+            samc_cur   = samc_next;
+            switch_pending = false;
         }
-        adc1_start_burst();           /* next SAMPLES_PER_BUF samples   */
+        if (run_enabled) {
+            adc_start_burst();        /* next SAMPLES_PER_BUF samples   */
+        } else {
+            burst_active = false;
+        }
     }
 
     IFS2bits.DMA0IF = 0;
 }
+
+/* ------------------------------------------------------------------ *
+ * Control API (adc_dma_40msps.h)
+ * ------------------------------------------------------------------ */
+void capture_start(void)
+{
+    run_enabled = true;
+    if (!burst_active) {
+        adc_start_burst();
+    }
+}
+
+void capture_stop(void)
+{
+    run_enabled = false;
+}
+
+bool capture_running(void)
+{
+    return run_enabled;
+}
+
+bool capture_set_input(uint8_t pinsel, uint8_t samc)
+{
+    if ((pinsel > 15u) || (samc > 31u)) {
+        return false;
+    }
+    pinsel_next = pinsel;
+    samc_next   = samc;
+    switch_pending = true;
+    if (!burst_active) {
+        /* Nothing running: apply right away, the channel is idle. */
+        ADCREG(CH0CON1bits).PINSEL = pinsel;
+        ADCREG(CH0CON1bits).SAMC   = samc;
+        pinsel_cur = pinsel;
+        samc_cur   = samc;
+        switch_pending = false;
+    }
+    return true;
+}
+
+uint8_t capture_pinsel(void) { return pinsel_cur; }
+uint8_t capture_samc(void)   { return samc_cur; }
+
+const volatile uint16_t *capture_completed_half(void)
+{
+    return &buf[ready_half ? SAMPLES_PER_HALF : 0u];
+}
+
+void counters_clear(void)
+{
+    dma_overrun = 0; dma_addr_err = 0; dma_bus_err = 0;
+    late_service = 0; proc_missed = 0;
+}
+
+void led_mode(uint8_t mode)
+{
+    led_auto = mode;
+    if (mode == 0u)      { LED_OFF(); }
+    else if (mode == 1u) { LED_ON();  }
+}
+
+uint8_t led_get_mode(void) { return led_auto; }
 
 /* ------------------------------------------------------------------ *
  * Process one completed buffer half
@@ -537,8 +643,6 @@ void __attribute__((interrupt, no_auto_psv)) _DMA0Interrupt(void)
  * second and per channel, and whether the CPU keeps up is as much a
  * question as the DMA bandwidth.
  * ------------------------------------------------------------------ */
-volatile int32_t proc_result = 0;
-
 static void process_buffer(const volatile uint16_t *b, uint32_t n)
 {
     int32_t acc = 0;
@@ -557,15 +661,70 @@ static uint32_t half_mean(const volatile uint16_t *b, uint32_t n)
     return acc / n;
 }
 
-/* Wait until blocks_done passes a value. Gives up with code 6 (nothing
+bool capture_service(void)
+{
+    const uint32_t done = blocks_done;
+    if (done == seen_blocks) {
+        return false;
+    }
+    if ((done - seen_blocks) > 1u) {
+        proc_missed += (done - seen_blocks) - 1u;
+    }
+    seen_blocks = done;
+    process_buffer(capture_completed_half(), SAMPLES_PER_HALF);
+
+    /* Heartbeat: slow while clean, fast once any error counter moved. */
+    if (led_auto == 2u) {
+        const bool clean = (dma_overrun | dma_addr_err | dma_bus_err |
+                            late_service | proc_missed) == 0u;
+        if ((done % (clean ? HEARTBEAT_OK : HEARTBEAT_ERR)) == 0u) {
+            LED_TOGGLE();
+        }
+    }
+    return true;
+}
+
+/* Wait until blocks_done passes a value. Returns 0, or 6 (nothing
  * moves) or 8 (the DMA switched itself off, e.g. on an address fault). */
-static void wait_for_blocks(uint32_t target)
+static uint32_t wait_for_blocks(uint32_t target)
 {
     uint32_t n = WAIT_LIMIT;
     while (blocks_done < target) {
-        if (DMA0CHbits.CHEN == 0u) { fail(8u); }
-        if (--n == 0u)             { fail(6u); }
+        if (DMA0CHbits.CHEN == 0u) { return 8u; }
+        if (--n == 0u)             { return 6u; }
     }
+    return 0u;
+}
+
+uint32_t capture_selftest(uint32_t *mean)
+{
+    const uint8_t  keep_pinsel = pinsel_cur;
+    const uint8_t  keep_samc   = samc_cur;
+    const bool     was_running = run_enabled;
+    uint32_t       rc;
+
+    (void)capture_set_input(SELFTEST_PINSEL, SELFTEST_SAMC);
+    capture_start();
+
+    /* The switch takes effect at the next DONE, then a full burst runs
+     * on the new input: wait long enough that the half we judge is the
+     * reference and nothing else. */
+    rc = wait_for_blocks(blocks_done + SELFTEST_HALVES);
+    if (rc == 0u) {
+        const uint32_t m = half_mean(capture_completed_half(), SAMPLES_PER_HALF);
+        selftest_mean = m;
+        if (mean != NULL) { *mean = m; }
+        if ((m < SELFTEST_MIN) || (m > SELFTEST_MAX)) { rc = 7u; }
+    }
+
+    (void)capture_set_input(keep_pinsel, keep_samc);
+    if (rc == 0u) {
+        rc = wait_for_blocks(blocks_done + SELFTEST_HALVES);   /* settle */
+    }
+    if (!was_running) {
+        capture_stop();
+    }
+    return rc;
 }
 
 /* ------------------------------------------------------------------ */
@@ -574,79 +733,66 @@ int main(void)
     LED_OFF();
     LED_TRIS = 0u;
 
+    /* The console first: on hardware it lives in the UART1 receive
+     * interrupt from here on; in the simulator it is all there is. */
+    cli_init();
+
+#if SIM_BUILD
+    /* Simulator: no PLL, no ADC, no DMA, no UART receiver. Feed the
+     * parser from the RAM mailbox (tools/sim_cli.py) and blink so a
+     * watcher sees the loop is alive. */
+    for (;;) {
+        static uint32_t tick = 0;
+        cli_poll();
+        if ((++tick % 20000u) == 0u && led_auto == 2u) { LED_TOGGLE(); }
+    }
+#else
     clock_init();
 
     /* ---- Self-test on the internal 15/16 * VDD reference ----
      * Same clock, ADC, DMA and ISR as the real measurement, only the
      * input differs. If the mean is right, the whole chain works. */
-    adc1_init(SELFTEST_PINSEL, SELFTEST_SAMC);
+    adc_init(ADC_PINSEL, ADC_SAMC);
     dma0_init();
 
     IFS2bits.DMA0IF = 0;              /* IEC2 bit 13, IPC9 default 4    */
     IEC2bits.DMA0IE = 1;
 
-    adc1_start_burst();               /* first burst; the ISR keeps going */
-
-    wait_for_blocks(SELFTEST_HALVES);
-    selftest_mean = half_mean(&buf[ready_half ? SAMPLES_PER_HALF : 0u],
-                              SAMPLES_PER_HALF);
-    if ((selftest_mean < SELFTEST_MIN) || (selftest_mean > SELFTEST_MAX)) {
-        fail(7u);
-    }
-
-    /* ---- Switch to the external input, between two bursts ---- */
-    pinsel_next = ADC1_PINSEL;
-    samc_next   = ADC1_SAMC;
-    pinsel_switch_pending = true;
     {
-        const uint32_t now = blocks_done;
-        wait_for_blocks(now + 2u * SELFTEST_HALVES);   /* let it settle */
+        const uint32_t rc = capture_selftest(NULL);
+        if (rc != 0u) { fail(rc); }
     }
-    LED_ON();
 
     /* ---- Measurement ---- */
-    uint32_t seen      = blocks_done;
-    uint32_t idle      = 0;
+    capture_start();
+    LED_ON();
 
+    uint32_t idle = 0;
     for (;;) {
-        /* Wait for a half, then work on it while the DMA fills the
-         * other one. If more than one half completed since the last
-         * pass, the older one is already gone - count that. */
-        const uint32_t done = blocks_done;
-        if (done != seen) {
-            if ((done - seen) > 1u) {
-                proc_missed += (done - seen) - 1u;
-            }
-            seen = done;
+        if (capture_service()) {
             idle = 0;
-            process_buffer(&buf[ready_half ? SAMPLES_PER_HALF : 0u],
-                           SAMPLES_PER_HALF);
-
-            /* Heartbeat: slow while clean, fast once any error counter
-             * has moved. */
-            const bool clean = (dma_overrun | dma_addr_err | dma_bus_err |
-                                late_service | proc_missed) == 0u;
-            if ((done % (clean ? HEARTBEAT_OK : HEARTBEAT_ERR)) == 0u) {
-                LED_TOGGLE();
-            }
-        } else {
+        } else if (run_enabled) {
             /* The stream stopped: burst restart lost, or the DMA shut
              * itself off. Say so instead of sitting here silently. */
             if (DMA0CHbits.CHEN == 0u) { fail(8u); }
             if (++idle > WAIT_LIMIT)   { fail(6u); }
+        } else {
+            idle = 0;
         }
+        cli_poll();                   /* abort key, nothing else here   */
 
-        /* What to look at with the debugger:
+        /* What to look at with the debugger or "status":
          *   blocks_done   x SAMPLES_PER_HALF / elapsed time = actual rate
          *                 (includes the re-trigger gap once per buffer)
          *   dma_overrun   must stay 0, otherwise the DMA bus lost samples
          *   late_service  must stay 0, otherwise the ISR is too slow
          *   proc_missed   must stay 0, otherwise main() is too slow
          *   last_sample   changing means data is really moving
-         *   selftest_mean ~3840 = the chain was proven before AN0 was used
+         *   selftest_mean ~3840 = the chain was proven before AN5 was used
          *   fail_code     0 while running; the LED pattern otherwise
          */
     }
+#endif
 
     return 0;
 }

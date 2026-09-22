@@ -11,7 +11,7 @@ waste time on the parts that are solid.
 **Revision 2026-09-22:** a review against the datasheet and the silicon errata found
 four real mistakes in the previous version (ADC trigger mode, DMA address limits, status
 flag clearing, buffer switching). They are fixed; the README has the list. The code was
-then cut to the EV17P63A: it runs a self-test on the ADC's internal reference before it
+then cut to the EV74H48A board: it runs a self-test on the ADC's internal reference before it
 touches the external pin, every wait loop is bounded, and **LED0 tells you where it
 stopped** — so most of this guide starts from what the LED shows.
 
@@ -32,12 +32,12 @@ transfer and a restart from the ISR** (the README section "What comes from where
 what was taken from which example). It rests on two things we could not test:
 
 - **The restart is accepted.** Datasheet Example 16-6 (p1331) retriggers a finished
-  integration burst in a loop after reading `AD1CH0DATA`, which clears `CH0RDY`. The
-  ISR does the same (`adc1_start_burst()`). If bursts stop after the first one,
+  integration burst in a loop after reading `AD3CH0DATA`, which clears `CH0RDY`. The
+  ISR does the same (`adc_start_burst()`). If bursts stop after the first one,
   `blocks_done` stays at 2 — see §2.2.
 - **DMA and ADC stay in step.** Both count 2048. If `blocks_done` runs but the buffer
   content drifts (the first sample of a half is not where you expect), check
-  `AD1CH0CNTbits.CNTSTAT` against `DMA0CNT` while halted.
+  `AD3CH0CNTbits.CNTSTAT` against `DMA0CNT` while halted.
 
 The restart costs the interrupt latency once per 51.2 µs, so the measured rate will sit
 slightly below 40 MSPS. That is expected and not an overrun.
@@ -98,10 +98,10 @@ nothing competes — but if you add UART or CAN later, this is where jitter,
 
 So you do not hunt here first. Each was read from a primary source and cross-checked:
 
-- **`DMA0SEL = 0x2F`** = "ADC1 Done CH0" — straight from the ATDF value group
+- **`DMA0SEL = 0x3B`** = "ADC3 Done CH0" (0x2F/0x35/0x3B/0x41/0x48 for ADC1…5, chosen by `ADC_INSTANCE`) — straight from the ATDF value group
   `DMA_SEL__CHSEL`.
 - **`SIZE = 1` = 16-bit** — §13.4.2 page 824 and the register description on page 812.
-- **`AD1CH0RES` low half = the sample** — `RES[11:0]` sits in bits 11:0, `RESF` in
+- **`AD3CH0RES` low half = the sample** — `RES[11:0]` sits in bits 11:0, `RESF` in
   bits 31:20 (register summary p1229). With `FRAC = 0` the result is right aligned
   (p1265).
 - **`MODE = 2`, `TRG1SRC = 1`, `TRG2SRC = 2`, then a software trigger** — §16.4.5
@@ -115,10 +115,14 @@ So you do not hunt here first. Each was read from a primary source and cross-che
   page 795.
 - **Interrupt plumbing** — DMA0 is IRQ 77, `IEC2`/`IFS2` bit 13, `INTCON1.GIE` is
   set at reset; the linked ELF has `_DMA0Interrupt` at IVT entry 85.
-- **Board facts** — LED0 on RD0, lit when driven low; AD1AN0 on RA2; SW0 on RC3
-  (user guide DS70005634A, Figure 1-3, Tables 4-1/4-2; 64-pin pinout in DS70005591D).
-- **Self-test input** — AD1AN6 is the internal 15/16·VDD reference on every package
-  (Table 16-2), the datasheet samples it the same way (Example 16-3).
+- **Board facts** — LED0 on RC8, driven high to light; AD3AN5 on RA0 = mikroBUS A pin
+  AN; UART1 to the PKOB4 COM port on RH0/RD10 with the PPS codes Microchip's own example
+  uses on this board (DIM info sheet DS70005563A Table 1, user guide DS70005562D).
+- **Self-test input** — ADxAN6 is the internal 15/16·VDD reference on every core and
+  package (Table 16-2), the datasheet samples it the same way (Example 16-3).
+- **The command parser** — `cmd_parser.c` is unchanged from its repository, where it
+  has a PC test harness and has run on two other microcontrollers. Its commands here
+  were exercised in the simulator (20 of 20, `docs/SIMULATION.md`).
 - **`FICD_NOBTSWP` values** — read from both pack versions, see the README.
 
 ---
@@ -161,7 +165,7 @@ debugger you land in `fail()` and `fail_code` tells you the same.
 | 2 | `clock_init()`, PLL2 | as above, for the system clock | same checks on `PLL2DIV` |
 | 3 | `clock_init()`, CLKGEN1 | clock generator 1 will not switch to PLL2 (or back to the FRC at the start) | `CLK1CON`: `NOSC = 0x6`, is `PLL2RDY` set? |
 | 4 | `clock_init()`, CLKGEN6 | clock generator 6 will not switch to PLL1 | `CLK6CON`: `NOSC = 0x5`, is `PLL1RDY` set? |
-| 5 | `adc1_init()` | the ADC core never reported `ADRDY` | is CLKGEN6 running? `CLK6CONbits.CLKRDY` |
+| 5 | `adc_init()` | the ADC core never reported `ADRDY` | is CLKGEN6 running? `CLK6CONbits.CLKRDY` |
 | 6 | self-test or main loop | no buffer half completed within the limit | §2.2 |
 | 7 | self-test | mean on the internal reference outside 3648 … 4032 | §2.4, `selftest_mean` |
 | 8 | self-test or main loop | `DMA0CHbits.CHEN` went to 0 on its own | address fault: `dma_addr_err`, `DMALOW`, `DMAHIGH` |
@@ -179,16 +183,16 @@ Code 6 right after programming means the first buffer half never completed. Code
 after the LED has blinked for a while means the stream ran and then stopped — almost
 always the burst restart (§1.1). Halt and work through this in order:
 
-1. **Is the ADC converting?** Halt and read `AD1CH0CNTbits.CNTSTAT`: it counts the
+1. **Is the ADC converting?** Halt and read `AD3CH0CNTbits.CNTSTAT`: it counts the
    conversions of the current burst. 0 means the burst never started — check
-   `AD1CONbits.ON`, `ADRDY`, `TRG1SRC = 1`, `MODE = 2`, and that
-   `AD1SWTRGbits.CH0TRG` was written (it is in `main()` and in the ISR).
+   `AD3CONbits.ON`, `ADRDY`, `TRG1SRC = 1`, `MODE = 2`, and that
+   `AD3SWTRGbits.CH0TRG` was written (it is in `main()` and in the ISR).
 2. **Did the DMA channel get disabled?** Read `DMA0CHbits.CHEN`. If it is 0 although
    the code set it, the DMA hit an address outside `DMALOW`…`DMAHIGH` and shut the
    channel off (p829 step 5). `dma_addr_err` will be non-zero. Check the two window
    registers contain `0x4000` and `0x13FFF`.
 3. **Is the DMA enabled at all?** `DMACONbits.ON` and `DMA0CHbits.CHEN` must both be 1.
-4. **Right trigger?** Read back `DMA0SEL` — it must be `0x2F`. A wrong value here means
+4. **Right trigger?** Read back `DMA0SEL` — it must be `0x3B` for ADC3 (`0x2F` … `0x48` for ADC1 … 5). A wrong value here means
    the channel waits for an event that never comes.
 5. **Is the interrupt enabled?** `IEC2bits.DMA0IE` must be 1. Note it is `IEC2`, not
    `IEC1` — DMA0 lives in the second interrupt register set.
@@ -196,7 +200,7 @@ always the burst restart (§1.1). Halt and work through this in order:
    transfers are happening and the problem is only the interrupt. Check
    `DMA0CHbits.DONEEN`, `HALFEN` and `IFS2bits.DMA0IF`.
 7. **`blocks_done` stops at exactly 2:** the first burst ran, the restart from the ISR
-   did not take. See §1.1 — read `AD1STATbits.CH0RDY` and `AD1CH0CNTbits.CNTSTAT`
+   did not take. See §1.1 — read `AD3STATbits.CH0RDY` and `AD3CH0CNTbits.CNTSTAT`
    while halted.
 
 If `DMA0CHbits.CHEN` is 0 you get code 8 instead of 6: the DMA disabled itself, which
@@ -223,29 +227,47 @@ no other DMA channel is enabled and that no other interrupt is hogging the CPU.
 
 ### 2.4 The values look wrong — or the self-test fails (code 7)
 
-The self-test samples AD1AN6, the ADC's internal 15/16·VDD reference (Table 16-2,
+The self-test samples AD3AN6, the ADC's internal 15/16·VDD reference (Table 16-2,
 p1224), with the sample time the datasheet uses for it (`SAMC = 3`, Example 16-3), and
 expects a mean of 3840 ± 5 %. `selftest_mean` holds what it saw:
 
 | `selftest_mean` | Most likely cause |
 |---|---|
-| 0 or a few counts | the DMA is copying from the wrong register, or the ADC is not converting at all — compare `AD1CH0RES` in the watch window |
+| 0 or a few counts | the DMA is copying from the wrong register, or the ADC is not converting at all — compare `AD3CH0RES` in the watch window |
 | a few hundred, far below 3840 | sample time too short for the internal reference — raise `SELFTEST_SAMC` |
 | 4095 | reference saturated — `VDD` and `AVDD` differ, or `DIFF`/`FRAC` are not 0 |
 | plausible but outside the window | gain error larger than expected; widen `SELFTEST_MIN`/`MAX` and note the value — this is real device information |
-| values above 4095 | the DMA source is the accumulator — `DMA0SRC` must be `&AD1CH0RES` |
+| values above 4095 | the DMA source is the accumulator — `DMA0SRC` must be `&AD3CH0RES` |
 
 For the external input, after the self-test passed:
 
 | What you see | Most likely cause | What to do |
 |---|---|---|
-| all zeros | pin not connected, or wrong `PINSEL` for your package | check Table 16-2 (from page 1224) for which pin AD1AN0 is |
+| all zeros | pin not connected, or wrong `PINSEL` for your package | check Table 16-2 (from page 1224) for which pin AD3AN5 is; on the EV74H48A it is mikroBUS A pin AN |
 | all 0xFFF | input above AVDD, or pin tied high | check the level: 0 … 3.3 V |
 | amplitude far too small | **source impedance too high for a 6.25 ns sample time** | raise `ADC1_SAMC` step by step and watch the amplitude come up |
 | a straight line | signal frequency too low for a 25.6 µs window | use 100 kHz … a few MHz |
 | plausible but noisy | expected — ENOB is 10.5 bits typical, and the example has no anti-alias filter | |
-| values above 4095 or growing | the DMA source is the accumulator | `DMA0SRC` must be `&AD1CH0RES`, not `AD1CH0DATA` |
+| values above 4095 or growing | the DMA source is the accumulator | `DMA0SRC` must be `&AD3CH0RES`, not `AD3CH0DATA` |
 | every second value looks wrong | alignment, or the buffer is not 4-byte aligned | the source uses `__attribute__((aligned(4)))`; check it survived |
+
+### 2.4a No console, or garbage on the terminal
+
+- **Which COM port.** The board has two: the PKOB4's (this console) and the
+  MCP2221A's (unused). Both appear when you plug the USB cable in. Try the other one.
+  115200 8N1, no flow control.
+- **Nothing at all, LED blinks normally.** Press Enter — the prompt is only sent once
+  at start-up and after each command. If still nothing: the PPS mapping (`_RP113R`,
+  `_U1RXR`) or `TRISH0`. Read `U1STATbits.TXBE`: 1 means the transmitter is idle and
+  the bytes went somewhere.
+- **Garbage.** Baud rate. The UART clock is the 100 MHz standard-speed peripheral clock
+  and `U1BRG = 868` in fractional mode gives 115 207 baud — only if PLL2 really drives
+  CLKGEN1 at 200 MHz. A wrong CPU clock shows up here first (§1.2).
+- **Commands echo but nothing happens.** The receive interrupt is not running: check
+  `IEC3bits.U1RXIE`, `IPC12bits.U1RXIP` (must be 1 … 7) and that `_U1RXInterrupt` is in
+  the vector table (IRQ 98).
+- **`proc_missed` rises while you type.** Expected during a long reply — see the
+  README, "The console".
 
 ### 2.5 `late_service` or `proc_missed` is counting up
 
@@ -268,14 +290,14 @@ If nothing above fits, strip the problem down. Each step is provable on its own:
 
 1. **Does the CPU run at all?** Call `fail(3)` as the first line of `main()`: LED0
    must blink three times and pause. If it does not, the board is not programmed, not
-   powered, or LED0 is not on RD0 (a different board). This separates "device and
+   powered, or LED0 is not on RC8 (a different board). This separates "device and
    toolchain work" from "our configuration works".
 2. **Does the clock setup survive?** Keep `clock_init()`, then `fail(3)` right after
    it. The blink is now 25 times faster than in step 1 if PLL2 drives the CPU — the
    `fail()` timing assumes 200 MHz once `CLK1CON.COSC` reports PLL2 (see §1.2).
 3. **Does the ADC convert without DMA?** Comment out `dma0_init()`, trigger one burst
-   with `adc1_start_burst()` and watch `AD1CH0CNTbits.CNTSTAT` climb to 2048 and
-   `AD1STATbits.CH0RDY` go to 1. Now you have ADC values with no DMA in the way.
+   with `adc_start_burst()` and watch `AD3CH0CNTbits.CNTSTAT` climb to 2048 and
+   `AD3STATbits.CH0RDY` go to 1. Now you have ADC values with no DMA in the way.
 4. **Does the DMA transfer without interrupts?** Leave `DONEEN = HALFEN = 0` and watch
    `DMA0CNT` count down and the buffer fill.
 5. **Then switch the interrupts on.** If it breaks at this step, the problem is the
@@ -290,8 +312,8 @@ This order matters because each step leaves exactly one new thing that can be wr
 Please do, and bring this with you — it turns guesswork into a diagnosis:
 
 - **Which step above got you stuck**, and at which source line
-- **Register dump while halted:** `AD1CON`, `AD1STAT`, `AD1CH0CON1`, `AD1CH0CNT`,
-  `AD1CH0RES`, `AD1CH0DATA`, `DMACON`, `DMALOW`, `DMAHIGH`, `DMA0CH`, `DMA0SEL`,
+- **Register dump while halted:** `AD3CON`, `AD3STAT`, `AD3CH0CON1`, `AD3CH0CNT`,
+  `AD3CH0RES`, `AD3CH0DATA`, `DMACON`, `DMALOW`, `DMAHIGH`, `DMA0CH`, `DMA0SEL`,
   `DMA0STAT`, `DMA0CNT`, `DMA0DST`, `PLL1CON`, `PLL1DIV`, `PLL2CON`, `PLL2DIV`,
   `CLK1CON`, `CLK1DIV`, `CLK6CON`, `CLK6DIV`, `OSCCTRL`, `IEC2`, `IFS2`
 - **The LED pattern** you saw, and `fail_code`

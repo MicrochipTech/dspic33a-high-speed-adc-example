@@ -1,10 +1,15 @@
 @echo off
 rem ---------------------------------------------------------------------
-rem  dsPIC33AK512MPS506 ADC/DMA demo - build without MPLAB X or MCC
+rem  dsPIC33AK512MPS512 (EV74H48A) ADC/DMA demo - build without MPLAB X
 rem
-rem  Just run:  build.bat
+rem    build.bat          firmware for the board      -> ..\build\adc_dma_40msps.elf/.hex
+rem    build.bat sim      simulator build for sim_cli.py -> ..\build\adc_dma_40msps_sim.elf
 rem
-rem  Verified with the versions below on 2026-09-21. Adjust the two paths
+rem  The simulator build defines __MPLAB_DEBUGGER_SIMULATOR (as MPLAB X
+rem  does for a simulator project) and keeps debug symbols, which
+rem  sim_cli.py needs to find the console mailbox.
+rem
+rem  Verified with the versions below on 2026-09-22. Adjust the two paths
 rem  if your installation differs; nothing else needs to change.
 rem ---------------------------------------------------------------------
 
@@ -13,8 +18,18 @@ setlocal
 set XC_DSC=C:\Program Files\Microchip\xc-dsc\v3.31
 set DFP=C:\Program Files\Microchip\MPLABX\v6.35\packs\Microchip\dsPIC33AK-MP_DFP\1.4.260\xc16
 
-set MCU=33AK512MPS506
+set MCU=33AK512MPS512
 set TARGET=adc_dma_40msps
+set SOURCES=..\adc_dma_40msps.c ..\cli.c ..\cmd_parser.c
+set EXTRA=
+set OUT=..\build\%TARGET%
+
+if /i "%1"=="sim" (
+  set EXTRA=-D__MPLAB_DEBUGGER_SIMULATOR=1 -g
+  set OUT=..\build\%TARGET%_sim
+)
+
+if not exist ..\build mkdir ..\build
 
 rem NOTE: -mdfp must point at the xc16 SUBDIRECTORY of the pack, not the
 rem pack root. The root gives "does not seem to support the selected
@@ -23,9 +38,9 @@ rem device" because c30_device.info lives one level down.
 "%XC_DSC%\bin\xc-dsc-gcc.exe" ^
   -mcpu=%MCU% ^
   -mdfp="%DFP%" ^
-  -O1 -Wall -Wextra ^
+  -O1 -Wall -Wextra %EXTRA% ^
   -T"%DFP%\support\dsPIC33A\gld\p%MCU%.gld" ^
-  "..\%TARGET%.c" -o %TARGET%.elf
+  %SOURCES% -o %OUT%.elf
 
 if errorlevel 1 (
   echo.
@@ -34,8 +49,10 @@ if errorlevel 1 (
 )
 
 echo.
-echo Build OK: %TARGET%.elf
-"%XC_DSC%\bin\xc-dsc-bin2hex.exe" %TARGET%.elf
-if exist %TARGET%.hex echo HEX written: %TARGET%.hex
+echo Build OK: %OUT%.elf
+if /i "%1"=="sim" goto :done
+"%XC_DSC%\bin\xc-dsc-bin2hex.exe" %OUT%.elf
+if exist %OUT%.hex echo HEX written: %OUT%.hex
 
+:done
 endlocal

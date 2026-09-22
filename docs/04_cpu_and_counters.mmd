@@ -1,24 +1,23 @@
 %%{init: {'theme':'neutral', 'flowchart':{'curve':'basis','nodeSpacing':30,'rankSpacing':40,'htmlLabels':true}}}%%
 flowchart LR
 
-    ST["<b>Self-test first</b><br/>AD1AN6 = internal 15/16·VDD<br/>mean of a half must be ≈ 3840<br/>then switch to AD1AN0"] --> BUFS
-    BUFS["buf[2048]<br/>one half is filling,<br/>the other is complete"] == "HALF or DONE flag" ==> ISR["<b>DMA0 ISR</b><br/>clear flags by writing 0<br/>note which half is ready<br/>at DONE: start the next ADC burst"]
-    ISR --> CNT[["<b>What to read in the debugger</b><br/>blocks_done × 1024 / time = actual rate<br/><b>dma_overrun</b> → must stay 0<br/><b>late_service</b>, <b>proc_missed</b> → must stay 0<br/>selftest_mean ≈ 3840, fail_code = 0"]]
-    ISR --> PROC["process_buffer()<br/>the '+ and −' maths<br/>on the complete half"]
-    PROC --> LED(["<b>LED0 (RD0)</b><br/>1 Hz = running, clean<br/>5 Hz = running, a counter moved<br/>n blinks + pause = stopped, code n"])
+    ST["<b>Self-test first</b><br/>AD3AN6 = internal 15/16·VDD<br/>mean of a half must be ≈ 3840<br/>then switch to AD3AN5"] --> BUFS
+    BUFS["buf[2048]<br/>one half is filling,<br/>the other is complete"] == "HALF or DONE flag" ==> ISR["<b>DMA0 ISR</b> (priority 4)<br/>clear flags by writing 0<br/>note which half is ready<br/>at DONE: start the next ADC burst"]
+    ISR --> PROC["<b>main()</b><br/>process_buffer() on the complete half<br/>heartbeat on LED0 (RC8)"]
+    UART[("<b>UART1 RX ISR</b> (priority 1)<br/>cmd_parser: status, start, stop,<br/>samc, input, selftest, stats,<br/>dump, clear, led, reset")] -. "PKOB4 COM port<br/>115200 8N1" .-> PC(["terminal or script<br/>ACK / NAK after every line"])
+    UART -. "reads counters,<br/>sets input/samc between bursts" .-> ISR
+    PROC --> CNT[["<b>What to read (debugger or 'status')</b><br/>blocks × 1024 / time = actual rate<br/><b>overrun</b> → must stay 0<br/><b>late</b>, <b>missed</b> → must stay 0<br/>selftest_mean ≈ 3840, fail_code = 0"]]
     CNT --> ANS(["<b>The question this answers:</b><br/>3 ch × 40 MSPS × 2 B = 240 MB/s<br/>5 ch = 400 MB/s<br/>over that one bus —<br/>the datasheet gives no figure"])
-    PROC -. "if it cannot keep up" .-> FIX(["ACCNUM averages<br/>4 / 16 / 64 / 256 samples<br/>inside the ADC (MODE = 3):<br/>16× → 240 MB/s becomes 15 MB/s<br/>result still fits in 2 byte"])
 
-    classDef clk  fill:#e8f0fe,stroke:#4285f4
     classDef adc  fill:#e6f4ea,stroke:#34a853
     classDef dma  fill:#fef7e0,stroke:#f9ab00
     classDef cpu  fill:#fce8e6,stroke:#ea4335
     classDef warn fill:#fff3f2,stroke:#d93025,stroke-width:2px
     classDef buf  fill:#ffffff,stroke:#5f6368
+    classDef cli  fill:#e8f0fe,stroke:#4285f4
 
     class BUFS buf
     class ST adc
     class ISR,PROC cpu
     class CNT,ANS warn
-    class LED dma
-    class FIX adc
+    class UART,PC cli
