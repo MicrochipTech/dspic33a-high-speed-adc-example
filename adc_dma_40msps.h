@@ -118,9 +118,17 @@ const volatile uint16_t *capture_completed_half(void);
 #ifdef __MPLAB_DEBUGGER_SIMULATOR
 void sim_dma_tick(void);
 extern volatile uint32_t sim_fault_once;
-#define SIM_DMA_TICK()    sim_dma_tick()
+/* Ping-pong check: every half handed to process_buffer() is compared with
+ * the sine vector and must continue the phase of the previous half. It
+ * runs over the first 100 sine halves, prints a verdict ([simtest] PASS
+ * or FAIL) and stops. main() holds the status lines back while it runs,
+ * because every console character costs the simulator about 0.1 s. */
+extern volatile uint32_t sim_check_halves, sim_check_bad, sim_check_done;
+#define SIM_DMA_TICK()        sim_dma_tick()
+#define SIM_CHECK_RUNNING()   (sim_check_done == 0u)
 #else
-#define SIM_DMA_TICK()    do { } while (0)
+#define SIM_DMA_TICK()        do { } while (0)
+#define SIM_CHECK_RUNNING()   false
 #endif
 
 void counters_clear(void);

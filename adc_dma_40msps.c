@@ -820,7 +820,15 @@ static const uint16_t sim_sine[SIM_SINE_PERIOD] = {   /* 2048 + 1600 sin */
      448,  468,  526,  622,  754,  917, 1108, 1322, 1554, 1798
 };
 
-volatile uint32_t sim_fault_once = 0;     /* MDB: OR into the next status */
+/* MDB fault injection (write while halted or running): the DMA0STAT bits
+ * (0x3FF) go into the next status word; SIM_FAULT_DROP_SAMPLE instead
+ * drops one sample of the sine before the next half - a data fault the
+ * ping-pong check below must catch at index 0 of that half.
+ *   write 0x<addr of sim_fault_once> 65536
+ * Keep values below 2^31: MDB takes a larger decimal as a 64-bit value
+ * and writes two words, which clobbers the variable behind this one. */
+#define SIM_FAULT_DROP_SAMPLE  0x00010000u
+volatile uint32_t sim_fault_once = 0;
 
 void sim_dma_tick(void)
 {
@@ -829,6 +837,11 @@ void sim_dma_tick(void)
 
     if (!burst_active) {                  /* stopped: no DMA events either */
         return;
+    }
+
+    if (sim_fault_once & SIM_FAULT_DROP_SAMPLE) {
+        if (++phase >= SIM_SINE_PERIOD) { phase = 0u; }
+        sim_fault_once &= ~SIM_FAULT_DROP_SAMPLE;
     }
 
     volatile uint16_t *p = &buf[half * SAMPLES_PER_HALF];
@@ -844,6 +857,91 @@ void sim_dma_tick(void)
     half ^= 1u;
 
     dma0_on_event(st);
+}
+
+/* ---- Ping-pong check ----
+ * The stand-in writes a known vector, so the consumer side can be held
+ * to it exactly: every sample of a completed half, as process_buffer()
+ * receives it through capture_completed_half(), must equal the sine
+ * table, and the phase must continue from where the previous half
+ * ended. A half of 1024 samples advances the phase by 1024 mod 40 = 24,
+ * so a half served twice (phase step 0) or two halves swapped (step 8
+ * instead of 24) shows up as a mismatch at index 0, and a wrong pointer
+ * or a corrupted region shows up at the index where it starts.
+ *
+ * Runs over SIM_CHECK_HALVES halves (SIM_CHECK_HALVES / 2 full DMA
+ * buffers, i.e. that many HALF/DONE round trips), reports the first
+ * mismatches and a verdict, then stops so the UART stays quiet. The
+ * self-test input (flat 3840) is not part of the check; the check locks
+ * on to the phase again at the next sine half. Results are also in
+ * sim_check_halves / sim_check_bad / sim_check_done for MDB. */
+#define SIM_CHECK_HALVES  100u                 /* 50 full buffers          */
+#define SIM_CHECK_REPORT  2u                   /* bad halves to detail     */
+
+volatile uint32_t sim_check_halves = 0;        /* sine halves compared     */
+volatile uint32_t sim_check_bad    = 0;        /* halves with a mismatch   */
+volatile uint32_t sim_check_done   = 0;        /* 1 once the verdict is out*/
+static uint32_t   sim_check_phase  = SIM_SINE_PERIOD;   /* >= PERIOD: unknown */
+
+/* Table index k with sim_sine[k] == a and sim_sine[k+1] == b, or
+ * SIM_SINE_PERIOD if the pair is not two consecutive table entries. Two
+ * samples are needed: a single value occurs twice per period. */
+static uint32_t sim_phase_of(uint16_t a, uint16_t b)
+{
+    for (uint32_t k = 0; k < SIM_SINE_PERIOD; k++) {
+        if ((sim_sine[k] == a) && (sim_sine[(k + 1u) % SIM_SINE_PERIOD] == b)) {
+            return k;
+        }
+    }
+    return SIM_SINE_PERIOD;
+}
+
+static void sim_check_half(const volatile uint16_t *b, uint32_t n)
+{
+    if (sim_check_done) {
+        return;
+    }
+    if ((b[0] == 3840u) && (b[1] == 3840u)) {  /* self-test input        */
+        sim_check_phase = SIM_SINE_PERIOD;
+        return;
+    }
+
+    uint32_t k = sim_check_phase;
+    if (k >= SIM_SINE_PERIOD) {                /* first half: lock on     */
+        k = sim_phase_of(b[0], b[1]);
+    }
+
+    uint32_t bad_at = n;
+    if (k >= SIM_SINE_PERIOD) {
+        bad_at = 0u;                           /* not even a sine start   */
+    } else {
+        for (uint32_t i = 0; i < n; i++) {
+            if (b[i] != sim_sine[k]) { bad_at = i; break; }
+            if (++k >= SIM_SINE_PERIOD) { k = 0u; }
+        }
+    }
+
+    if (bad_at < n) {
+        sim_check_bad++;
+        if (sim_check_bad <= SIM_CHECK_REPORT) {
+            console_kv("[simtest] mismatch in half", sim_check_halves);
+            console_kv("[simtest]   index", bad_at);
+            console_kv("[simtest]   got", b[bad_at]);
+            console_kv("[simtest]   expected", (sim_check_phase < SIM_SINE_PERIOD)
+                       ? sim_sine[(sim_check_phase + bad_at) % SIM_SINE_PERIOD] : 0u);
+        }
+        sim_check_phase = SIM_SINE_PERIOD;     /* re-lock on the next half*/
+    } else {
+        sim_check_phase = k;                   /* phase of the next sample*/
+    }
+
+    if (++sim_check_halves >= SIM_CHECK_HALVES) {
+        sim_check_done = 1u;
+        console_kv("[simtest] halves compared against the sine vector", sim_check_halves);
+        console_kv("[simtest] full ping-pong buffers", sim_check_halves / 2u);
+        console_kv("[simtest] halves with a mismatch", sim_check_bad);
+        console_puts(sim_check_bad ? "[simtest] FAIL\r\n" : "[simtest] PASS: ping-pong order and data intact\r\n");
+    }
 }
 #endif
 
@@ -937,6 +1035,9 @@ static void process_buffer(const volatile uint16_t *b, uint32_t n)
         acc += (int32_t)b[i];
     }
     proc_result = acc;
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+    sim_check_half(b, n);             /* is this really the next half?  */
+#endif
 }
 
 static uint32_t half_mean(const volatile uint16_t *b, uint32_t n)

@@ -106,11 +106,17 @@ int main(void)
         if (capture_service()) {
             idle = 0;
             if (blocks_done >= next_status) {
-                console_status_line();
-                status_lines++;
-                next_status += (status_lines < STATUS_FAST_LINES)
-                               ? STATUS_EVERY_HALVES
-                               : 12u * STATUS_EVERY_HALVES;
+                if (SIM_CHECK_RUNNING()) {
+                    /* Simulator: the UART is slow, keep it quiet while
+                     * the ping-pong check runs. Empty on silicon. */
+                    next_status = blocks_done + STATUS_EVERY_HALVES;
+                } else {
+                    console_status_line();
+                    status_lines++;
+                    next_status += (status_lines < STATUS_FAST_LINES)
+                                   ? STATUS_EVERY_HALVES
+                                   : 12u * STATUS_EVERY_HALVES;
+                }
             }
         } else if (capture_running()) {
             /* The stream stopped: burst restart lost, or the DMA shut

@@ -35,7 +35,8 @@ IFS6 = 0xA8            # p33AK512MPS512.gld
 IEC6 = 0xD8
 AD3CH0 = 1 << 9        # _IFS6_AD3CH0IF_MASK
 SYMBOLS = ["W15", "SPLIM", "INTCON1", "INTCON2", "boot_stage", "fail_code", "trap_seen", "trap_vec", "trap_stage",
-           "blocks_done", "selftest_mean"]
+           "blocks_done", "selftest_mean", "proc_missed",
+           "sim_check_halves", "sim_check_bad", "sim_check_done"]   # ping-pong check, see adc_dma_40msps.c
 NOISE = re.compile(r"W0107|INFO:|^\w{3} \d+, \d{4}|org\.|WARNING: (NetBeans|Unable)|"
                    r"^>?\s*$|Resetting|file:|address:|source line")
 
