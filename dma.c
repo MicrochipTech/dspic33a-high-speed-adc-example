@@ -1,0 +1,147 @@
+/*
+ * dma.c
+ *
+ * DMA channel 0 of the ADC/DMA example: one channel, peripheral to RAM,
+ * Repeated Continuous mode with an interrupt at each half of the block.
+ * This file knows the DMA registers and nothing else - what triggers the
+ * channel, where the data goes and what to do at HALF and DONE is the
+ * caller's business (capture.c).
+ *
+ * Every register write below cites the datasheet table or page it comes
+ * from (DS70005591D).
+ */
+
+#include <xc.h>
+#include "dma.h"
+#include "console.h"
+
+/* RAM window for the DMA address limit registers. __DATA_BASE and
+ * __DATA_LENGTH come from the device header (0x4000 and 0x10000 for the
+ * 64 KB parts, matching p33AK512MPS512.gld), so the window follows the
+ * device instead of being a magic number. */
+#if !defined(__DATA_BASE) || !defined(__DATA_LENGTH)
+#error "__DATA_BASE / __DATA_LENGTH not provided by the device header"
+#endif
+
+/* ------------------------------------------------------------------ *
+ * DMA channel 0: ADCn channel 0 result -> RAM
+ *
+ * CHSEL is the trigger the caller passes in - "ADCn Done CH0" for the
+ * ADC (ATDF value-group DMA_SEL__CHSEL, table in adc.h). SIZE = 1
+ * selects 16-bit transfers; the DMA
+ * supports 8, 16 and 32 bit (DS70005591D 13.4.2, p824 and p812), so a
+ * 12-bit result costs 2 bytes. ADxCH0RES holds RES[11:0] in the low half
+ * and RESF[11:0] in bits 31:20 (p1229), so the 16-bit read of the low
+ * half is the sample.
+ *
+ * DMALOW / DMAHIGH MUST be set. They reset to 0, every transaction is
+ * checked against them (13.4.8.1 p829, step 5), and an access above
+ * DMAHIGH sets ADRERR = 10 and clears CHEN (p810, p826). With the reset
+ * values the very first sample would disable the channel. Every
+ * datasheet example (p832 ff.) and MCC set them.
+ *
+ * TRMODE = Repeated Continuous with RELOADD/RELOADC restarts at the
+ * buffer start after each block on its own (p812, p829 step 4). HALFEN
+ * and DONEEN give one interrupt per half (13.6.1.2, p848). No address
+ * is ever rewritten from software while the channel runs.
+ *
+ * DMAxSTAT flags are "R/C/HS" - clearable by writing 0 (legend p815,
+ * Example 13-4 p835: "DMA0STATbits.DONE=0"). Writing 1 does not clear.
+ * ------------------------------------------------------------------ */
+void dma0_init(uint32_t trigger, const volatile void *src,
+               volatile void *dst, uint32_t count)
+{
+    DMACONbits.ON = 0;
+    DMA0CHbits.CHEN = 0;
+
+    /* Address window = the device's data RAM (p809 f.). */
+    DMALOW  = (uint32_t)__DATA_BASE;
+    DMAHIGH = (uint32_t)__DATA_BASE + (uint32_t)__DATA_LENGTH - 1u; /* 0x13FFF */
+
+    DMA0SEL = trigger;                      /* e.g. ADCn Done CH0       */
+    DMA0SRC = (uint32_t)src;                /* peripheral result        */
+    DMA0DST = (uint32_t)dst;                /* RAM destination          */
+    DMA0CNT = count;                        /* transactions per block   */
+    DMA0STAT = 0u;                          /* clear any stale flags    */
+
+    DMA0CH = 0u;
+    DMA0CHbits.SIZE    = 1u;          /* 16-bit transfers               */
+    DMA0CHbits.SAMODE  = 0u;          /* source address unchanged       */
+    DMA0CHbits.DAMODE  = 1u;          /* destination incremented        */
+    DMA0CHbits.TRMODE  = 3u;          /* repeated continuous            */
+    DMA0CHbits.RELOADD = 1u;          /* reload destination each block  */
+    DMA0CHbits.RELOADC = 1u;          /* reload count each block        */
+    DMA0CHbits.HALFEN  = 1u;          /* interrupt at half              */
+    DMA0CHbits.DONEEN  = 1u;          /* interrupt on block complete    */
+    DMA0CHbits.RETEN   = 0u;          /* errata: capture.c note 1       */
+
+    /* Round robin arbitration. With one channel it makes no difference,
+     * but it is the setting that matters once several ADC streams share
+     * the single DMA data bus (DS70005591D 13.4.4, p825). */
+    DMACONbits.PRIORITY = 1u;
+
+    DMACONbits.ON   = 1;
+    DMA0CHbits.CHEN = 1;
+
+    /* Block-complete interrupt: IRQ 77, IEC2/IFS2 bit 13, IPC9 default
+     * priority 4. Nothing fires until the first burst is started. */
+    IFS2bits.DMA0IF = 0;
+    IEC2bits.DMA0IE = 1;
+    console_puts("[dma] channel 0 armed, window 0x4000..0x13FFF, IRQ on\r\n");
+}
+
+bool dma0_enabled(void)
+{
+    return DMA0CHbits.CHEN != 0u;
+}
+
+/* Interrupt masked, channel disabled. Nothing restarts after this. */
+void dma0_halt(void)
+{
+    IEC2bits.DMA0IE = 0;
+    DMA0CHbits.CHEN = 0;
+}
+
+/* DMAxSTAT flags are "R/C/HS": a flag is cleared by writing 0 to it
+ * (legend p815, Example 13-4 p835: "DMA0STATbits.DONE=0"); writing 1
+ * does nothing. One bit-field write per flag, so nothing else in the
+ * word is touched. */
+void dma0_clear(uint32_t flags)
+{
+    if (flags & DMA0_OVERRUN) { DMA0STATbits.OVERRUN = 0; }
+    if (flags & DMA0_ADRERR)  { DMA0STATbits.ADRERR  = 0; }
+    if (flags & DMA0_BRERR)   { DMA0STATbits.BRERR   = 0; }
+    if (flags & DMA0_BWERR)   { DMA0STATbits.BWERR   = 0; }
+    if (flags & DMA0_HALF)    { DMA0STATbits.HALF    = 0; }
+    if (flags & DMA0_DONE)    { DMA0STATbits.DONE    = 0; }
+}
+
+/* ------------------------------------------------------------------ *
+ * The interrupt: one snapshot of the status word, handed to the owner
+ * of the channel (dma0_event() in capture.c). Which flags are set, what
+ * they mean and what to do about them is decided there; the snapshot
+ * is taken once so that a flag arriving during the handler is seen by
+ * the next interrupt, not half by this one.
+ * ------------------------------------------------------------------ */
+void __attribute__((interrupt, no_auto_psv)) _DMA0Interrupt(void)
+{
+    dma0_event(DMA0STAT);
+    IFS2bits.DMA0IF = 0;
+}
+
+void dma0_regs_dump(void)
+{
+    console_puts("[regs] dma\r\n");
+    console_kv_hex("DMACON", DMACON);
+    console_kv_hex("DMALOW", DMALOW);
+    console_kv_hex("DMAHIGH", DMAHIGH);
+    console_kv_hex("DMA0CH", DMA0CH);
+    console_kv_hex("DMA0SEL", DMA0SEL);
+    console_kv_hex("DMA0STAT", DMA0STAT);
+    console_kv_hex("DMA0SRC", DMA0SRC);
+    console_kv_hex("DMA0DST", DMA0DST);
+    console_kv_hex("DMA0CNT", DMA0CNT);
+    console_kv_hex("IEC2", IEC2);           /* DMA0 enable,  bit 13      */
+    console_kv_hex("IFS2", IFS2);           /* DMA0 flag,    bit 13      */
+    console_kv_hex("IPC9", IPC9);           /* DMA0 priority             */
+}

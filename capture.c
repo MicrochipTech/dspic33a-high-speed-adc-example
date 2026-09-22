@@ -1,11 +1,12 @@
 /*
  * capture.c
  *
- * The measurement of the ADC/DMA example: DMA channel 0 from the ADC
- * result into a double buffer, the DMA interrupt that counts every error
- * the hardware can report and restarts the burst, the start/stop/input
- * control the console uses, the self-test on the internal reference and
- * the per-half processing with the LED heartbeat.
+ * The measurement of the ADC/DMA example: the ADC result streams through
+ * DMA channel 0 (dma.c) into a double buffer; the channel's events are
+ * handled here - every error the hardware can report is counted and the
+ * burst is restarted - plus the start/stop/input control the console
+ * uses, the self-test on the internal reference and the per-half
+ * processing with the LED heartbeat.
  *
  * Data path
  *   The ADC channel runs in Integration mode: a software trigger starts a
@@ -36,6 +37,7 @@
 #include <xc.h>
 #include "board.h"
 #include "adc.h"
+#include "dma.h"
 #include "capture.h"
 #include "led.h"
 #include "console.h"
@@ -66,14 +68,6 @@
  * unaligned buffers are asking for trouble.
  * ------------------------------------------------------------------ */
 volatile uint16_t buf[SAMPLES_PER_BUF] __attribute__((aligned(4)));
-
-/* RAM window for the DMA address limit registers. __DATA_BASE and
- * __DATA_LENGTH come from the device header (0x4000 and 0x10000 for the
- * 64 KB parts, matching p33AK512MPS512.gld), so the window follows the
- * device instead of being a magic number. */
-#if !defined(__DATA_BASE) || !defined(__DATA_LENGTH)
-#error "__DATA_BASE / __DATA_LENGTH not provided by the device header"
-#endif
 
 /* ------------------------------------------------------------------ *
  * Measurement counters - the actual point of this program
@@ -120,132 +114,67 @@ static void start_burst(void)
 }
 
 /* ------------------------------------------------------------------ *
- * DMA channel 0: ADCn channel 0 result -> RAM
- *
- * CHSEL = "ADCn Done CH0" (ATDF value-group DMA_SEL__CHSEL, see the
- * table at ADCREG above). SIZE = 1 selects 16-bit transfers; the DMA
- * supports 8, 16 and 32 bit (DS70005591D 13.4.2, p824 and p812), so a
- * 12-bit result costs 2 bytes. ADxCH0RES holds RES[11:0] in the low half
- * and RESF[11:0] in bits 31:20 (p1229), so the 16-bit read of the low
- * half is the sample.
- *
- * DMALOW / DMAHIGH MUST be set. They reset to 0, every transaction is
- * checked against them (13.4.8.1 p829, step 5), and an access above
- * DMAHIGH sets ADRERR = 10 and clears CHEN (p810, p826). With the reset
- * values the very first sample would disable the channel. Every
- * datasheet example (p832 ff.) and MCC set them.
- *
- * TRMODE = Repeated Continuous with RELOADD/RELOADC restarts at the
- * buffer start after each block on its own (p812, p829 step 4). HALFEN
- * and DONEEN give one interrupt per half (13.6.1.2, p848). No address
- * is ever rewritten from software while the channel runs.
- *
- * DMAxSTAT flags are "R/C/HS" - clearable by writing 0 (legend p815,
- * Example 13-4 p835: "DMA0STATbits.DONE=0"). Writing 1 does not clear.
+ * Set-up: the DMA channel, wired to this ADC core and this buffer
  * ------------------------------------------------------------------ */
-void dma0_init(void)
+void capture_init(void)
 {
-    DMACONbits.ON = 0;
-    DMA0CHbits.CHEN = 0;
-
-    /* Address window = the device's data RAM (p809 f.). */
-    DMALOW  = (uint32_t)__DATA_BASE;
-    DMAHIGH = (uint32_t)__DATA_BASE + (uint32_t)__DATA_LENGTH - 1u; /* 0x13FFF */
-
-    DMA0SEL = DMA_TRIG_ADC_CH0;             /* ADCn Done CH0            */
-    DMA0SRC = (uint32_t)&ADCREG(CH0RES);    /* per-conversion result    */
-    DMA0DST = (uint32_t)buf;                /* RAM destination          */
-    DMA0CNT = SAMPLES_PER_BUF;              /* transactions per block   */
-    DMA0STAT = 0u;                          /* clear any stale flags    */
-
-    DMA0CH = 0u;
-    DMA0CHbits.SIZE    = 1u;          /* 16-bit transfers               */
-    DMA0CHbits.SAMODE  = 0u;          /* source address unchanged       */
-    DMA0CHbits.DAMODE  = 1u;          /* destination incremented        */
-    DMA0CHbits.TRMODE  = 3u;          /* repeated continuous            */
-    DMA0CHbits.RELOADD = 1u;          /* reload destination each block  */
-    DMA0CHbits.RELOADC = 1u;          /* reload count each block        */
-    DMA0CHbits.HALFEN  = 1u;          /* interrupt at half              */
-    DMA0CHbits.DONEEN  = 1u;          /* interrupt on block complete    */
-    DMA0CHbits.RETEN   = 0u;          /* see note 1 at the counters     */
-
-    /* Round robin arbitration. With one channel it makes no difference,
-     * but it is the setting that matters once several ADC streams share
-     * the single DMA data bus (DS70005591D 13.4.4, p825). */
-    DMACONbits.PRIORITY = 1u;
-
-    DMACONbits.ON   = 1;
-    DMA0CHbits.CHEN = 1;
-
-    /* Block-complete interrupt: IRQ 77, IEC2/IFS2 bit 13, IPC9 default
-     * priority 4. Nothing fires until the first burst is started. */
-    IFS2bits.DMA0IF = 0;
-    IEC2bits.DMA0IE = 1;
-    console_puts("[dma] channel 0 armed, window 0x4000..0x13FFF, IRQ on\r\n");
-}
-
-bool dma0_enabled(void)
-{
-    return DMA0CHbits.CHEN != 0u;
+    dma0_init(DMA_TRIG_ADC_CH0, &ADCREG(CH0RES), buf, SAMPLES_PER_BUF);
 }
 
 /* Switch the stream off hard, so that a 40 MSPS stream does not keep
  * hammering the bus while fail() or a trap handler prints. */
 void capture_halt(void)
 {
-    IEC2bits.DMA0IE = 0;
-    DMA0CHbits.CHEN = 0;
+    dma0_halt();
 }
 
 /* ------------------------------------------------------------------ *
- * DMA interrupt - one per buffer half
+ * DMA event - one per buffer half, called from the DMA0 interrupt
  *
  * HALF: the first half is complete, the DMA is filling the second.
  * DONE: the second half is complete, the DMA has reloaded to the start
  *       and the ADC burst has ended - apply a pending input change and,
  *       if the stream is enabled, start the next burst here.
  *
- * Priority 4 (IPC9 default). The console's UART receive interrupt runs
- * at priority 1, so this ISR preempts a running command.
+ * Runs in the interrupt, priority 4 (IPC9 default). The console's UART
+ * receive interrupt runs at priority 1, so this preempts a running
+ * command.
  *
  * Deliberately short. Everything this counts is a hardware flag, so a
- * long ISR would itself become the reason for the next overrun.
+ * long handler would itself become the reason for the next overrun.
  * ------------------------------------------------------------------ */
-void __attribute__((interrupt, no_auto_psv)) _DMA0Interrupt(void)
+void dma0_event(uint32_t st)
 {
-    const uint32_t st = DMA0STAT;     /* one snapshot, then act on it   */
-
-    if (st & _DMA0STAT_OVERRUN_MASK) {
+    if (st & DMA0_OVERRUN) {
         /* Triggered while the previous transfer was still in progress
          * (p816): the bus did not keep up. This is the measurement. */
         dma_overrun++;
-        DMA0STATbits.OVERRUN = 0;
+        dma0_clear(DMA0_OVERRUN);
     }
-    if (st & _DMA0STAT_ADRERR_MASK) {
+    if (st & DMA0_ADRERR) {
         dma_addr_err++;
-        DMA0STATbits.ADRERR = 0;
+        dma0_clear(DMA0_ADRERR);
     }
-    if (st & (_DMA0STAT_BRERR_MASK | _DMA0STAT_BWERR_MASK)) {
+    if (st & (DMA0_BRERR | DMA0_BWERR)) {
         dma_bus_err++;
-        DMA0STATbits.BRERR = 0;
-        DMA0STATbits.BWERR = 0;
+        dma0_clear(DMA0_BRERR | DMA0_BWERR);
     }
 
-    /* Both halves pending at once means this ISR arrived more than one
-     * half (25.6 us) late and the first half has already been
+    /* Both halves pending at once means this handler arrived more than
+     * one half (25.6 us) late and the first half has already been
      * overwritten by the DMA reload. */
-    if ((st & _DMA0STAT_HALF_MASK) && (st & _DMA0STAT_DONE_MASK)) {
+    if ((st & DMA0_HALF) && (st & DMA0_DONE)) {
         late_service++;
     }
 
-    if (st & _DMA0STAT_HALF_MASK) {
-        DMA0STATbits.HALF = 0;
+    if (st & DMA0_HALF) {
+        dma0_clear(DMA0_HALF);
         ready_half  = 0u;
         last_sample = buf[SAMPLES_PER_HALF - 1u];
         blocks_done++;
     }
-    if (st & _DMA0STAT_DONE_MASK) {
-        DMA0STATbits.DONE = 0;
+    if (st & DMA0_DONE) {
+        dma0_clear(DMA0_DONE);
         ready_half  = 1u;
         last_sample = buf[SAMPLES_PER_BUF - 1u];
         blocks_done++;
@@ -262,8 +191,6 @@ void __attribute__((interrupt, no_auto_psv)) _DMA0Interrupt(void)
             burst_active = false;
         }
     }
-
-    IFS2bits.DMA0IF = 0;
 }
 
 /* ------------------------------------------------------------------ *
@@ -378,8 +305,8 @@ static uint32_t wait_for_blocks(uint32_t target)
 {
     uint32_t n = WAIT_LIMIT;
     while (blocks_done < target) {
-        if (DMA0CHbits.CHEN == 0u) { return 8u; }
-        if (--n == 0u)             { return 6u; }
+        if (!dma0_enabled()) { return 8u; }
+        if (--n == 0u)       { return 6u; }
     }
     return 0u;
 }
@@ -427,19 +354,6 @@ uint32_t capture_selftest(uint32_t *mean)
 
 void capture_regs_dump(void)
 {
-    console_puts("[regs] dma\r\n");
-    console_kv_hex("DMACON", DMACON);
-    console_kv_hex("DMALOW", DMALOW);
-    console_kv_hex("DMAHIGH", DMAHIGH);
-    console_kv_hex("DMA0CH", DMA0CH);
-    console_kv_hex("DMA0SEL", DMA0SEL);
-    console_kv_hex("DMA0STAT", DMA0STAT);
-    console_kv_hex("DMA0SRC", DMA0SRC);
-    console_kv_hex("DMA0DST", DMA0DST);
-    console_kv_hex("DMA0CNT", DMA0CNT);
-    console_kv_hex("IEC2", IEC2);           /* DMA0 enable,  bit 13      */
-    console_kv_hex("IFS2", IFS2);           /* DMA0 flag,    bit 13      */
-    console_kv_hex("IPC9", IPC9);           /* DMA0 priority             */
     console_puts("[regs] counters\r\n");
     console_kv("blocks_done", blocks_done);
     console_kv("dma_overrun", dma_overrun);

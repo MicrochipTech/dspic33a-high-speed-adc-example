@@ -170,7 +170,7 @@ AD1AN0 of this device sits on RA2, which the board routes to a capacitive touch 
 (P38) — that is why the example uses ADC3 here and not ADC1.
 
 The sources sit in the repository root — `main.c`, one `.c/.h` pair per module (`clock`,
-`adc`, `capture`, `led`, `diag`, `cli`/`console`), `board.h` and the parser pair
+`adc`, `dma`, `capture`, `led`, `diag`, `cli`/`console`), `board.h` and the parser pair
 `cmd_parser.c/.h` — and the MPLAB X project references them there; nothing is duplicated.
 `main.c` is the place to read first: it is the start-up order and the main loop, and
 nothing else.
@@ -720,7 +720,8 @@ the value up in the ATDF (`<value-group name="FICD_NOBTSWP">`) and write the num
 | `config_bits.c` | every configuration word of the device, with the reason for each value — and why two of them are written as numbers |
 | `clock.c`, `clock.h` | FRC → PLL1 320 MHz (ADC) and PLL2 200 MHz (CPU), the switching order, the clock-fail interrupt |
 | `adc.c`, `adc.h` | the ADC core: channel 0 in Integration mode, burst trigger, input/sample-time register |
-| `capture.c`, `capture.h` | the measurement: DMA channel, the ISR with every error counter, start/stop/input, self-test, per-half processing — what the console may read and control |
+| `dma.c`, `dma.h` | DMA channel 0: address window, Repeated Continuous mode, HALF/DONE interrupt, status flags — knows no ADC and no buffer |
+| `capture.c`, `capture.h` | the measurement: wires ADC and DMA together, handles the DMA events with every error counter and the burst restart, start/stop/input, self-test, per-half processing — what the console may read and control |
 | `led.c`, `led.h` | LED0 |
 | `diag.c`, `diag.h` | stop codes (`fail()`), trap and unhandled-interrupt handler, boot-stage record, register dump |
 | `cli.c`, `console.h` | the console: UART2 on the MCP2221A channel, the receive interrupt, the commands |

@@ -164,7 +164,7 @@ Other build failures worth knowing:
 
 | Message | Cause |
 |---|---|
-| `__DATA_BASE / __DATA_LENGTH not provided by the device header` | very old pack; replace the two macros in `dma0_init()` with `0x4000` and `0x10000` from your linker script |
+| `__DATA_BASE / __DATA_LENGTH not provided by the device header` | very old pack; replace the two macros in `dma.c` with `0x4000` and `0x10000` from your linker script |
 | `does not seem to support the selected device` | `-mdfp` points at the pack root instead of its `xc16` subdirectory — only relevant for command-line builds |
 | `incompatible with 30Fxxxx output` | the linker script was not passed; MPLAB X does this for you |
 | toolchain version warning on opening the project | harmless — *Project Properties → XC-DSC*, select the version you have |
@@ -422,7 +422,7 @@ If nothing above fits, strip the problem down. Each step is provable on its own:
 2. **Does the clock setup survive?** Keep `clock_init()`, then `fail(3)` right after
    it. The blink is now 25 times faster than in step 1 if PLL2 drives the CPU — the
    `fail()` timing assumes 200 MHz once `CLK1CON.COSC` reports PLL2 (see §1.2).
-3. **Does the ADC convert without DMA?** Comment out `dma0_init()`, trigger one burst
+3. **Does the ADC convert without DMA?** Comment out `capture_init()`, trigger one burst
    with `adc_start_burst()` and watch `AD3CH0CNTbits.CNTSTAT` climb to 2048 and
    `AD3STATbits.CH0RDY` go to 1. Now you have ADC values with no DMA in the way.
 4. **Does the DMA transfer without interrupts?** Leave `DONEEN = HALFEN = 0` and watch

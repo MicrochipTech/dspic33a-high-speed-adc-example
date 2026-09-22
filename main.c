@@ -28,7 +28,8 @@
  *      can stop, start and reconfigure it at any time.
  *
  * Everything hardware-specific lives in the modules - board.h (pins,
- * ADC core), clock.c, adc.c, capture.c (DMA, ISR, self-test), led.c,
+ * ADC core), clock.c, adc.c, dma.c, capture.c (counters, burst restart,
+ * self-test), led.c,
  * diag.c (stop codes, traps) and cli.c (UART, commands); this file only
  * sequences them.
  */
@@ -37,6 +38,7 @@
 #include "board.h"
 #include "clock.h"
 #include "adc.h"
+#include "dma.h"
 #include "capture.h"
 #include "led.h"
 #include "diag.h"
@@ -82,7 +84,7 @@ int main(void)
 
     adc_init(ADC_PINSEL, ADC_SAMC);
     boot_mark(6u);
-    dma0_init();
+    capture_init();
     boot_mark(7u);
 
     console_puts("[boot] self-test on the internal reference\r\n");

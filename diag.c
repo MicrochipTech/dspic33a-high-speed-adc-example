@@ -12,6 +12,7 @@
 #include "diag.h"
 #include "clock.h"
 #include "adc.h"
+#include "dma.h"
 #include "capture.h"
 #include "led.h"
 #include "console.h"
@@ -108,7 +109,7 @@ static const char *const boot_text[] = {
     "clock_init() done",
     "cli_init() done",
     "adc_init() done",
-    "dma0_init() done",
+    "capture_init() done",
     "self-test done",
     "main loop running",
 };
@@ -236,6 +237,7 @@ void regs_dump(void)
 {
     clock_regs_dump();
     adc_regs_dump();
+    dma0_regs_dump();
     capture_regs_dump();
     console_regs_dump();
     console_puts("[regs] cpu\r\n");

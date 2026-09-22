@@ -20,8 +20,8 @@ OBJDUMP  = $(XC_DSC)/bin/xc-dsc-objdump.exe
 BIN2HEX  = $(XC_DSC)/bin/xc-dsc-bin2hex.exe
 
 TARGET   = adc_dma_40msps
-SRC      = ../main.c ../config_bits.c ../clock.c ../adc.c ../capture.c ../led.c ../diag.c ../cli.c ../cmd_parser.c
-HDR      = ../board.h ../clock.h ../adc.h ../capture.h ../led.h ../diag.h ../console.h ../cmd_parser.h
+SRC      = ../main.c ../config_bits.c ../clock.c ../adc.c ../dma.c ../capture.c ../led.c ../diag.c ../cli.c ../cmd_parser.c
+HDR      = ../board.h ../clock.h ../adc.h ../dma.h ../capture.h ../led.h ../diag.h ../console.h ../cmd_parser.h
 OUTDIR   = ../build
 
 # -mdfp must point at the xc16 SUBDIRECTORY of the pack, not the pack root.
