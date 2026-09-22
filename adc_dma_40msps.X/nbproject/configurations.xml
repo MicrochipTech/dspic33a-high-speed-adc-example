@@ -7,6 +7,7 @@
       <itemPath>../board.h</itemPath>
       <itemPath>../clock.h</itemPath>
       <itemPath>../adc.h</itemPath>
+      <itemPath>../dma.h</itemPath>
       <itemPath>../capture.h</itemPath>
       <itemPath>../led.h</itemPath>
       <itemPath>../diag.h</itemPath>
@@ -29,6 +30,7 @@
       <itemPath>../config_bits.c</itemPath>
       <itemPath>../clock.c</itemPath>
       <itemPath>../adc.c</itemPath>
+      <itemPath>../dma.c</itemPath>
       <itemPath>../capture.c</itemPath>
       <itemPath>../led.c</itemPath>
       <itemPath>../diag.c</itemPath>
