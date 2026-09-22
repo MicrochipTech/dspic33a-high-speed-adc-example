@@ -73,13 +73,15 @@ of use — so every setting can be checked against the primary source.
 **Revision history**
 
 - **2026-09-22, after the first report from a board** — the project's tool is the PKOB4
-  now (`pkob4hybrid`) instead of the simulator, which had let a first attempt run on the
-  PC and look like a dead board. That was the whole cause. A second change made in the
-  same breath — setting `OSCCTRL.PLLxEN` and waiting for `PLLxRDY` before the first
-  divider switch — was reverted after review: it rests on Example 16-3, a snippet from the
-  ADC chapter whose own arithmetic is wrong, and it waits for a lock on the POR dividers.
-  The clock code follows the MCC sequence again, which has run on silicon. The reasoning
-  is in `clock_init()` and in `docs/TROUBLESHOOTING.md` so it does not get re-added.
+  (`pkob4hybrid`). A first attempt had run against a PC-side tool instead of the board
+  and looked like a dead board; that was the whole cause. The project now has no
+  alternative tool configuration at all — this example needs the hardware, so there is
+  nothing to pick wrongly. A second change made in the same breath — setting
+  `OSCCTRL.PLLxEN` and waiting for `PLLxRDY` before the first divider switch — was
+  reverted after review: it rests on Example 16-3, a snippet from the ADC chapter whose
+  own arithmetic is wrong, and it waits for a lock on the POR dividers. The clock code
+  follows the MCC sequence again, which has run on silicon. The reasoning is in
+  `clock_init()` and in `docs/TROUBLESHOOTING.md` so it does not get re-added.
   `regs` now also dumps `IEC3`/`IFS3`/`IPC12` and the console's own pin routing
   (`RPCON`, `RPOR28`, `RPINR13`, `TRISH`, `TRISD`) — with a silent console those were
   exactly the registers the troubleshooting guide asked for and the dump did not show.
@@ -120,9 +122,9 @@ and the debugger tell you the same things.
    MCP2221A's COM port appears for the console (user guide DS70005562D 2.1.1).
 2. Open `adc_dma_40msps.X`, press **Build**, then **Program** (or **Debug**).
 3. The project's tool is the board's **PKOB4** (`pkob4hybrid`). Check it once in the
-   Dashboard or under *Project Properties → Conn.*: if it says *Simulator*, the code
-   runs on the PC, stops at the first PLL wait forever and nothing reaches the COM
-   port — which looks exactly like a broken board.
+   Dashboard or under *Project Properties → Conn.* — it has to be a real debugger, or
+   the code never reaches the board and the silent COM port looks exactly like a
+   broken one.
 4. Watch LED0 (green, the row of eight): **slow blink = everything works.** The
    self-test on the internal reference has passed, the ADC, the DMA and the interrupt
    are running at 40 MSPS. What the other patterns mean is under "First run on
@@ -172,22 +174,15 @@ parser pair `cmd_parser.c/.h` — and the MPLAB X project references them there;
 duplicated. `main.c` is the place to read first: it is the start-up order and the main
 loop, and nothing else.
 
-**This needs real hardware — the simulator will not run it.** MPLAB X's simulator
-model for dsPIC33A covers PPS, ports, pull-ups, TMR1/TMR2, UART1-3, the watchdog and
-context switching. It does *not* model the clock generators, the PLLs, the ADC or the
-DMA, which are the four things this example is about. In the simulator the code
-therefore ends in `fail(1)` — the bounded wait on `PLL1CONbits.PLLSWEN` times out,
-because there is no PLL to perform the switch. `AD3CONbits.ADRDY` would behave the same
-way.
+**This needs real hardware.** The clock generators, the PLLs, the ADC and the DMA are
+the four things this example is about, and all four only exist on silicon. The number
+that matters — `dma_overrun` staying at 0 at full rate — cannot be produced anywhere
+else. The project is therefore set up for the board and nothing else: the tool is the
+PKOB4 (`pkob4hybrid`).
 
-Skipping those loops under conditional compilation would not help: the ADC would not
-convert, the DMA would not transfer and the ISR would never fire, so the run would
-show that the code starts — not that the configuration works. The number that matters,
-`dma_overrun` staying at 0 at full rate, only exists on silicon.
-
-One part *is* worth simulating: `process_buffer()`. Write test values into `buf`,
-call it on its own, and you can check your arithmetic and its cycle count without a
-board.
+One part is worth exercising on its own: `process_buffer()`. Write test values into
+`buf`, call it directly, and you can check your arithmetic and its cycle count on a
+host compiler without a board.
 
 The `tools/` folder builds the same file from the command line without the IDE. **You
 can ignore it** — we use it to check that the code compiles against different

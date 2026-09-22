@@ -171,13 +171,14 @@ Other build failures worth knowing:
 ### 2.0a "Stuck at the first PLL wait, nothing on the COM port" — check the tool
 
 Before anything else, look at the MPLAB X Dashboard (or *Project Properties →
-Conn.*). If the tool is **Simulator**, nothing ran on the board: the simulator has no
-PLL, so `WAIT_WHILE(PLL1CONbits.PLLSWEN, 1u)` never clears, and it has no UART
-receiver on the PC side, so the terminal stays empty — exactly the picture of a dead
-board, on a board that was never touched. Select the **PKOB4** and program again.
-The decisive check on hardware: LED0 either blinks slowly (good) or blinks a code
-(the reason is in the terminal log). A dark LED0 after programming means the code is
-not on the board.
+Conn.*): the tool must be the board's **PKOB4** (`pkob4hybrid`). Anything that runs on
+the PC rather than on silicon stops at `WAIT_WHILE(PLL1CONbits.PLLSWEN, 1u)`, because
+there is no PLL to perform the switch, and leaves the terminal empty — exactly the
+picture of a dead board, on a board that was never touched. The project ships with the
+PKOB4 as its only tool, so this should not happen; if the Dashboard says anything else,
+someone added it. The decisive check on hardware: LED0 either blinks slowly (good) or
+blinks a code (the reason is in the terminal log). A dark LED0 after programming means
+the code is not on the board.
 
 ### 2.1 The LED blinks a code — it stopped at a checkpoint
 
@@ -203,9 +204,6 @@ already contains what the "Where to look" column below asks for.
 The blink *speed* depends on which clock the CPU is on when it stops (8 MHz FRC for
 codes 1 and 2, 200 MHz afterwards); the code is chosen so that it reads the same either
 way. Count the blinks, not the tempo.
-
-**In the simulator you always get code 1** — it models no PLL, so the first wait times
-out. That is expected, see the README. Use the board.
 
 ### 2.2 Code 6: no blocks arrive, or the stream stops
 
