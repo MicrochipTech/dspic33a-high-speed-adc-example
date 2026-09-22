@@ -35,8 +35,13 @@
 #include "adc_dma_40msps.h"
 
 /* Status line every ~5 s for the first minute, then every ~60 s.
- * 39 062 halves per second at 40 MSPS. */
+ * 39 062 halves per second at 40 MSPS. In the simulator a half costs a
+ * few thousand instructions of the stand-in, so count halves, not time. */
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+#define STATUS_EVERY_HALVES   50u
+#else
 #define STATUS_EVERY_HALVES   195312u
+#endif
 #define STATUS_FAST_LINES     12u
 
 int main(void)
@@ -96,6 +101,7 @@ int main(void)
     uint32_t status_lines = 0;
 
     for (;;) {
+        SIM_DMA_TICK();               /* simulator: one half per pass    */
         if (capture_service()) {
             idle = 0;
             if (blocks_done >= next_status) {

@@ -111,6 +111,18 @@ bool capture_service(void);
 /* Pointer to the half that completed last. */
 const volatile uint16_t *capture_completed_half(void);
 
+/* Simulator build only: stand-in for the ADC/DMA. Each call delivers one
+ * buffer half (1 MHz sine, or 3840 flat on the self-test input) through
+ * the same path the DMA ISR uses. SIM_DMA_TICK() goes wherever the code
+ * would otherwise wait for the DMA; it is empty on silicon. */
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+void sim_dma_tick(void);
+extern volatile uint32_t sim_fault_once;
+#define SIM_DMA_TICK()    sim_dma_tick()
+#else
+#define SIM_DMA_TICK()    do { } while (0)
+#endif
+
 void counters_clear(void);
 
 /* LED0: 0 = off, 1 = on, 2 = automatic (heartbeat while running). */

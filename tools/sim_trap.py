@@ -7,9 +7,12 @@ What it does (MDB, the command-line debugger of MPLAB X, driven over
 stdin/stdout):
 
   1. Program build\\adc_dma_40msps_sim.elf, route UART2 output to a file,
-     run for --run-seconds. The simulator has no PLL/ADC/DMA, so the
-     expected end state is fail(6) after the self-test gave up. Anything
-     with [TRAP] before that is a software fault reproducible off silicon.
+     run for --run-seconds. The simulator has no PLL/ADC/DMA; the clock
+     waits are no-ops there and sim_dma_tick() in adc_dma_40msps.c stands
+     in for the ADC/DMA (1 MHz sine, flat 3840 on the self-test input),
+     so the expected state is boot_stage 9 with the self-test passed and
+     [stat] lines following. Anything with [TRAP] or a fail code is a
+     software fault reproducible off silicon.
   2. Halt, print boot_stage / fail_code / trap_* (needs -g).
   3. Resume, then set IEC6.9 and IFS6.9 (AD3CH0, vector 201) by writing
      the SFRs. That is exactly the event commit a60066a suspects on the

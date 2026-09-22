@@ -721,10 +721,8 @@ bool dma0_enabled(void)
  * Deliberately short. Everything this counts is a hardware flag, so a
  * long ISR would itself become the reason for the next overrun.
  * ------------------------------------------------------------------ */
-void __attribute__((interrupt, no_auto_psv)) _DMA0Interrupt(void)
+static void dma0_on_event(uint32_t st)
 {
-    const uint32_t st = DMA0STAT;     /* one snapshot, then act on it   */
-
     if (st & _DMA0STAT_OVERRUN_MASK) {
         /* Triggered while the previous transfer was still in progress
          * (p816): the bus did not keep up. This is the measurement. */
@@ -775,9 +773,79 @@ void __attribute__((interrupt, no_auto_psv)) _DMA0Interrupt(void)
             burst_active = false;
         }
     }
+}
 
+void __attribute__((interrupt, no_auto_psv)) _DMA0Interrupt(void)
+{
+    dma0_on_event(DMA0STAT);          /* one snapshot, then act on it   */
     IFS2bits.DMA0IF = 0;
 }
+
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+/* ------------------------------------------------------------------ *
+ * Simulator stand-in for the ADC and the DMA
+ *
+ * The MPLAB X simulator has neither peripheral, and it does not
+ * dispatch interrupts in this project either (see tools/sim_trap.py).
+ * So the only producer of measurement data, the DMA ISR above, never
+ * runs there. This stand-in plays its part: each call fills the next
+ * buffer half the way the DMA would and then hands the same status
+ * word to dma0_on_event() that the ISR would have taken from DMA0STAT.
+ * Everything downstream - blocks_done, ready_half, last_sample, the
+ * input switch at DONE, burst restart, capture_service(), the self-test,
+ * the status lines - runs unchanged.
+ *
+ * Signal: on SELFTEST_PINSEL a flat 3840 (15/16 VDD, what the self-test
+ * expects); on any other input a 1 MHz sine, 2048 +/- 1600 counts.
+ * 1 MHz at 40 MSPS is 40 samples per period, which is what this ADC
+ * is for: an 8 MSPS converter would see the same tone with 8 points.
+ * A half of 1024 samples holds 25.6 periods, so the phase runs on
+ * across the half boundary like a real signal would, and the per-half
+ * sum (proc_result) alternates between two values - a cheap check that
+ * the halves are really being served in order.
+ *
+ * Timing is not modelled: a half arrives per call, whenever the loop
+ * calls. It is called from wait_for_blocks() and from main()'s loop
+ * (SIM_DMA_TICK), so exactly one half is produced per service and
+ * proc_missed stays 0. Errors can be injected from MDB while running:
+ *   write <addr of sim_fault_once> <mask>
+ * ORs the mask (e.g. _DMA0STAT_OVERRUN_MASK) into the next status word.
+ * ------------------------------------------------------------------ */
+#define SIM_SINE_PERIOD   40u             /* samples: 40 MSPS / 40 = 1 MHz */
+
+static const uint16_t sim_sine[SIM_SINE_PERIOD] = {   /* 2048 + 1600 sin */
+    2048, 2298, 2542, 2774, 2988, 3179, 3342, 3474, 3570, 3628,
+    3648, 3628, 3570, 3474, 3342, 3179, 2988, 2774, 2542, 2298,
+    2048, 1798, 1554, 1322, 1108,  917,  754,  622,  526,  468,
+     448,  468,  526,  622,  754,  917, 1108, 1322, 1554, 1798
+};
+
+volatile uint32_t sim_fault_once = 0;     /* MDB: OR into the next status */
+
+void sim_dma_tick(void)
+{
+    static uint32_t half  = 0u;
+    static uint32_t phase = 0u;
+
+    if (!burst_active) {                  /* stopped: no DMA events either */
+        return;
+    }
+
+    volatile uint16_t *p = &buf[half * SAMPLES_PER_HALF];
+    const bool flat = (pinsel_cur == SELFTEST_PINSEL);
+    for (uint32_t i = 0; i < SAMPLES_PER_HALF; i++) {
+        p[i] = flat ? 3840u : sim_sine[phase];
+        if (++phase >= SIM_SINE_PERIOD) { phase = 0u; }
+    }
+
+    uint32_t st = half ? _DMA0STAT_DONE_MASK : _DMA0STAT_HALF_MASK;
+    st |= sim_fault_once;
+    sim_fault_once = 0u;
+    half ^= 1u;
+
+    dma0_on_event(st);
+}
+#endif
 
 /* ------------------------------------------------------------------ *
  * Control API (adc_dma_40msps.h)
@@ -904,6 +972,7 @@ static uint32_t wait_for_blocks(uint32_t target)
 {
     uint32_t n = WAIT_LIMIT;
     while (blocks_done < target) {
+        SIM_DMA_TICK();                    /* simulator: deliver a half */
         if (DMA0CHbits.CHEN == 0u) { return 8u; }
         if (--n == 0u)             { return 6u; }
     }
