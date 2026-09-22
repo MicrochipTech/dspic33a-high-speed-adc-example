@@ -9,7 +9,7 @@
  * Transport on the EV74H48A
  *   UART2 on the MCP2221A USB-UART channel: U2TX -> RH1 (RP114, DIM pin
  *   P98 "UART_USB_TX"), U2RX <- RD1 (RP50, DIM pin P96
- *   "UART_USB_RX"), 115200 8N1. The MCP2221A implements standard USB CDC
+ *   "UART_USB_RX"), 115200 8N1 (pins in board.h). The MCP2221A implements standard USB CDC
  *   and shows up on the PC as its own COM port (user guide DS70005562D
  *   2.1.1). The PPS code is the one Microchip's own example uses on
  *   this board (U2TX = 21, Table "Output Selection for Remappable
@@ -60,7 +60,11 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
-#include "adc_dma_40msps.h"
+#include "board.h"
+#include "capture.h"
+#include "led.h"
+#include "diag.h"
+#include "console.h"
 #include "cmd_parser.h"
 
 /* ------------------------------------------------------------------ *
@@ -94,13 +98,13 @@ static void uart2_setup(uint32_t brg)
 
 void console_early_init(void)
 {
-    /* Pins: RH1 = U2TX (output), RD1 = U2RX (input). Neither port has an
-     * analog function. Peripheral pin select needs IOLOCK cleared. */
-    TRISHbits.TRISH1 = 0u;
-    TRISDbits.TRISD1 = 1u;
+    /* Pins: TX output, RX input (board.h). Peripheral pin select needs
+     * IOLOCK cleared. */
+    CONSOLE_TX_TRIS  = 0u;
+    CONSOLE_RX_TRIS  = 1u;
     RPCONbits.IOLOCK = 0u;
-    _U2RXR  = 50u;                    /* RP50  -> U2RX                  */
-    _RP114R = 21u;                    /* RP114 <- U2TX                  */
+    CONSOLE_RX_RPINR = CONSOLE_RX_RP;
+    CONSOLE_TX_RPOR  = CONSOLE_TX_FN;
     RPCONbits.IOLOCK = 1u;
 
     uart2_setup(UART_BRG_FRC);
@@ -155,11 +159,11 @@ void console_force_up(void)
 {
     console_drain();                   /* bounded; keep a partial line    */
 
-    TRISHbits.TRISH1 = 0u;
-    TRISDbits.TRISD1 = 1u;
+    CONSOLE_TX_TRIS  = 0u;
+    CONSOLE_RX_TRIS  = 1u;
     RPCONbits.IOLOCK = 0u;
-    _U2RXR  = 50u;
-    _RP114R = 21u;
+    CONSOLE_RX_RPINR = CONSOLE_RX_RP;
+    CONSOLE_TX_RPOR  = CONSOLE_TX_FN;
     RPCONbits.IOLOCK = 1u;
 
     uart2_setup((CLK1CONbits.COSC == 0x6u) ? UART_BRG_PLL : UART_BRG_FRC);

@@ -169,10 +169,11 @@ board user guide DS70005562D:
 AD1AN0 of this device sits on RA2, which the board routes to a capacitive touch pad
 (P38) — that is why the example uses ADC3 here and not ADC1.
 
-The sources sit in the repository root — `main.c`, `adc_dma_40msps.c`, `cli.c` and the
-parser pair `cmd_parser.c/.h` — and the MPLAB X project references them there; nothing is
-duplicated. `main.c` is the place to read first: it is the start-up order and the main
-loop, and nothing else.
+The sources sit in the repository root — `main.c`, one `.c/.h` pair per module (`clock`,
+`adc`, `capture`, `led`, `diag`, `cli`/`console`), `board.h` and the parser pair
+`cmd_parser.c/.h` — and the MPLAB X project references them there; nothing is duplicated.
+`main.c` is the place to read first: it is the start-up order and the main loop, and
+nothing else.
 
 **This needs real hardware.** The clock generators, the PLLs, the ADC and the DMA are
 the four things this example is about, and all four only exist on silicon. The number
@@ -704,9 +705,14 @@ the value up in the ATDF (`<value-group name="FICD_NOBTSWP">`) and write the num
 | Path | Contents |
 |---|---|
 | `main.c` | start-up sequence and the main loop — the order of the inits, and why |
-| `adc_dma_40msps.c` | clock, ADC, DMA, ISR, self-test, LED — commented with datasheet references |
-| `adc_dma_40msps.h` | what the console may read and control; the compile-time choices (`ADC_INSTANCE`, `ADC_PINSEL`, `ADC_SAMC`) |
-| `cli.c` | the console: UART2 on the MCP2221A channel, the receive interrupt, the commands |
+| `board.h` | everything board-specific: the compile-time choices (`ADC_INSTANCE`, `ADC_PINSEL`, `ADC_SAMC`), the LED pin, the console pins |
+| `config_bits.c` | configuration bits — and why one of them is written as a number |
+| `clock.c`, `clock.h` | FRC → PLL1 320 MHz (ADC) and PLL2 200 MHz (CPU), the switching order, the clock-fail interrupt |
+| `adc.c`, `adc.h` | the ADC core: channel 0 in Integration mode, burst trigger, input/sample-time register |
+| `capture.c`, `capture.h` | the measurement: DMA channel, the ISR with every error counter, start/stop/input, self-test, per-half processing — what the console may read and control |
+| `led.c`, `led.h` | LED0 |
+| `diag.c`, `diag.h` | stop codes (`fail()`), trap and unhandled-interrupt handler, boot-stage record, register dump |
+| `cli.c`, `console.h` | the console: UART2 on the MCP2221A channel, the receive interrupt, the commands |
 | `cmd_parser.c`, `cmd_parser.h` | the command parser, unchanged from [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser) (Apache 2.0) |
 | `adc_dma_40msps.X/` | MPLAB X project — build, program and debug from here |
 | `docs/TROUBLESHOOTING.md` | **what to do when it does not work** — including where we doubt our own code |

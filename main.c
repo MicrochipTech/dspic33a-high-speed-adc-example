@@ -27,12 +27,20 @@
  *      the terminal tells the story without anyone typing. The console
  *      can stop, start and reconfigure it at any time.
  *
- * Everything hardware-specific lives in adc_dma_40msps.c (clock, ADC, DMA,
- * self-test, LED) and cli.c (UART, commands); this file only sequences it.
+ * Everything hardware-specific lives in the modules - board.h (pins,
+ * ADC core), clock.c, adc.c, capture.c (DMA, ISR, self-test), led.c,
+ * diag.c (stop codes, traps) and cli.c (UART, commands); this file only
+ * sequences them.
  */
 
 #include <xc.h>
-#include "adc_dma_40msps.h"
+#include "board.h"
+#include "clock.h"
+#include "adc.h"
+#include "capture.h"
+#include "led.h"
+#include "diag.h"
+#include "console.h"
 
 /* Status line every ~5 s for the first minute, then every ~60 s.
  * 39 062 halves per second at 40 MSPS. */
