@@ -30,6 +30,10 @@
 #define SAMPLES_PER_HALF  1024u
 #define SAMPLES_PER_BUF   (2u * SAMPLES_PER_HALF)
 
+/* Bound for every hardware wait loop, in loop iterations. A step that
+ * needs longer than this has failed; fail() then reports which one. */
+#define WAIT_LIMIT        2000000u
+
 /* ---- Measurement state (defined in adc_dma_40msps.c) ---- */
 extern volatile uint16_t buf[SAMPLES_PER_BUF];
 
@@ -44,6 +48,22 @@ extern volatile uint32_t ready_half;     /* 0 or 1: which half is complete */
 extern volatile uint32_t selftest_mean;  /* last self-test result (~3840)  */
 extern volatile uint32_t fail_code;      /* != 0: stopped, see fail()      */
 extern volatile int32_t  proc_result;    /* output of process_buffer()     */
+
+/* ---- Initialisation (implemented in adc_dma_40msps.c), in this order ---- */
+
+/* LED0 off and configured as output. */
+void led_init(void);
+/* FRC -> PLL1 320 MHz -> CLKGEN6 (ADC), PLL2 200 MHz -> CLKGEN1 (system).
+ * Every wait is bounded; a step that fails stops in fail(1..4). */
+void clock_init(void);
+/* ADC core ADC_INSTANCE, channel 0, Integration mode, CNT = SAMPLES_PER_BUF.
+ * Stops in fail(5) if the core never reports ready. */
+void adc_init(uint8_t pinsel, uint8_t samc);
+/* DMA0 from the ADC result into buf[], HALF/DONE interrupts enabled.
+ * Nothing transfers until capture_start(). */
+void dma0_init(void);
+/* False once the DMA switched itself off (address fault). */
+bool dma0_enabled(void);
 
 /* ---- Control (implemented in adc_dma_40msps.c) ---- */
 

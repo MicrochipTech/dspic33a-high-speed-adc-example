@@ -10,6 +10,12 @@
  *   counters for every error the hardware can report. A command console
  *   on the board's PKOB4 USB-UART channel (cli.c) controls it.
  *
+ * Files
+ *   main.c            start-up sequence and the main loop
+ *   adc_dma_40msps.c  this file: clock, ADC, DMA, ISR, self-test, LED
+ *   cli.c             the console (UART1, receive interrupt, commands)
+ *   cmd_parser.c/.h   the command parser, unchanged from its repository
+ *
  *   This is a measurement harness, not a product. Nothing here has run on
  *   silicon - see README.md.
  *
@@ -145,9 +151,6 @@
 #define HEARTBEAT_OK      19531u
 #define HEARTBEAT_ERR     3906u
 
-/* Bound for every hardware wait loop, in loop iterations. A step that
- * needs longer than this has failed; fail() then reports which one. */
-#define WAIT_LIMIT        2000000u
 
 /* ------------------------------------------------------------------ *
  * Sample buffer
@@ -302,7 +305,7 @@ void fail(uint32_t code)
  * Constraints checked against Table 40-23 and page 777: F_PFD >= 5 MHz,
  * F_VCO 500...1600 MHz, M in 16...320, POSTDIV1 >= POSTDIV2.
  * ------------------------------------------------------------------ */
-static void clock_init(void)
+void clock_init(void)
 {
     /* If the system clock is currently running off a PLL, park it on the
      * FRC first. Changing PLL settings underneath a running CPU clock can
@@ -389,7 +392,7 @@ static void clock_init(void)
  * software trigger) is what Microchip's 40 MSPS example uses on this
  * board, and what datasheet Example 16-6 (p1331) does.
  * ------------------------------------------------------------------ */
-static void adc_init(uint8_t pinsel, uint8_t samc)
+void adc_init(uint8_t pinsel, uint8_t samc)
 {
     ADCREG(CONbits).ON = 0;
 
@@ -452,7 +455,7 @@ static inline void adc_start_burst(void)
  * DMAxSTAT flags are "R/C/HS" - clearable by writing 0 (legend p815,
  * Example 13-4 p835: "DMA0STATbits.DONE=0"). Writing 1 does not clear.
  * ------------------------------------------------------------------ */
-static void dma0_init(void)
+void dma0_init(void)
 {
     DMACONbits.ON = 0;
     DMA0CHbits.CHEN = 0;
@@ -485,6 +488,16 @@ static void dma0_init(void)
 
     DMACONbits.ON   = 1;
     DMA0CHbits.CHEN = 1;
+
+    /* Block-complete interrupt: IRQ 77, IEC2/IFS2 bit 13, IPC9 default
+     * priority 4. Nothing fires until the first burst is started. */
+    IFS2bits.DMA0IF = 0;
+    IEC2bits.DMA0IE = 1;
+}
+
+bool dma0_enabled(void)
+{
+    return DMA0CHbits.CHEN != 0u;
 }
 
 /* ------------------------------------------------------------------ *
@@ -613,6 +626,12 @@ void counters_clear(void)
     late_service = 0; proc_missed = 0;
 }
 
+void led_init(void)
+{
+    LED_OFF();
+    LED_TRIS = 0u;
+}
+
 void led_mode(uint8_t mode)
 {
     led_auto = mode;
@@ -713,63 +732,4 @@ uint32_t capture_selftest(uint32_t *mean)
         capture_stop();
     }
     return rc;
-}
-
-/* ------------------------------------------------------------------ */
-int main(void)
-{
-    LED_OFF();
-    LED_TRIS = 0u;
-
-    clock_init();
-
-    /* The console lives in the UART1 receive interrupt from here on. It
-     * is started before the self-test so that a stop code is preceded
-     * by the banner on the terminal. */
-    cli_init();
-
-    /* ---- Self-test on the internal 15/16 * VDD reference ----
-     * Same clock, ADC, DMA and ISR as the real measurement, only the
-     * input differs. If the mean is right, the whole chain works. */
-    adc_init(ADC_PINSEL, ADC_SAMC);
-    dma0_init();
-
-    IFS2bits.DMA0IF = 0;              /* IEC2 bit 13, IPC9 default 4    */
-    IEC2bits.DMA0IE = 1;
-
-    {
-        const uint32_t rc = capture_selftest(NULL);
-        if (rc != 0u) { fail(rc); }
-    }
-
-    /* ---- Measurement ---- */
-    capture_start();
-    LED_ON();
-
-    uint32_t idle = 0;
-    for (;;) {
-        if (capture_service()) {
-            idle = 0;
-        } else if (run_enabled) {
-            /* The stream stopped: burst restart lost, or the DMA shut
-             * itself off. Say so instead of sitting here silently. */
-            if (DMA0CHbits.CHEN == 0u) { fail(8u); }
-            if (++idle > WAIT_LIMIT)   { fail(6u); }
-        } else {
-            idle = 0;
-        }
-
-        /* What to look at with the debugger or "status":
-         *   blocks_done   x SAMPLES_PER_HALF / elapsed time = actual rate
-         *                 (includes the re-trigger gap once per buffer)
-         *   dma_overrun   must stay 0, otherwise the DMA bus lost samples
-         *   late_service  must stay 0, otherwise the ISR is too slow
-         *   proc_missed   must stay 0, otherwise main() is too slow
-         *   last_sample   changing means data is really moving
-         *   selftest_mean ~3840 = the chain was proven before AN5 was used
-         *   fail_code     0 while running; the LED pattern otherwise
-         */
-    }
-
-    return 0;
 }

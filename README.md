@@ -52,7 +52,7 @@ To be precise about how much of this code rests on something that has run on sil
 | Board pins, UART1 on the PKOB4 channel, PPS codes, baud generator setting | the MCC-generated `pins.c` and `uart2.c` of the same 40 MSPS example (UART1/UART2 on this board) and the DIM info sheet | yes, in that example |
 | Command parser (`cmd_parser.c/.h`) | [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser), copied unchanged; it has run on a SAM E54 and a PIC32CM there | yes, on other targets — not yet on this one |
 | Console commands, transport, receive interrupt (`cli.c`) | our own | no |
-| Measurement counters, ISR, `main()` loop, LED reporting, bounded waits, file structure | our own | no |
+| Measurement counters, ISR, `main.c`, LED reporting, bounded waits, file structure | our own | no |
 
 Nothing was copied verbatim. The examples served as the reference for register values
 and patterns; every line here was written for this project and cites the datasheet
@@ -155,8 +155,10 @@ board user guide DS70005562D:
 AD1AN0 of this device sits on RA2, which the board routes to a capacitive touch pad
 (P38) — that is why the example uses ADC3 here and not ADC1.
 
-There is exactly **one** source file, `adc_dma_40msps.c`, in the repository root. The
-MPLAB X project references it; nothing is duplicated.
+The sources sit in the repository root — `main.c`, `adc_dma_40msps.c`, `cli.c` and the
+parser pair `cmd_parser.c/.h` — and the MPLAB X project references them there; nothing is
+duplicated. `main.c` is the place to read first: it is the start-up order and the main
+loop, and nothing else.
 
 **This needs real hardware — the simulator will not run it.** MPLAB X's simulator
 model for dsPIC33A covers PPS, ports, pull-ups, TMR1/TMR2, UART1-3, the watchdog and
@@ -655,7 +657,8 @@ the value up in the ATDF (`<value-group name="FICD_NOBTSWP">`) and write the num
 
 | Path | Contents |
 |---|---|
-| `adc_dma_40msps.c` | clock, ADC, DMA, self-test, LED, `main()` — commented with datasheet references |
+| `main.c` | start-up sequence and the main loop — the order of the inits, and why |
+| `adc_dma_40msps.c` | clock, ADC, DMA, ISR, self-test, LED — commented with datasheet references |
 | `adc_dma_40msps.h` | what the console may read and control; the compile-time choices (`ADC_INSTANCE`, `ADC_PINSEL`, `ADC_SAMC`) |
 | `cli.c` | the console: UART1 on the PKOB4 channel, the receive interrupt, the commands |
 | `cmd_parser.c`, `cmd_parser.h` | the command parser, unchanged from [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser) (Apache 2.0) |

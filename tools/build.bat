@@ -15,7 +15,7 @@ set DFP=C:\Program Files\Microchip\MPLABX\v6.35\packs\Microchip\dsPIC33AK-MP_DFP
 
 set MCU=33AK512MPS512
 set TARGET=adc_dma_40msps
-set SOURCES=..\adc_dma_40msps.c ..\cli.c ..\cmd_parser.c
+set SOURCES=..\main.c ..\adc_dma_40msps.c ..\cli.c ..\cmd_parser.c
 set OUT=..\build\%TARGET%
 
 if not exist ..\build mkdir ..\build

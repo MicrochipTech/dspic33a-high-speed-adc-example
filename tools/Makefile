@@ -20,7 +20,7 @@ OBJDUMP  = $(XC_DSC)/bin/xc-dsc-objdump.exe
 BIN2HEX  = $(XC_DSC)/bin/xc-dsc-bin2hex.exe
 
 TARGET   = adc_dma_40msps
-SRC      = ../adc_dma_40msps.c ../cli.c ../cmd_parser.c
+SRC      = ../main.c ../adc_dma_40msps.c ../cli.c ../cmd_parser.c
 HDR      = ../adc_dma_40msps.h ../cmd_parser.h
 OUTDIR   = ../build
 
