@@ -39,7 +39,10 @@ if errorlevel 1 (
 
 echo.
 echo Build OK: %OUT%.elf
-"%XC_DSC%\bin\xc-dsc-bin2hex.exe" %OUT%.elf
+rem NOTE: bin2hex needs -mdfp too. Without it the HEX is still written, but
+rem it prints "Could not open resource file ... c30_device.info / Please
+rem specify the location of a DFP" and looks like a failed build.
+"%XC_DSC%\bin\xc-dsc-bin2hex.exe" -mdfp="%DFP%" %OUT%.elf
 if exist %OUT%.hex echo HEX written: %OUT%.hex
 
 endlocal

@@ -8,12 +8,12 @@
  *   Minimal, readable starting point to measure what the device really
  *   sustains: one ADC core at full rate, DMA into a double buffer, and
  *   counters for every error the hardware can report. A command console
- *   on the board's PKOB4 USB-UART channel (cli.c) controls it.
+ *   on the board's MCP2221A USB-UART channel (cli.c) controls it.
  *
  * Files
  *   main.c            start-up sequence and the main loop
  *   adc_dma_40msps.c  this file: clock, ADC, DMA, ISR, self-test, LED
- *   cli.c             the console (UART1, receive interrupt, commands)
+ *   cli.c             the console (UART2, receive interrupt, commands)
  *   cmd_parser.c/.h   the command parser, unchanged from its repository
  *
  *   This is a measurement harness, not a product. Nothing here has run on
@@ -328,6 +328,22 @@ void fail(uint32_t code)
  *
  * Constraints checked against Table 40-23 and page 777: F_PFD >= 5 MHz,
  * F_VCO 500...1600 MHz, M in 16...320, POSTDIV1 >= POSTDIV2.
+ *
+ * OSCCTRL.PLLxEN is deliberately NOT written here. It looks like it should
+ * be - 12.4.6 (p776) says "the PLLs can be enabled by PLLxEN bits" - but
+ * neither the normative procedure (12.4.6.3, Example 12-4, p781) nor the
+ * MCC example ever sets it; both rely on PLLxCON.ON, whose clock-request
+ * path enables the PLL. A first attempt on hardware additionally set
+ * PLLxEN and waited for PLLxRDY *before* the first divider write, on the
+ * strength of Example 16-3 (p1328) - but that snippet sits in the ADC
+ * chapter's gain-calibration example, is duplicated verbatim in Example
+ * 17-4 (p1392) with a contradictory comment, and its own arithmetic does
+ * not add up (FBDIV=80, POSTDIV1=4 is 160 MHz, not the 320 MHz claimed).
+ * Waiting for PLLxRDY before the dividers means waiting for a lock on the
+ * POR configuration (M=200, POSTDIV1=2, POSTDIV2=2 -> 400 MHz), which is
+ * exactly the kind of intermediate state 12.4.6.1 note 2 (p779) warns
+ * about. Do not reintroduce it; follow the MCC order, which has run on
+ * silicon.
  * ------------------------------------------------------------------ */
 void clock_init(void)
 {
@@ -345,21 +361,6 @@ void clock_init(void)
 
     /* ---- PLL1: 320 MHz for the ADC ---- */
     PLL1CON = 0x8100u;          /* ON = 1, NOSC = FRC                   */
-
-    /* Two Microchip references disagree here. The MCC example enables
-     * the PLL with PLLxCON.ON alone and applies the dividers first. The
-     * datasheet's own clock example (Example 16-3, p1328) additionally
-     * sets OSCCTRL.PLLxEN and waits for PLLxRDY before it touches any
-     * divider. Doing both cannot hurt: PLLxEN is set here, and the wait
-     * is bounded and non-fatal - the trace says which way it went. */
-    OSCCTRLbits.PLL1EN = 1u;
-    {
-        uint32_t n = 200000u;
-        while (!OSCCTRLbits.PLL1RDY && (--n != 0u)) { }
-    }
-    console_puts(OSCCTRLbits.PLL1RDY ? "[clk] PLL1 ready with POR dividers\r\n"
-                                     : "[clk] PLL1 not ready yet, continuing\r\n");
-
     PLL1DIV = 0x0100C829u;      /* N1=1, M=200, POSTDIV1=5, POSTDIV2=1  */
 
     PLL1CONbits.PLLSWEN  = 1u;  /* (a) apply input and feedback dividers */
@@ -377,14 +378,6 @@ void clock_init(void)
 
     /* ---- PLL2: 200 MHz for the system clock ---- */
     PLL2CON = 0x8100u;
-    OSCCTRLbits.PLL2EN = 1u;    /* see PLL1 above                        */
-    {
-        uint32_t n = 200000u;
-        while (!OSCCTRLbits.PLL2RDY && (--n != 0u)) { }
-    }
-    console_puts(OSCCTRLbits.PLL2RDY ? "[clk] PLL2 ready with POR dividers\r\n"
-                                     : "[clk] PLL2 not ready yet, continuing\r\n");
-
     PLL2DIV = 0x01007D29u;      /* N1=1, M=125, POSTDIV1=5, POSTDIV2=1  */
 
     PLL2CONbits.PLLSWEN  = 1u;
@@ -835,13 +828,25 @@ void regs_dump(void)
     console_kv_hex("DMA0DST", DMA0DST);
     console_kv_hex("DMA0CNT", DMA0CNT);
     console_puts("[regs] interrupts, uart\r\n");
-    console_kv_hex("IEC2", IEC2);
-    console_kv_hex("IFS2", IFS2);
-    console_kv_hex("IPC9", IPC9);
+    console_kv_hex("IEC2", IEC2);           /* DMA0 enable,  bit 13      */
+    console_kv_hex("IFS2", IFS2);           /* DMA0 flag,    bit 13      */
+    console_kv_hex("IPC9", IPC9);           /* DMA0 priority             */
     console_kv_hex("INTCON1", INTCON1);
+    console_kv_hex("IEC3", IEC3);           /* U2RX enable,  bit 6       */
+    console_kv_hex("IFS3", IFS3);           /* U2RX flag,    bit 6       */
+    console_kv_hex("IPC12", IPC12);         /* U2RX priority, bits 26:24 */
     console_kv_hex("U2CON", U2CON);
     console_kv_hex("U2STAT", U2STAT);
     console_kv_hex("U2BRG", U2BRG);
+    /* Pin routing of the console itself: with a silent terminal these say
+     * whether console_early_init() took effect. Expected: IOLOCK set,
+     * RP114R (bits 14:8 of RPOR28) = 21 = 0x15, U2RXR (bits 23:16 of
+     * RPINR13) = 50 = 0x32, TRISH bit 1 clear, TRISD bit 1 set. */
+    console_kv_hex("RPCON", RPCON);
+    console_kv_hex("RPOR28", RPOR28);
+    console_kv_hex("RPINR13", RPINR13);
+    console_kv_hex("TRISH", TRISH);
+    console_kv_hex("TRISD", TRISD);
     console_puts("[regs] counters\r\n");
     console_kv("blocks_done", blocks_done);
     console_kv("dma_overrun", dma_overrun);

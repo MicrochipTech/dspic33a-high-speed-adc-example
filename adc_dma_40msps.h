@@ -112,7 +112,7 @@ void regs_dump(void);
 
 /* ---- Console (implemented in cli.c) ---- */
 
-/* UART1 up on the FRC, before the clocks are touched. From here on
+/* UART2 up on the FRC, before the clocks are touched. From here on
  * console_puts() works. */
 void console_early_init(void);
 /* After clock_init(): baud generator on the PLL clock, parser, banner,

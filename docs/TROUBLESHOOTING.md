@@ -82,16 +82,22 @@ Using two PLLs means neither clock needs a fractional divider — `CLK1DIV` and
 the PLLs, because changing PLL settings underneath a running CPU clock can overclock
 the core. This matters on a debugger restart, where the part is not freshly reset.
 
-**One open question in this sequence.** Microchip's two references disagree on how
-the PLL is enabled. The MCC example sets only `PLLxCON.ON` and then applies the
-dividers (`PLLSWEN` first). The datasheet's own clock example (Example 16-3, page 1328)
-additionally sets `OSCCTRL.PLLxEN` and waits for `PLLxRDY` *before* it changes any
-divider. If `PLLSWEN` never clears (blink code 1, the first PLL wait), this is the
-suspect: the divider-switch logic may need the PLL enabled through `PLLxEN`. The code
-therefore sets `PLLxEN` as well and does a bounded, non-fatal wait for `PLLxRDY` before
-the first divider switch; the trace line `[clk] PLL1 ready with POR dividers` or
-`[clk] PLL1 not ready yet, continuing` tells which way it went. With a `[FAIL] code 1`
-log, look at `OSCCTRL` in the register dump: `PLL1EN` (bit 6) and `PLL1RDY` (bit 14).
+**`OSCCTRL.PLLxEN` is deliberately not written — do not add it back.** Section 12.4.6
+(page 776) reads as if it were required: "the PLLs can be enabled by PLLxEN bits". But
+neither the normative procedure (12.4.6.3, Example 12-4, page 781) nor the MCC-generated
+`clock.c` ever sets it; both enable the PLL through `PLLxCON.ON`, whose clock-request
+path does the job. A first attempt on hardware set `PLLxEN` as well and waited for
+`PLLxRDY` *before* the first divider write, following Example 16-3 (page 1328). That was
+wrong on three counts: the snippet belongs to the ADC chapter's gain-calibration example,
+it is duplicated verbatim in Example 17-4 (page 1392) with a comment that contradicts its
+own code, and its arithmetic does not add up (`FBDIV = 80`, `POSTDIV1 = 4` is 160 MHz,
+not the 320 MHz it claims). Worse, waiting for `PLLxRDY` before the dividers waits for a
+lock on the POR configuration (`M = 200`, `POSTDIV1 = 2`, `POSTDIV2 = 2` → 400 MHz) —
+precisely the intermediate state note 2 of 12.4.6.1 (page 779) warns about.
+
+If `PLLSWEN` never clears (blink code 1, the first PLL wait), look elsewhere: `PLL1DIV`
+read back against what the code wrote, and `OSCCTRL` in the register dump (`PLL1RDY` is
+bit 14, `PLL1EN` bit 6 — it should read as enabled without the code touching it).
 
 One thing to keep in mind for anything beyond a functional check: 320 MHz is the
 specified maximum ADC input clock, and it is derived from the FRC, whose tolerance puts

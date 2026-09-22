@@ -49,7 +49,7 @@ To be precise about how much of this code rests on something that has run on sil
 | DMA basics: `DMALOW`/`DMAHIGH` window, status flags cleared by writing 0, control register layout | MCC `dma.c` of [dspic33a-dac-dma-sinewave](https://github.com/microchip-pic-avr-examples/dspic33a-dac-dma-sinewave) and datasheet Examples 13-1 to 13-4 (p832 ff.) | yes — but memory-to-DAC in Repeated One-Shot mode, the opposite direction and a far lower rate |
 | **ADC burst → DMA in Repeated Continuous mode → one buffer with `HALF`/`DONE` interrupts → burst restarted from the `DONE` ISR** | **our own construction**, assembled from datasheet §13.4.8 (Example 13-4, p835), §13.6.1.2 (HALF interrupt, p848) and §16.4.5 (p1322) | **no.** There is no Microchip example for this combination. This is the part `docs/TROUBLESHOOTING.md` §1.1 flags as the remaining risk |
 | Self-test on the internal 15/16·VDD reference (ADxAN6) | the input and its sample time come from datasheet Example 16-3 (p1328), which uses it for gain calibration; the pass/fail logic is ours | the input yes, the check no |
-| Board pins, UART1 on the PKOB4 channel, PPS codes, baud generator setting | the MCC-generated `pins.c` and `uart2.c` of the same 40 MSPS example (UART1/UART2 on this board) and the DIM info sheet | yes, in that example |
+| Board pins, UART2 on the MCP2221A channel, PPS codes, baud generator setting | the MCC-generated `pins.c` and `uart2.c` of the same 40 MSPS example (`RPINR13bits.U2RXR = 0x32`, `RPOR28bits.RP114R = 0x15`, `U2BRG = 0x364`) and the DIM info sheet | yes, in that example |
 | Command parser (`cmd_parser.c/.h`) | [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser), copied unchanged; it has run on a SAM E54 and a PIC32CM there | yes, on other targets — not yet on this one |
 | Console commands, transport, receive interrupt (`cli.c`) | our own | no |
 | Measurement counters, ISR, `main.c`, LED reporting, bounded waits, file structure | our own | no |
@@ -74,9 +74,15 @@ of use — so every setting can be checked against the primary source.
 
 - **2026-09-22, after the first report from a board** — the project's tool is the PKOB4
   now (`pkob4hybrid`) instead of the simulator, which had let a first attempt run on the
-  PC and look like a dead board. The PLL start additionally sets `OSCCTRL.PLLxEN` and
-  waits (bounded) for `PLLxRDY` before the first divider switch, as the datasheet's own
-  example does and the MCC example does not; the trace reports which path was taken.
+  PC and look like a dead board. That was the whole cause. A second change made in the
+  same breath — setting `OSCCTRL.PLLxEN` and waiting for `PLLxRDY` before the first
+  divider switch — was reverted after review: it rests on Example 16-3, a snippet from the
+  ADC chapter whose own arithmetic is wrong, and it waits for a lock on the POR dividers.
+  The clock code follows the MCC sequence again, which has run on silicon. The reasoning
+  is in `clock_init()` and in `docs/TROUBLESHOOTING.md` so it does not get re-added.
+  `regs` now also dumps `IEC3`/`IFS3`/`IPC12` and the console's own pin routing
+  (`RPCON`, `RPOR28`, `RPINR13`, `TRISH`, `TRISD`) — with a silent console those were
+  exactly the registers the troubleshooting guide asked for and the dump did not show.
 - **2026-09-22, third revision** — moved to the **EV74H48A** with the dsPIC33AK512MPS512
   DIM (the board of Microchip's own 40 MSPS example): ADC3 on the mikroBUS A analog pin,
   LED0 on RC8, pin table below. A **command console** (`cli.c`, on the parser from
