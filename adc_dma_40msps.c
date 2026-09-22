@@ -1,7 +1,8 @@
 /*
  * adc_dma_40msps.c
  *
- * dsPIC33AK512MPS512 - ADC at 40 MSPS into RAM via DMA, bare metal.
+ * dsPIC33AK512MPS506 Curiosity Nano (EV17P63A) - ADC at 40 MSPS into RAM
+ * via DMA, bare metal. Builds unchanged for the dsPIC33AK512MPS512.
  *
  * Purpose
  *   Minimal, readable starting point to measure what the device really
@@ -10,6 +11,19 @@
  *
  *   This is a measurement harness, not a product. Nothing here has run on
  *   silicon - see README.md.
+ *
+ * What you see on the board
+ *   LED0 (RD0) is the only output. Slow blink (1 Hz) = everything runs and
+ *   no error counter has moved. Fast blink (5 Hz) = running, but an error
+ *   counter is non-zero. A counted blink pattern with a pause = the code
+ *   stopped at a checkpoint; the count is the error code (table at
+ *   fail() below, also in docs/TROUBLESHOOTING.md).
+ *
+ * Self-test
+ *   Before the external input is used, the same chain samples the ADC's
+ *   internal 15/16 * VDD reference (AD1AN6, DS70005591D Table 16-2) and
+ *   checks that the mean of a buffer half is where it must be (~3840).
+ *   That proves clock, ADC, DMA and ISR together without a signal source.
  *
  * Clocking
  *   FRC 8 MHz -> PLL1 -> CLKGEN6 = 320 MHz ADC input clock
@@ -34,10 +48,11 @@
  *
  * Every register write below cites the datasheet table or page it comes from.
  * Revision 2026-09-22: reviewed against DS70005591D and errata DS80001162E,
- * see README "Revision history".
+ * then tailored to the EV17P63A; see README "Revision history".
  */
 
 #include <xc.h>
+#include <libpic30.h>       /* __delay32()                                 */
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -87,15 +102,48 @@
 #define SAMPLES_PER_HALF  1024u
 #define SAMPLES_PER_BUF   (2u * SAMPLES_PER_HALF)
 
-/* Analog input to sample: ADC1 positive input 0 (AD1AN0).
- * Input availability per package is in DS70005591D Table 16-2, p1224 ff. */
+/* Analog input to sample: ADC1 positive input 0 (AD1AN0). On the
+ * dsPIC33AK512MPS506 that is pin RA2, on the Curiosity Nano the edge
+ * connector position labelled "RA2 / AD1AN0" (user guide DS70005634A,
+ * Figure 1-3). Input availability per package: DS70005591D Table 16-2. */
 #define ADC1_PINSEL       0u
 
-/* Sample time in TAD units, SAMC[4:0] in AD1CH0CON1 (DS70005591D p1266).
+/* Sample time in TAD units, SAMC[4:0] in AD1CH0CON1 (DS70005591D p1266):
+ * sample time = (2 * SAMC + 0.5) TAD, conversion period = (2 * SAMC + 2)
+ * TAD, so the rate is 40 / (SAMC + 1) MSPS at a 320 MHz input clock.
  * 0 = 0.5 TAD, the minimum, for maximum throughput. A real signal source
  * with non-negligible impedance will need more - that is the first knob
  * to turn if the results look wrong. */
 #define ADC1_SAMC         0u
+
+/* Self-test input and window. AD1AN6 is the internal 15/16 * VDD
+ * reference (Table 16-2, p1224), which the datasheet itself samples for
+ * gain calibration (Example 16-3, p1328) - with SAMC = 3, because an
+ * internal reference is not a 50 ohm source. Expected mean: 15/16 * 4096
+ * = 3840; the window below allows +-5 % for gain and offset error. */
+#define SELFTEST_PINSEL   6u
+#define SELFTEST_SAMC     3u      /* 6.5 TAD = 81 ns, as in Example 16-3 */
+#define SELFTEST_HALVES   4u      /* halves to skip before judging      */
+#define SELFTEST_MIN      3648u   /* 3840 - 5 %                          */
+#define SELFTEST_MAX      4032u   /* 3840 + 5 %                          */
+
+/* LED0 on the Curiosity Nano is RD0 and lights when the pin is driven
+ * low (DS70005634A 4.2.1: "driving the connected I/O line to GND ...
+ * activates the LED"). Port D has no analog function, so no ANSEL. */
+#define LED_TRIS          TRISDbits.TRISD0
+#define LED_LAT           LATDbits.LATD0
+#define LED_ON()          (LED_LAT = 0u)
+#define LED_OFF()         (LED_LAT = 1u)
+#define LED_TOGGLE()      (LED_LAT = (uint8_t)!LED_LAT)
+
+/* Heartbeat: LED toggles every N completed halves. 39 062 halves per
+ * second, so 19 531 gives a 1 Hz blink, 3 906 a 5 Hz blink. */
+#define HEARTBEAT_OK      19531u
+#define HEARTBEAT_ERR     3906u
+
+/* Bound for every hardware wait loop, in loop iterations. A step that
+ * needs longer than this has failed; fail() then reports which one. */
+#define WAIT_LIMIT        2000000u
 
 /* ------------------------------------------------------------------ *
  * Sample buffer
@@ -109,7 +157,7 @@ static volatile uint16_t buf[SAMPLES_PER_BUF] __attribute__((aligned(4)));
 
 /* RAM window for the DMA address limit registers. __DATA_BASE and
  * __DATA_LENGTH come from the device header (0x4000 and 0x10000 for the
- * 64 KB parts, matching p33AK512MPS512.gld), so the window follows the
+ * 64 KB parts, matching p33AK512MPS506.gld), so the window follows the
  * device instead of being a magic number. */
 #if !defined(__DATA_BASE) || !defined(__DATA_LENGTH)
 #error "__DATA_BASE / __DATA_LENGTH not provided by the device header"
@@ -131,10 +179,70 @@ volatile uint32_t late_service  = 0;   /* HALF and DONE pending together   */
 volatile uint32_t proc_missed   = 0;   /* main() skipped a completed half  */
 volatile uint16_t last_sample   = 0;   /* sanity check: is data moving?    */
 volatile uint32_t ready_half    = 0;   /* 0 = buf[0..], 1 = buf[1024..]    */
+volatile uint32_t selftest_mean = 0;   /* mean seen on AD1AN6, ~3840       */
+volatile uint32_t fail_code     = 0;   /* != 0: stopped, see fail()        */
 
 /* Note 1: errata DS80001162E item 2 - BRERR is only set when RETEN = 1,
  * and RETEN also raises a trap. This example leaves RETEN = 0, so
  * dma_bus_err effectively counts write errors (BWERR) only. */
+
+/* Channel reconfiguration requested by main(), applied by the ISR
+ * between two bursts, when the channel is idle. */
+static volatile bool    pinsel_switch_pending = false;
+static volatile uint8_t pinsel_next = ADC1_PINSEL;
+static volatile uint8_t samc_next   = ADC1_SAMC;
+
+/* NOSC values, from the ATDF value-group CLK1_CON__COSC. */
+#define NOSC_FRC        0x1u
+#define NOSC_PLL1_OUT   0x5u
+#define NOSC_PLL2_OUT   0x6u
+
+/* ------------------------------------------------------------------ *
+ * Stop here and say why - with the LED, because at this point there
+ * may be no debugger attached and no clock to speak of.
+ *
+ *   code  meaning                                   where
+ *   1     PLL1 (ADC clock) did not configure/lock   clock_init()
+ *   2     PLL2 (system clock) did not configure/lock clock_init()
+ *   3     CLKGEN1 did not switch to PLL2             clock_init()
+ *   4     CLKGEN6 did not switch to PLL1             clock_init()
+ *   5     ADC core never became ready (ADRDY)        adc1_init()
+ *   6     no DMA blocks arrived (nothing moves)      self-test / run
+ *   7     self-test value out of range               self-test
+ *   8     DMA channel switched itself off (CHEN = 0) self-test / run
+ *
+ * Pattern: <code> short blinks, one long pause, repeat. The blink speed
+ * depends on which clock the CPU is on at the time; the count is what
+ * counts.
+ * ------------------------------------------------------------------ */
+static void fail(uint32_t code)
+{
+    fail_code = code;
+    IEC2bits.DMA0IE = 0;
+    DMA0CHbits.CHEN = 0;
+
+    /* 100 ms in CPU cycles: 200 MHz once PLL2 drives CLKGEN1, else the
+     * 8 MHz FRC we started on. */
+    const uint32_t ms100 = (CLK1CONbits.COSC == NOSC_PLL2_OUT)
+                           ? 20000000ul : 800000ul;
+    LED_TRIS = 0u;
+    for (;;) {
+        for (uint32_t i = 0; i < code; i++) {
+            LED_ON();  __delay32(2u * ms100);
+            LED_OFF(); __delay32(2u * ms100);
+        }
+        __delay32(10u * ms100);
+    }
+}
+
+/* Wait until a condition becomes false, or give up with a code. */
+#define WAIT_WHILE(cond, code)                              \
+    do {                                                    \
+        uint32_t n_ = WAIT_LIMIT;                           \
+        while (cond) {                                      \
+            if (--n_ == 0u) { fail(code); }                 \
+        }                                                   \
+    } while (0)
 
 /* ------------------------------------------------------------------ *
  * Clock setup
@@ -155,7 +263,7 @@ volatile uint32_t ready_half    = 0;   /* 0 = buf[0..], 1 = buf[1024..]    */
  *   e) set OSWEN    -> perform the switch
  *
  * Each of those bits clears itself when its step has completed, so each
- * one is followed by a wait.
+ * one is followed by a (bounded) wait.
  *
  * Also from page 778: "The output dividers POSTDIV1 and POSTDIV2 should
  * not be changed while the PLL is operating", and POSTDIV1 must be >=
@@ -177,12 +285,6 @@ volatile uint32_t ready_half    = 0;   /* 0 = buf[0..], 1 = buf[1024..]    */
  * Constraints checked against Table 40-23 and page 777: F_PFD >= 5 MHz,
  * F_VCO 500...1600 MHz, M in 16...320, POSTDIV1 >= POSTDIV2.
  * ------------------------------------------------------------------ */
-
-/* NOSC values, from the ATDF value-group CLK1_CON__COSC. */
-#define NOSC_FRC        0x1u
-#define NOSC_PLL1_OUT   0x5u
-#define NOSC_PLL2_OUT   0x6u
-
 static void clock_init(void)
 {
     /* If the system clock is currently running off a PLL, park it on the
@@ -192,7 +294,7 @@ static void clock_init(void)
     if ((CLK1CONbits.COSC >= NOSC_PLL1_OUT) && (CLK1CONbits.COSC <= 0x8u)) {
         CLK1CONbits.NOSC  = NOSC_FRC;
         CLK1CONbits.OSWEN = 1u;
-        while (CLK1CONbits.OSWEN) { }
+        WAIT_WHILE(CLK1CONbits.OSWEN, 3u);
     }
 
     /* ---- PLL1: 320 MHz for the ADC ---- */
@@ -200,32 +302,32 @@ static void clock_init(void)
     PLL1DIV = 0x0100C829u;      /* N1=1, M=200, POSTDIV1=5, POSTDIV2=1  */
 
     PLL1CONbits.PLLSWEN  = 1u;  /* (a) apply input and feedback dividers */
-    while (PLL1CONbits.PLLSWEN) { }
+    WAIT_WHILE(PLL1CONbits.PLLSWEN, 1u);
     PLL1CONbits.FOUTSWEN = 1u;  /* (c) apply output dividers             */
-    while (PLL1CONbits.FOUTSWEN) { }
+    WAIT_WHILE(PLL1CONbits.FOUTSWEN, 1u);
     PLL1CONbits.OSWEN    = 1u;  /* (e) switch                            */
-    while (PLL1CONbits.OSWEN) { }
-    while (!OSCCTRLbits.PLL1RDY) { }
+    WAIT_WHILE(PLL1CONbits.OSWEN, 1u);
+    WAIT_WHILE(!OSCCTRLbits.PLL1RDY, 1u);
 
     VCO1DIV = 0x10000u;         /* VCO divider output, unused here       */
     PLL1CONbits.DIVSWEN = 1u;
-    while (PLL1CONbits.DIVSWEN) { }
+    WAIT_WHILE(PLL1CONbits.DIVSWEN, 1u);
 
     /* ---- PLL2: 200 MHz for the system clock ---- */
     PLL2CON = 0x8100u;
     PLL2DIV = 0x01007D29u;      /* N1=1, M=125, POSTDIV1=5, POSTDIV2=1  */
 
     PLL2CONbits.PLLSWEN  = 1u;
-    while (PLL2CONbits.PLLSWEN) { }
+    WAIT_WHILE(PLL2CONbits.PLLSWEN, 2u);
     PLL2CONbits.FOUTSWEN = 1u;
-    while (PLL2CONbits.FOUTSWEN) { }
+    WAIT_WHILE(PLL2CONbits.FOUTSWEN, 2u);
     PLL2CONbits.OSWEN    = 1u;
-    while (PLL2CONbits.OSWEN) { }
-    while (!OSCCTRLbits.PLL2RDY) { }
+    WAIT_WHILE(PLL2CONbits.OSWEN, 2u);
+    WAIT_WHILE(!OSCCTRLbits.PLL2RDY, 2u);
 
     VCO2DIV = 0x10000u;
     PLL2CONbits.DIVSWEN = 1u;
-    while (PLL2CONbits.DIVSWEN) { }
+    WAIT_WHILE(PLL2CONbits.DIVSWEN, 2u);
 
     /* ---- CLKGEN1 = system clock, from PLL2, no divider ----
      * DS70005591D 12.4.9, p795: "Clock Generator 1 is the clock source
@@ -233,7 +335,7 @@ static void clock_init(void)
     CLK1CON = 0x129600u;        /* NOSC = PLL2 out, ON, backup BFRC, FSCM */
     CLK1DIV = 0u;               /* 200 MHz straight through               */
     CLK1CONbits.OSWEN = 1u;
-    while (CLK1CONbits.OSWEN) { }
+    WAIT_WHILE(CLK1CONbits.OSWEN, 3u);
 
     /* ---- CLKGEN6 = ADC clock, from PLL1, no divider ----
      * DS70005591D Table 16-1, p1223 names CLKGEN6 as the ADC clock
@@ -242,7 +344,7 @@ static void clock_init(void)
     CLK6CON = 0x29500u;         /* NOSC = PLL1 out, ON                   */
     CLK6DIV = 0u;               /* 320 MHz straight through              */
     CLK6CONbits.OSWEN = 1u;
-    while (CLK6CONbits.OSWEN) { }
+    WAIT_WHILE(CLK6CONbits.OSWEN, 4u);
 }
 
 /* ------------------------------------------------------------------ *
@@ -269,24 +371,17 @@ static void clock_init(void)
  * The same pattern (MODE = 2, CNT = n, TRG1SRC = 1, TRG2SRC = 2, then a
  * software trigger) is what Microchip's 40 MSPS example uses on
  * hardware, and what datasheet Example 16-6 (p1331) does.
- *
- * The alternative for an exact lower rate is the conversion repeat timer
- * (TRG2SRC = 000011) with RPTCNT in AD1CON counting ADC clock cycles,
- * 1 to 64 between triggers (DS70005591D p1258). At an 80 MHz ADC clock
- * that yields 80/n MSPS: 40, 26.67, 20, 16 ... - note that exactly
- * 25 MSPS is NOT on that grid and needs a different ADC input clock
- * (200 MHz in -> TAD 20 ns -> 50 MHz ADC clock -> /2 = 25 MSPS).
  * ------------------------------------------------------------------ */
-static void adc1_init(void)
+static void adc1_init(uint8_t pinsel, uint8_t samc)
 {
     AD1CONbits.ON = 0;
 
     /* Channel 0 configuration, AD1CH0CON1 (DS70005591D p1265 f.) */
-    AD1CH0CON1bits.PINSEL  = ADC1_PINSEL; /* positive input select      */
+    AD1CH0CON1bits.PINSEL  = pinsel;      /* positive input select      */
     AD1CH0CON1bits.NINSEL  = 0u;          /* negative input = AVSS      */
     AD1CH0CON1bits.DIFF    = 0u;          /* single ended -> unsigned   */
     AD1CH0CON1bits.FRAC    = 0u;          /* integer, right aligned     */
-    AD1CH0CON1bits.SAMC    = ADC1_SAMC;   /* sample time in TAD         */
+    AD1CH0CON1bits.SAMC    = samc;        /* sample time in TAD         */
     AD1CH0CON1bits.MODE    = 2u;          /* Integration: CNT per burst */
     AD1CH0CON1bits.ACCNUM  = 0u;          /* oversampling only, unused  */
     AD1CH0CON1bits.IRQSEL  = 0u;          /* event per conversion (RES) */
@@ -300,7 +395,7 @@ static void adc1_init(void)
     AD1CH0CNT = SAMPLES_PER_BUF;
 
     AD1CONbits.ON = 1;
-    while (!AD1CONbits.ADRDY) { }         /* wait for the core          */
+    WAIT_WHILE(!AD1CONbits.ADRDY, 5u);    /* wait for the core          */
 }
 
 /* Start one burst of SAMPLES_PER_BUF conversions. Reading AD1CH0DATA
@@ -375,7 +470,8 @@ static void dma0_init(void)
  *
  * HALF: the first half is complete, the DMA is filling the second.
  * DONE: the second half is complete, the DMA has reloaded to the start
- *       and the ADC burst has ended - start the next burst here.
+ *       and the ADC burst has ended - apply a pending input change and
+ *       start the next burst here.
  *
  * Deliberately short. Everything this counts is a hardware flag, so a
  * long ISR would itself become the reason for the next overrun.
@@ -418,6 +514,14 @@ void __attribute__((interrupt, no_auto_psv)) _DMA0Interrupt(void)
         ready_half  = 1u;
         last_sample = buf[SAMPLES_PER_BUF - 1u];
         blocks_done++;
+
+        /* The channel is idle between bursts: this is the only safe
+         * moment to change its input or sample time. */
+        if (pinsel_switch_pending) {
+            AD1CH0CON1bits.PINSEL = pinsel_next;
+            AD1CH0CON1bits.SAMC   = samc_next;
+            pinsel_switch_pending = false;
+        }
         adc1_start_burst();           /* next SAMPLES_PER_BUF samples   */
     }
 
@@ -444,22 +548,65 @@ static void process_buffer(const volatile uint16_t *b, uint32_t n)
     proc_result = acc;
 }
 
+static uint32_t half_mean(const volatile uint16_t *b, uint32_t n)
+{
+    uint32_t acc = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        acc += b[i];
+    }
+    return acc / n;
+}
+
+/* Wait until blocks_done passes a value. Gives up with code 6 (nothing
+ * moves) or 8 (the DMA switched itself off, e.g. on an address fault). */
+static void wait_for_blocks(uint32_t target)
+{
+    uint32_t n = WAIT_LIMIT;
+    while (blocks_done < target) {
+        if (DMA0CHbits.CHEN == 0u) { fail(8u); }
+        if (--n == 0u)             { fail(6u); }
+    }
+}
+
 /* ------------------------------------------------------------------ */
 int main(void)
 {
+    LED_OFF();
+    LED_TRIS = 0u;
+
     clock_init();
-    adc1_init();
+
+    /* ---- Self-test on the internal 15/16 * VDD reference ----
+     * Same clock, ADC, DMA and ISR as the real measurement, only the
+     * input differs. If the mean is right, the whole chain works. */
+    adc1_init(SELFTEST_PINSEL, SELFTEST_SAMC);
     dma0_init();
 
-    /* Enable the DMA0 interrupt (IEC2 bit 13, IPC9 default priority 4). */
-    IFS2bits.DMA0IF = 0;
+    IFS2bits.DMA0IF = 0;              /* IEC2 bit 13, IPC9 default 4    */
     IEC2bits.DMA0IE = 1;
 
-    /* Everything is armed - start the first burst. From here on the DMA
-     * DONE interrupt restarts it. */
-    adc1_start_burst();
+    adc1_start_burst();               /* first burst; the ISR keeps going */
 
-    uint32_t seen = 0;
+    wait_for_blocks(SELFTEST_HALVES);
+    selftest_mean = half_mean(&buf[ready_half ? SAMPLES_PER_HALF : 0u],
+                              SAMPLES_PER_HALF);
+    if ((selftest_mean < SELFTEST_MIN) || (selftest_mean > SELFTEST_MAX)) {
+        fail(7u);
+    }
+
+    /* ---- Switch to the external input, between two bursts ---- */
+    pinsel_next = ADC1_PINSEL;
+    samc_next   = ADC1_SAMC;
+    pinsel_switch_pending = true;
+    {
+        const uint32_t now = blocks_done;
+        wait_for_blocks(now + 2u * SELFTEST_HALVES);   /* let it settle */
+    }
+    LED_ON();
+
+    /* ---- Measurement ---- */
+    uint32_t seen      = blocks_done;
+    uint32_t idle      = 0;
 
     for (;;) {
         /* Wait for a half, then work on it while the DMA fills the
@@ -471,17 +618,33 @@ int main(void)
                 proc_missed += (done - seen) - 1u;
             }
             seen = done;
+            idle = 0;
             process_buffer(&buf[ready_half ? SAMPLES_PER_HALF : 0u],
                            SAMPLES_PER_HALF);
+
+            /* Heartbeat: slow while clean, fast once any error counter
+             * has moved. */
+            const bool clean = (dma_overrun | dma_addr_err | dma_bus_err |
+                                late_service | proc_missed) == 0u;
+            if ((done % (clean ? HEARTBEAT_OK : HEARTBEAT_ERR)) == 0u) {
+                LED_TOGGLE();
+            }
+        } else {
+            /* The stream stopped: burst restart lost, or the DMA shut
+             * itself off. Say so instead of sitting here silently. */
+            if (DMA0CHbits.CHEN == 0u) { fail(8u); }
+            if (++idle > WAIT_LIMIT)   { fail(6u); }
         }
 
         /* What to look at with the debugger:
-         *   blocks_done  x SAMPLES_PER_HALF / elapsed time = actual rate
-         *                (includes the re-trigger gap once per buffer)
-         *   dma_overrun  must stay 0, otherwise the DMA bus lost samples
-         *   late_service must stay 0, otherwise the ISR is too slow
-         *   proc_missed  must stay 0, otherwise main() is too slow
-         *   last_sample  changing means data is really moving
+         *   blocks_done   x SAMPLES_PER_HALF / elapsed time = actual rate
+         *                 (includes the re-trigger gap once per buffer)
+         *   dma_overrun   must stay 0, otherwise the DMA bus lost samples
+         *   late_service  must stay 0, otherwise the ISR is too slow
+         *   proc_missed   must stay 0, otherwise main() is too slow
+         *   last_sample   changing means data is really moving
+         *   selftest_mean ~3840 = the chain was proven before AN0 was used
+         *   fail_code     0 while running; the LED pattern otherwise
          */
     }
 

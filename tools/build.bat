@@ -1,6 +1,6 @@
 @echo off
 rem ---------------------------------------------------------------------
-rem  dsPIC33AK512MPS512 ADC/DMA demo - build without MPLAB X or MCC
+rem  dsPIC33AK512MPS506 ADC/DMA demo - build without MPLAB X or MCC
 rem
 rem  Just run:  build.bat
 rem
@@ -13,7 +13,7 @@ setlocal
 set XC_DSC=C:\Program Files\Microchip\xc-dsc\v3.31
 set DFP=C:\Program Files\Microchip\MPLABX\v6.35\packs\Microchip\dsPIC33AK-MP_DFP\1.4.260\xc16
 
-set MCU=33AK512MPS512
+set MCU=33AK512MPS506
 set TARGET=adc_dma_40msps
 
 rem NOTE: -mdfp must point at the xc16 SUBDIRECTORY of the pack, not the

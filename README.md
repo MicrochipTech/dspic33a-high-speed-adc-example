@@ -1,8 +1,13 @@
-# dsPIC33AK512MPS512 — ADC at 40 MSPS into RAM via DMA
+# dsPIC33AK512MPS506 Curiosity Nano — ADC at 40 MSPS into RAM via DMA
 
 A small, complete MPLAB X project showing **how to configure the device** so the
 ADC runs at its maximum rate and the DMA moves the samples into RAM — and **how to
 measure whether it really keeps up**.
+
+It is cut to the **EV17P63A** (dsPIC33AK512MPS506 Curiosity Nano, about 30 USD, USB-C,
+debugger on board): order the board, open the project, press Program, and the LED tells
+you whether the chain works — before you connect any signal. The source builds
+unchanged for the dsPIC33AK512MPS512; only the project's device selection differs.
 
 Bare metal, no MCC. Every register write in the source cites the datasheet table or
 page it comes from, so nothing has to be taken on trust.
@@ -40,7 +45,8 @@ To be precise about how much of this code rests on something that has run on sil
 | ADC trigger scheme: Integration mode, software trigger starts a burst, back-to-back re-trigger continues it (`MODE = 2`, `TRG1SRC = 1`, `TRG2SRC = 2`, `AD1SWTRG`) | the same example and datasheet Example 16-6 (p1331) | yes — but that example reads one 800-sample burst from `AD3CH0RES` in an assembler loop, **without DMA and without restarting the burst** |
 | DMA basics: `DMALOW`/`DMAHIGH` window, status flags cleared by writing 0, control register layout | MCC `dma.c` of [dspic33a-dac-dma-sinewave](https://github.com/microchip-pic-avr-examples/dspic33a-dac-dma-sinewave) and datasheet Examples 13-1 to 13-4 (p832 ff.) | yes — but memory-to-DAC in Repeated One-Shot mode, the opposite direction and a far lower rate |
 | **ADC burst → DMA in Repeated Continuous mode → one buffer with `HALF`/`DONE` interrupts → burst restarted from the `DONE` ISR** | **our own construction**, assembled from datasheet §13.4.8 (Example 13-4, p835), §13.6.1.2 (HALF interrupt, p848) and §16.4.5 (p1322) | **no.** There is no Microchip example for this combination. This is the part `docs/TROUBLESHOOTING.md` §1.1 flags as the remaining risk |
-| Measurement counters, ISR, `main()` loop, file structure | our own | no |
+| Self-test on the internal 15/16·VDD reference (AD1AN6) | the input and its sample time come from datasheet Example 16-3 (p1328), which uses it for gain calibration; the pass/fail logic is ours | the input yes, the check no |
+| Measurement counters, ISR, `main()` loop, LED reporting, bounded waits, file structure | our own | no |
 
 Nothing was copied verbatim. The examples served as the reference for register values
 and patterns; every line here was written for this project and cites the datasheet
@@ -60,6 +66,12 @@ of use — so every setting can be checked against the primary source.
 
 **Revision history**
 
+- **2026-09-22, second revision** — tailored to the EV17P63A so that the first run
+  needs nothing but the board: project retargeted to the dsPIC33AK512MPS506; a
+  **self-test** on the ADC's internal 15/16·VDD reference runs before the external
+  input is used; **LED0 reports** heartbeat, error and a stop code; every hardware wait
+  loop is **bounded** and reports where it gave up instead of hanging; board pin table
+  below.
 - **2026-09-22** — full review against the datasheet, the errata and Microchip's MCC
   examples. Four mistakes found and fixed, all of which would have stopped the first
   run dead: (1) the ADC was set to single-conversion mode with a re-trigger source,
@@ -74,9 +86,19 @@ of use — so every setting can be checked against the primary source.
 
 ## Getting started
 
-Open `adc_dma_40msps.X` in MPLAB X, press **Build**, then **Debug** or **Program**.
-That is all — the project is configured for dsPIC33AK512MPS512 and pulls the source
-from the folder above it.
+**You need:** an EV17P63A, a USB-C cable, MPLAB X with the XC-DSC compiler and the
+dsPIC33AK-MP device pack (MPLAB X offers to download the pack when you open the
+project). A signal source is optional — the self-test does not need one.
+
+1. Plug the board in. It shows up in MPLAB X as *dsPIC33AK512MPS506 Curiosity Nano*.
+2. Open `adc_dma_40msps.X`, press **Build**, then **Program** (or **Debug**).
+3. The project's tool is set to *Simulator* so that it opens on any machine; MPLAB X
+   asks which tool to use the first time, pick the Curiosity Nano. You can also set it
+   under *Project Properties → Conn.*
+4. Watch LED0 (yellow, next to the switch): **slow blink = everything works.** The
+   self-test on the internal reference has passed, the ADC, the DMA and the interrupt
+   are running at 40 MSPS. What the other patterns mean is under "First run on
+   hardware".
 
 Verified on 2026-09-22 with:
 
@@ -85,14 +107,31 @@ Verified on 2026-09-22 with:
 | MPLAB X IDE | v6.35 (project format `version="65"`, which v6.25 also reads) |
 | XC-DSC compiler | v3.31.00; the source also builds with v3.21 when the pack supplies the device |
 | Device pack | dsPIC33AK-MP_DFP **1.4.260 and 1.3.185** — the source builds against both, `-Wall -Wextra` clean |
-| Target | dsPIC33AK512MPS512 |
-| Board | EV17P63A (dsPIC33AK512MPS506 Curiosity Nano) — 64 pins, fewer analog inputs than the 128-pin part, enough for a functional check |
+| Target | dsPIC33AK512MPS506 (project); the source also builds for the dsPIC33AK512MPS512 |
+| Board | EV17P63A, dsPIC33AK512MPS506 Curiosity Nano, user guide DS70005634A |
 
 **If MPLAB X complains about the toolchain version** when you open the project: the
 `.X` has a version recorded in it, and yours will differ. Go to *Project Properties →
 XC-DSC* and pick the version you have. Nothing in the source depends on it — we have
 built this with v3.21 and v3.31, and the configuration bits are written so that the
 pack version does not matter either (see "One trap worth knowing about" below).
+
+### The board
+
+Everything this example touches on the EV17P63A, from the user guide DS70005634A
+(Figure 1-3, Tables 4-1 and 4-2) and the device pinout (DS70005591D, 64-pin table):
+
+| What | Device pin | Where on the board | Note |
+|---|---|---|---|
+| **Analog input** AD1AN0 | RA2 (QFN64 pin 12) | edge connector, labelled **RA2 / AD1AN0** | 0 … 3.3 V against GND; the self-test does not use it |
+| **LED0** | RD0 | yellow LED on the board, also on the edge connector as RD0 | active low: the pin driven to GND lights it |
+| SW0 | RC3 | user switch | not used by this example; no external pull-up |
+| GND | — | several edge pins marked GND | signal ground for the generator |
+| VTG | — | edge pin | target voltage, 3.3 V by default |
+| CDC UART | RC10 (TX), RC11 (RX) | through the debugger's USB virtual COM port | not used by this example |
+| Debugger | — | USB-C | programming, debugging, board identification |
+
+The green PS LED next to the USB connector belongs to the debugger, not to this code.
 
 There is exactly **one** source file, `adc_dma_40msps.c`, in the repository root. The
 MPLAB X project references it; nothing is duplicated.
@@ -101,9 +140,9 @@ MPLAB X project references it; nothing is duplicated.
 model for dsPIC33A covers PPS, ports, pull-ups, TMR1/TMR2, UART1-3, the watchdog and
 context switching. It does *not* model the clock generators, the PLLs, the ADC or the
 DMA, which are the four things this example is about. In the simulator the code
-therefore stops at the first wait loop in `clock_init()` — `PLL1CONbits.PLLSWEN` gets
-written but nothing ever clears it, because there is no PLL to perform the switch.
-`AD1CONbits.ADRDY` would behave the same way.
+therefore ends in `fail(1)` — the bounded wait on `PLL1CONbits.PLLSWEN` times out,
+because there is no PLL to perform the switch. `AD1CONbits.ADRDY` would behave the same
+way.
 
 Skipping those loops under conditional compilation would not help: the ADC would not
 convert, the DMA would not transfer and the ISR would never fire, so the run would
@@ -123,30 +162,56 @@ compiler and pack versions.
 Since this has never run on silicon, here is what to expect and where it is most
 likely to trip you up.
 
-### Step 1 — check that anything runs at all, no signal needed
+### Step 1 — read the LED, no signal and no debugger needed
 
-Program the board, let it run, then halt it and look at these variables:
+Program the board and watch LED0:
+
+| LED0 | Meaning |
+|---|---|
+| **slow blink, 1 Hz** | running, self-test passed, no error counter has moved. This is the goal. |
+| fast blink, 5 Hz | running, but an error counter is non-zero — `dma_overrun`, `late_service`, `proc_missed`, `dma_addr_err` or `dma_bus_err`. With one channel and nothing else on the CPU that should not happen; read the counters. |
+| *n* short blinks, pause, repeat | stopped at a checkpoint; *n* is the code below. `fail_code` holds the same number. |
+| dark, or steadily on | nothing runs at all: not programmed, no power, or stopped in a debugger |
+
+The stop codes:
+
+| Code | Stopped because | Look at |
+|---|---|---|
+| 1 | PLL1 (ADC clock) did not configure or lock | `PLL1DIV`, `OSCCTRL` |
+| 2 | PLL2 (system clock) did not configure or lock | `PLL2DIV`, `OSCCTRL` |
+| 3 | CLKGEN1 did not switch to PLL2 | `CLK1CON` |
+| 4 | CLKGEN6 did not switch to PLL1 | `CLK6CON` |
+| 5 | the ADC core never reported ready | `AD1CON`, `CLK6CON.CLKRDY` |
+| 6 | no DMA blocks arrived, or the stream stopped later | `AD1CH0CNT.CNTSTAT`, `DMA0CNT`, `DMA0SEL`, `IEC2` |
+| 7 | self-test value out of range | `selftest_mean` — expected ≈ 3840, window 3648 … 4032 |
+| 8 | the DMA channel switched itself off | `dma_addr_err`, `DMALOW`, `DMAHIGH` |
+
+**What the self-test proves.** Before the external pin is used, the code runs the
+identical clock, ADC, DMA and interrupt chain on the ADC's internal 15/16·VDD reference
+(AD1AN6, Table 16-2) and checks that the mean of a buffer half is 3840 ± 5 %. Only then
+does it switch the channel to AD1AN0 — between two bursts, when the channel is idle. A
+slow blink therefore means the whole chain has been verified on the silicon in front
+of you, with a number, not just "something interrupts".
+
+With a debugger attached you can additionally halt and read the counters:
 
 | Variable | Should be |
 |---|---|
 | `blocks_done` | increasing — at 40 MSPS a buffer half completes every 25.6 µs, so this climbs fast |
-| `last_sample` | changing |
+| `selftest_mean` | ≈ 3840 |
+| `last_sample` | changing once a signal is connected; noise around some level on an open pin |
 | `dma_overrun` | **0** |
 | `dma_addr_err` | **0** — non-zero means the DMA address window is wrong |
 | `late_service`, `proc_missed` | **0** |
-
-An unconnected pin gives you noise around some level. As a sign of life that is
-perfectly sufficient — it proves clock, ADC, DMA and the ISR are working together.
-
-If `blocks_done` stops at exactly 2, the first burst ran and the restart from the ISR
-did not — `docs/TROUBLESHOOTING.md` §1.1 and §2.2 are for that.
+| `fail_code` | 0 |
 
 ### Step 2 — feed a signal in
 
-**Which pin.** The code samples `AD1AN0` (`PINSEL = 0`). Look up which physical pin
-that is on your package and check it is free on your board — if something is already
-connected there, you will be looking at that instead of your signal. The input map is
-Table 16-2 of DS70005591D, from page 1224.
+**Which pin.** The code samples `AD1AN0` (`PINSEL = 0`), which is **RA2** on the
+dsPIC33AK512MPS506 — on the Curiosity Nano the edge-connector position labelled
+*RA2 / AD1AN0* (see "The board" above). Signal to that pin, generator ground to a GND
+pin. On another board or package, the input map is Table 16-2 of DS70005591D, from
+page 1224.
 
 **What level.** 0 to 3.3 V, single ended against AVSS, unipolar (`DIFF = 0`). Anything
 with a negative excursion gets clipped at the bottom.
@@ -176,9 +241,11 @@ Which half to look at: `ready_half` says which one was completed last (0 = `buf[
 
 | Symptom | Where to look first |
 |---|---|
-| stuck before `main()`, or nothing counts up | clock configuration — a wait loop in `clock_init()` never exits |
-| `blocks_done` stays 0 | ADC not converting (`ADRDY`? `CNTSTAT`?), DMA channel disabled by the address window (`CHEN` = 0, `dma_addr_err` > 0), or wrong DMA trigger (`DMA0SEL`) |
-| `blocks_done` stops at 2 | the burst restart in the ISR did not take |
+| LED blinks a code 1 … 5 | clock or ADC configuration — the code says which step; the registers to read are in the table above |
+| LED code 6 right after programming | ADC not converting (`CNTSTAT` stays 0?), or wrong DMA trigger (`DMA0SEL`) |
+| LED code 6 after a moment of blinking | the burst restart in the ISR did not take — `docs/TROUBLESHOOTING.md` §1.1 |
+| LED code 7 | self-test mean off — read `selftest_mean`; far too low points at the sample time, way off at the clock |
+| LED code 8 | the DMA disabled itself on an address fault — `DMALOW`/`DMAHIGH` |
 | `dma_overrun` counting up | the shared DMA bus is not keeping up — see below, this is the interesting result |
 | values far too small or flat | source impedance, raise `ADC1_SAMC` |
 | values look like a straight line | signal frequency too low for a 25.6 µs window |
@@ -328,8 +395,8 @@ the cause of the next overrun.
 
 ## Which sample rates you can get
 
-All figures are **per ADC core**; the dsPIC33AK512MPS512 has five (Table 16-1,
-page 1223).
+All figures are **per ADC core**; the dsPIC33AK512MPS506 and the MPS512 both have five
+(Table 16-1, page 1223).
 
 **The basis.** The ADC clock period is TAD = 4 / F_IN, with F_IN allowed from 32 to
 320 MHz, so TAD runs from 12.5 to 125 ns (AD50, page 2034). One conversion takes the
@@ -411,6 +478,8 @@ Read these in the debugger after a run:
 | `dma_addr_err` | access outside `DMALOW`…`DMAHIGH` | 0 |
 | `last_sample` | last value of the completed half | changing = data really moving |
 | `ready_half` | which half completed last | alternating 0 / 1 |
+| `selftest_mean` | mean of a half sampled on the internal 15/16·VDD reference | ≈ 3840 |
+| `fail_code` | stop code, same number the LED blinks | 0 |
 
 A sequence we would suggest:
 
@@ -544,6 +613,6 @@ Two things that cost us time there, in case you build without the IDE:
    otherwise the compiler reports "does not seem to support the selected device"
    although the pack does contain it. `c30_device.info` lives one level down.
 2. The **linker script must be given explicitly** with `-T`
-   (`support/dsPIC33A/gld/p33AK512MPS512.gld` inside the pack). Without it the
+   (`support/dsPIC33A/gld/p33AK512MPS506.gld` inside the pack). Without it the
    compiler links against a 30F architecture and stops with "incompatible with
    30Fxxxx output".

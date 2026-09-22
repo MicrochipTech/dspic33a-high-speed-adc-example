@@ -1,4 +1,4 @@
-# dsPIC33AK512MPS512 ADC/DMA demo - build without MPLAB X or MCC
+# dsPIC33AK512MPS506 ADC/DMA demo - build without MPLAB X or MCC
 #
 # Usage:   make            build the ELF
 #          make hex        build an Intel HEX for the programmer
@@ -12,7 +12,7 @@
 XC_DSC  ?= C:/Program Files/Microchip/xc-dsc/v3.31
 DFP     ?= C:/Program Files/Microchip/MPLABX/v6.35/packs/Microchip/dsPIC33AK-MP_DFP/1.4.260/xc16
 
-MCU      = 33AK512MPS512
+MCU      = 33AK512MPS506
 GLD      = $(DFP)/support/dsPIC33A/gld/p$(MCU).gld
 
 CC       = $(XC_DSC)/bin/xc-dsc-gcc.exe

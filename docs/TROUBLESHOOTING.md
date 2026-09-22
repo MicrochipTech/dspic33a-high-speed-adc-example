@@ -10,8 +10,10 @@ waste time on the parts that are solid.
 
 **Revision 2026-09-22:** a review against the datasheet and the silicon errata found
 four real mistakes in the previous version (ADC trigger mode, DMA address limits, status
-flag clearing, buffer switching). They are fixed; the README has the list. This guide was
-rewritten to match.
+flag clearing, buffer switching). They are fixed; the README has the list. The code was
+then cut to the EV17P63A: it runs a self-test on the ADC's internal reference before it
+touches the external pin, every wait loop is bounded, and **LED0 tells you where it
+stopped** — so most of this guide starts from what the LED shows.
 
 ---
 
@@ -113,6 +115,10 @@ So you do not hunt here first. Each was read from a primary source and cross-che
   page 795.
 - **Interrupt plumbing** — DMA0 is IRQ 77, `IEC2`/`IFS2` bit 13, `INTCON1.GIE` is
   set at reset; the linked ELF has `_DMA0Interrupt` at IVT entry 85.
+- **Board facts** — LED0 on RD0, lit when driven low; AD1AN0 on RA2; SW0 on RC3
+  (user guide DS70005634A, Figure 1-3, Tables 4-1/4-2; 64-pin pinout in DS70005591D).
+- **Self-test input** — AD1AN6 is the internal 15/16·VDD reference on every package
+  (Table 16-2), the datasheet samples it the same way (Example 16-3).
 - **`FICD_NOBTSWP` values** — read from both pack versions, see the README.
 
 ---
@@ -142,32 +148,36 @@ Other build failures worth knowing:
 | `incompatible with 30Fxxxx output` | the linker script was not passed; MPLAB X does this for you |
 | toolchain version warning on opening the project | harmless — *Project Properties → XC-DSC*, select the version you have |
 
-### 2.1 It never reaches `main()`, or halts immediately
+### 2.1 The LED blinks a code — it stopped at a checkpoint
 
-Almost certainly a wait loop in `clock_init()` or `adc1_init()`. Halt the debugger and
-look at **which line** you are on — each one tells you something different:
+Nothing in this code waits forever. Every hardware wait is bounded by `WAIT_LIMIT`
+iterations; when it runs out, `fail(code)` switches the DMA off, stores the code in
+`fail_code`, and blinks it on LED0: *code* short blinks, a long pause, repeat. With a
+debugger you land in `fail()` and `fail_code` tells you the same.
 
-| Stuck at | Meaning | Where to look |
-|---|---|---|
-| `while (PLL1CONbits.PLLSWEN)` | the input/feedback divider update was not accepted | `PLL1DIV`: M outside 16…320, or F_PFD below 5 MHz |
-| `while (PLL1CONbits.FOUTSWEN)` | the output divider update was not accepted | `POSTDIV1` must be ≥ `POSTDIV2`, and page 778 says the output dividers must not change while the PLL is running |
-| `while (PLL1CONbits.OSWEN)` | the PLL will not switch to its source | `NOSC` in `PLL1CON` — is the FRC running? |
-| `while (!OSCCTRLbits.PLL1RDY)` | PLL1 does not lock | F_VCO outside 500…1600 MHz. Read back `PLL1DIV` — if it is not the value you wrote, a `…SWEN` step was skipped |
-| the same in `PLL2…` | as above, for the system clock | same checks on `PLL2DIV` |
-| `while (CLK1CONbits.OSWEN)` | clock generator 1 will not switch | `NOSC = 0x6` (PLL2 out) — is PLL2 locked? |
-| `while (CLK6CONbits.OSWEN)` | clock generator 6 will not switch | `NOSC = 0x5` (PLL1 out) — is PLL1 locked? |
-| `while (!AD1CONbits.ADRDY)` | the ADC core never comes up | is CLKGEN6 running? Read `CLK6CONbits.CLKRDY` |
+| Code | Where it gave up | Meaning | Where to look |
+|---|---|---|---|
+| 1 | `clock_init()`, PLL1 | `PLLSWEN`, `FOUTSWEN` or `OSWEN` did not clear, or `PLL1RDY` never came | `PLL1DIV`: M outside 16…320, F_PFD below 5 MHz, F_VCO outside 500…1600 MHz, `POSTDIV1` < `POSTDIV2`. Read `PLL1DIV` back — if it is not the value the code wrote, a `…SWEN` step was skipped |
+| 2 | `clock_init()`, PLL2 | as above, for the system clock | same checks on `PLL2DIV` |
+| 3 | `clock_init()`, CLKGEN1 | clock generator 1 will not switch to PLL2 (or back to the FRC at the start) | `CLK1CON`: `NOSC = 0x6`, is `PLL2RDY` set? |
+| 4 | `clock_init()`, CLKGEN6 | clock generator 6 will not switch to PLL1 | `CLK6CON`: `NOSC = 0x5`, is `PLL1RDY` set? |
+| 5 | `adc1_init()` | the ADC core never reported `ADRDY` | is CLKGEN6 running? `CLK6CONbits.CLKRDY` |
+| 6 | self-test or main loop | no buffer half completed within the limit | §2.2 |
+| 7 | self-test | mean on the internal reference outside 3648 … 4032 | §2.4, `selftest_mean` |
+| 8 | self-test or main loop | `DMA0CHbits.CHEN` went to 0 on its own | address fault: `dma_addr_err`, `DMALOW`, `DMAHIGH` |
 
-**Read back `PLL1DIV` and `PLL2DIV` while halted.** If they do not contain what the
-code wrote, the divider update never took effect — that is the failure mode §1.2
-describes, and it is silent.
+The blink *speed* depends on which clock the CPU is on when it stops (8 MHz FRC for
+codes 1 and 2, 200 MHz afterwards); the code is chosen so that it reads the same either
+way. Count the blinks, not the tempo.
 
-**In the simulator all of these hang** — it models no PLL and no ADC. That is expected,
-see the README. Use a hardware debugger.
+**In the simulator you always get code 1** — it models no PLL, so the first wait times
+out. That is expected, see the README. Use the board.
 
-### 2.2 It runs, but `blocks_done` stays at 0 — or stops at 2
+### 2.2 Code 6: no blocks arrive, or the stream stops
 
-Work through this in order:
+Code 6 right after programming means the first buffer half never completed. Code 6
+after the LED has blinked for a while means the stream ran and then stopped — almost
+always the burst restart (§1.1). Halt and work through this in order:
 
 1. **Is the ADC converting?** Halt and read `AD1CH0CNTbits.CNTSTAT`: it counts the
    conversions of the current burst. 0 means the burst never started — check
@@ -189,6 +199,10 @@ Work through this in order:
    did not take. See §1.1 — read `AD1STATbits.CH0RDY` and `AD1CH0CNTbits.CNTSTAT`
    while halted.
 
+If `DMA0CHbits.CHEN` is 0 you get code 8 instead of 6: the DMA disabled itself, which
+it only does on an address outside `DMALOW`…`DMAHIGH` (p829 step 5). Check the two
+window registers contain `0x4000` and `0x13FFF`.
+
 ### 2.3 `dma_overrun` is counting up
 
 **This is not a bug — it is the measurement.** It means the DMA channel was triggered
@@ -207,7 +221,21 @@ What to do with the result:
 and nothing else running, an overrun means the bus lost against something — check that
 no other DMA channel is enabled and that no other interrupt is hogging the CPU.
 
-### 2.4 The values look wrong
+### 2.4 The values look wrong — or the self-test fails (code 7)
+
+The self-test samples AD1AN6, the ADC's internal 15/16·VDD reference (Table 16-2,
+p1224), with the sample time the datasheet uses for it (`SAMC = 3`, Example 16-3), and
+expects a mean of 3840 ± 5 %. `selftest_mean` holds what it saw:
+
+| `selftest_mean` | Most likely cause |
+|---|---|
+| 0 or a few counts | the DMA is copying from the wrong register, or the ADC is not converting at all — compare `AD1CH0RES` in the watch window |
+| a few hundred, far below 3840 | sample time too short for the internal reference — raise `SELFTEST_SAMC` |
+| 4095 | reference saturated — `VDD` and `AVDD` differ, or `DIFF`/`FRAC` are not 0 |
+| plausible but outside the window | gain error larger than expected; widen `SELFTEST_MIN`/`MAX` and note the value — this is real device information |
+| values above 4095 | the DMA source is the accumulator — `DMA0SRC` must be `&AD1CH0RES` |
+
+For the external input, after the self-test passed:
 
 | What you see | Most likely cause | What to do |
 |---|---|---|
@@ -238,11 +266,13 @@ next one was done. Both usually mean something else is consuming the CPU:
 
 If nothing above fits, strip the problem down. Each step is provable on its own:
 
-1. **Does the CPU run at all?** Comment out everything except a GPIO toggle in the main
-   loop. See it on a scope or an LED. This separates "device and toolchain work" from
-   "our configuration works".
-2. **Does the clock setup survive?** Keep `clock_init()`, then toggle a pin in a
-   counted loop. The period tells you the real CPU frequency (see §1.2).
+1. **Does the CPU run at all?** Call `fail(3)` as the first line of `main()`: LED0
+   must blink three times and pause. If it does not, the board is not programmed, not
+   powered, or LED0 is not on RD0 (a different board). This separates "device and
+   toolchain work" from "our configuration works".
+2. **Does the clock setup survive?** Keep `clock_init()`, then `fail(3)` right after
+   it. The blink is now 25 times faster than in step 1 if PLL2 drives the CPU — the
+   `fail()` timing assumes 200 MHz once `CLK1CON.COSC` reports PLL2 (see §1.2).
 3. **Does the ADC convert without DMA?** Comment out `dma0_init()`, trigger one burst
    with `adc1_start_burst()` and watch `AD1CH0CNTbits.CNTSTAT` climb to 2048 and
    `AD1STATbits.CH0RDY` go to 1. Now you have ADC values with no DMA in the way.
@@ -264,8 +294,9 @@ Please do, and bring this with you — it turns guesswork into a diagnosis:
   `AD1CH0RES`, `AD1CH0DATA`, `DMACON`, `DMALOW`, `DMAHIGH`, `DMA0CH`, `DMA0SEL`,
   `DMA0STAT`, `DMA0CNT`, `DMA0DST`, `PLL1CON`, `PLL1DIV`, `PLL2CON`, `PLL2DIV`,
   `CLK1CON`, `CLK1DIV`, `CLK6CON`, `CLK6DIV`, `OSCCTRL`, `IEC2`, `IFS2`
+- **The LED pattern** you saw, and `fail_code`
 - **The counters:** `blocks_done`, `dma_overrun`, `late_service`, `proc_missed`,
-  `dma_bus_err`, `dma_addr_err`, `last_sample`, `ready_half`
+  `dma_bus_err`, `dma_addr_err`, `last_sample`, `ready_half`, `selftest_mean`
 - **The first 32 values** from the half that was complete
 - **Your versions:** MPLAB X, XC-DSC, dsPIC33AK-MP_DFP — and which board and silicon
   revision (errata below)

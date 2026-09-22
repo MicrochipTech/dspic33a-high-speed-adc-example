@@ -22,7 +22,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-MCU = "33AK512MPS512"
+MCU = "33AK512MPS506"
 PACK_NAME = "dsPIC33AK-MP_DFP"
 SOURCE = "adc_dma_40msps.c"      # lives one level up, next to the .X project
 

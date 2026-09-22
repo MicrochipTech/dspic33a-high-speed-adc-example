@@ -1,9 +1,11 @@
 %%{init: {'theme':'neutral', 'flowchart':{'curve':'basis','nodeSpacing':30,'rankSpacing':40,'htmlLabels':true}}}%%
 flowchart LR
 
+    ST["<b>Self-test first</b><br/>AD1AN6 = internal 15/16·VDD<br/>mean of a half must be ≈ 3840<br/>then switch to AD1AN0"] --> BUFS
     BUFS["buf[2048]<br/>one half is filling,<br/>the other is complete"] == "HALF or DONE flag" ==> ISR["<b>DMA0 ISR</b><br/>clear flags by writing 0<br/>note which half is ready<br/>at DONE: start the next ADC burst"]
-    ISR --> CNT[["<b>What to read in the debugger</b><br/>blocks_done × 1024 / time = actual rate<br/><b>dma_overrun</b> → must stay 0<br/><b>late_service</b>, <b>proc_missed</b> → must stay 0<br/>last_sample changes = data is moving"]]
+    ISR --> CNT[["<b>What to read in the debugger</b><br/>blocks_done × 1024 / time = actual rate<br/><b>dma_overrun</b> → must stay 0<br/><b>late_service</b>, <b>proc_missed</b> → must stay 0<br/>selftest_mean ≈ 3840, fail_code = 0"]]
     ISR --> PROC["process_buffer()<br/>the '+ and −' maths<br/>on the complete half"]
+    PROC --> LED(["<b>LED0 (RD0)</b><br/>1 Hz = running, clean<br/>5 Hz = running, a counter moved<br/>n blinks + pause = stopped, code n"])
     CNT --> ANS(["<b>The question this answers:</b><br/>3 ch × 40 MSPS × 2 B = 240 MB/s<br/>5 ch = 400 MB/s<br/>over that one bus —<br/>the datasheet gives no figure"])
     PROC -. "if it cannot keep up" .-> FIX(["ACCNUM averages<br/>4 / 16 / 64 / 256 samples<br/>inside the ADC (MODE = 3):<br/>16× → 240 MB/s becomes 15 MB/s<br/>result still fits in 2 byte"])
 
@@ -15,6 +17,8 @@ flowchart LR
     classDef buf  fill:#ffffff,stroke:#5f6368
 
     class BUFS buf
+    class ST adc
     class ISR,PROC cpu
     class CNT,ANS warn
+    class LED dma
     class FIX adc
