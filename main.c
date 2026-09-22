@@ -87,6 +87,7 @@ int main(void)
     boot_mark(8u);
 
     console_puts("[boot] self-test passed, measurement running on the external input\r\n");
+    counters_clear();                 /* the self-test halves were not serviced */
     capture_start();
     boot_mark(9u);
     led_mode(2u);                     /* heartbeat                       */

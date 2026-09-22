@@ -869,6 +869,11 @@ void counters_clear(void)
 {
     dma_overrun = 0; dma_addr_err = 0; dma_bus_err = 0;
     late_service = 0; proc_missed = 0;
+    /* Halves completed up to now are not "missed" from here on. Without
+     * this the first capture_service() after the self-test books its
+     * 12 unserviced halves as proc_missed, and the heartbeat goes to the
+     * error rate before the measurement has even started. */
+    seen_blocks = blocks_done;
 }
 
 void led_init(void)
