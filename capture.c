@@ -189,6 +189,14 @@ bool dma0_enabled(void)
     return DMA0CHbits.CHEN != 0u;
 }
 
+/* Switch the stream off hard, so that a 40 MSPS stream does not keep
+ * hammering the bus while fail() or a trap handler prints. */
+void capture_halt(void)
+{
+    IEC2bits.DMA0IE = 0;
+    DMA0CHbits.CHEN = 0;
+}
+
 /* ------------------------------------------------------------------ *
  * DMA interrupt - one per buffer half
  *
@@ -415,4 +423,29 @@ uint32_t capture_selftest(uint32_t *mean)
         capture_stop();
     }
     return rc;
+}
+
+void capture_regs_dump(void)
+{
+    console_puts("[regs] dma\r\n");
+    console_kv_hex("DMACON", DMACON);
+    console_kv_hex("DMALOW", DMALOW);
+    console_kv_hex("DMAHIGH", DMAHIGH);
+    console_kv_hex("DMA0CH", DMA0CH);
+    console_kv_hex("DMA0SEL", DMA0SEL);
+    console_kv_hex("DMA0STAT", DMA0STAT);
+    console_kv_hex("DMA0SRC", DMA0SRC);
+    console_kv_hex("DMA0DST", DMA0DST);
+    console_kv_hex("DMA0CNT", DMA0CNT);
+    console_kv_hex("IEC2", IEC2);           /* DMA0 enable,  bit 13      */
+    console_kv_hex("IFS2", IFS2);           /* DMA0 flag,    bit 13      */
+    console_kv_hex("IPC9", IPC9);           /* DMA0 priority             */
+    console_puts("[regs] counters\r\n");
+    console_kv("blocks_done", blocks_done);
+    console_kv("dma_overrun", dma_overrun);
+    console_kv("late_service", late_service);
+    console_kv("proc_missed", proc_missed);
+    console_kv("dma_addr_err", dma_addr_err);
+    console_kv("dma_bus_err", dma_bus_err);
+    console_kv("selftest_mean", selftest_mean);
 }

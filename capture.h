@@ -33,6 +33,9 @@ extern volatile int32_t  proc_result;    /* output of process_buffer()     */
 void dma0_init(void);
 /* False once the DMA switched itself off (address fault). */
 bool dma0_enabled(void);
+/* Stream off hard: DMA interrupt masked, channel disabled. For fail()
+ * and the trap handlers; nothing restarts after this. */
+void capture_halt(void);
 
 /* Start the burst stream; a no-op while it runs. */
 void capture_start(void);
@@ -64,5 +67,8 @@ bool capture_service(void);
 const volatile uint16_t *capture_completed_half(void);
 
 void counters_clear(void);
+
+/* DMA registers and the counters as "name: ..." lines (part of regs_dump()). */
+void capture_regs_dump(void);
 
 #endif /* CAPTURE_H */

@@ -47,4 +47,7 @@ void    adc_set_input(uint8_t pinsel, uint8_t samc);
 uint8_t adc_pinsel(void);
 uint8_t adc_samc(void);
 
+/* The core's registers as "name: 0x........" lines (part of regs_dump()). */
+void adc_regs_dump(void);
+
 #endif /* ADC_H */

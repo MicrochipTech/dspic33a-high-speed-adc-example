@@ -98,3 +98,16 @@ void adc_start_burst(void)
     (void)ADCREG(CH0DATA);
     ADCREG(SWTRGbits).CH0TRG = 1u;
 }
+
+void adc_regs_dump(void)
+{
+    console_puts("[regs] adc\r\n");
+    console_kv_hex("ADxCON", ADCREG(CON));
+    console_kv_hex("ADxSTAT", ADCREG(STAT));
+    console_kv_hex("ADxCH0CON1", ADCREG(CH0CON1));
+    console_kv_hex("ADxCH0CNT", ADCREG(CH0CNT));
+    console_kv_hex("ADxCH0RES", ADCREG(CH0RES));
+    console_kv_hex("ADxCH0DATA", ADCREG(CH0DATA));
+    console_kv_hex("IEC6", IEC6);           /* AD3CH0 enable,  bit 9     */
+    console_kv_hex("IFS6", IFS6);           /* AD3CH0 flag,    bit 9     */
+}

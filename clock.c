@@ -15,8 +15,24 @@
 
 #include <xc.h>
 #include "clock.h"
+#include "capture.h"
 #include "console.h"
 #include "diag.h"
+
+/* NOSC / COSC values, from the ATDF value-group CLK1_CON__COSC. */
+#define NOSC_FRC        0x1u
+#define NOSC_PLL1_OUT   0x5u
+#define NOSC_PLL2_OUT   0x6u
+
+bool clock_cpu_on_pll(void)
+{
+    return CLK1CONbits.COSC == NOSC_PLL2_OUT;
+}
+
+uint32_t clock_cpu_hz(void)
+{
+    return clock_cpu_on_pll() ? 200000000ul : 8000000ul;
+}
 
 /* ------------------------------------------------------------------ *
  * Clock setup
@@ -162,8 +178,7 @@ void clock_init(void)
 void __attribute__((interrupt, no_auto_psv)) _CLKFInterrupt(void)
 {
     IFS0bits.CLKFAILIF = 0u;
-    IEC2bits.DMA0IE = 0;
-    DMA0CHbits.CHEN = 0;
+    capture_halt();
     console_force_up();
     console_puts("\r\n[CLKF] clock fail: the FSCM switched the CPU to the backup FRC\r\n");
     console_kv_hex("[CLKF] OSCCTRL", OSCCTRL);
@@ -171,4 +186,20 @@ void __attribute__((interrupt, no_auto_psv)) _CLKFInterrupt(void)
     console_kv_hex("[CLKF] CLK1CON", CLK1CON);
     console_kv("[CLKF] reached boot stage", boot_stage);
     fail(10u);
+}
+
+void clock_regs_dump(void)
+{
+    console_puts("[regs] clock\r\n");
+    console_kv_hex("OSCCTRL", OSCCTRL);
+    console_kv_hex("PLL1CON", PLL1CON);
+    console_kv_hex("PLL1DIV", PLL1DIV);
+    console_kv_hex("PLL2CON", PLL2CON);
+    console_kv_hex("PLL2DIV", PLL2DIV);
+    console_kv_hex("CLK1CON", CLK1CON);
+    console_kv_hex("CLK1DIV", CLK1DIV);
+    console_kv_hex("CLK6CON", CLK6CON);
+    console_kv_hex("CLK6DIV", CLK6DIV);
+    console_kv_hex("IEC0", IEC0);           /* CLKFAIL enable, bit 9     */
+    console_kv_hex("IFS0", IFS0);           /* CLKFAIL flag,   bit 9     */
 }

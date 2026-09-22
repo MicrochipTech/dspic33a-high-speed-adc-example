@@ -9,7 +9,6 @@
 
 #include <xc.h>
 #include <libpic30.h>       /* __delay32()                                 */
-#include "board.h"
 #include "diag.h"
 #include "clock.h"
 #include "adc.h"
@@ -176,10 +175,7 @@ void __attribute__((interrupt, no_auto_psv)) _DefaultInterrupt(void)
     trap_vec   = vec;
     trap_stage = boot_stage;
 
-    /* Stop the measurement, so a 40 MSPS stream does not keep hammering
-     * the bus while we print. */
-    IEC2bits.DMA0IE = 0;
-    DMA0CHbits.CHEN = 0;
+    capture_halt();
     INTCON1bits.GIE = 0;
 
     /* LED on before the first character is attempted. Printing needs a
@@ -191,8 +187,7 @@ void __attribute__((interrupt, no_auto_psv)) _DefaultInterrupt(void)
     trap_report(vec);
 
     fail_code = 9u;
-    const uint32_t ms100 = (CLK1CONbits.COSC == NOSC_PLL2_OUT)
-                           ? 20000000ul : 800000ul;
+    const uint32_t ms100 = clock_cpu_hz() / 10u;
     for (;;) {
         for (uint32_t i = 0; i < 9u; i++) {
             led_on();  __delay32(2u * ms100);
@@ -205,8 +200,7 @@ void __attribute__((interrupt, no_auto_psv)) _DefaultInterrupt(void)
 void fail(uint32_t code)
 {
     fail_code = code;
-    IEC2bits.DMA0IE = 0;
-    DMA0CHbits.CHEN = 0;
+    capture_halt();
 
     /* Say why, with everything a reader needs, before blinking forever.
      * The UART is up from the first line of main() on, so this works for
@@ -221,9 +215,8 @@ void fail(uint32_t code)
     console_puts("[FAIL] LED0 blinks the code from now on\r\n");
 
     /* 100 ms in CPU cycles: 200 MHz once PLL2 drives CLKGEN1, else the
-     * 8 MHz FRC we started on. */
-    const uint32_t ms100 = (CLK1CONbits.COSC == NOSC_PLL2_OUT)
-                           ? 20000000ul : 800000ul;
+     * 8 MHz FRC we started on - clock.c knows which. */
+    const uint32_t ms100 = clock_cpu_hz() / 10u;
     for (;;) {
         for (uint32_t i = 0; i < code; i++) {
             led_on();  __delay32(2u * ms100);
@@ -235,67 +228,17 @@ void fail(uint32_t code)
 
 /* ------------------------------------------------------------------ *
  * Register dump - what Part 4 of docs/TROUBLESHOOTING.md asks for
+ *
+ * Each module prints its own registers; this only sets the order and
+ * adds what belongs to nobody else.
  * ------------------------------------------------------------------ */
 void regs_dump(void)
 {
-    console_puts("[regs] clock\r\n");
-    console_kv_hex("OSCCTRL", OSCCTRL);
-    console_kv_hex("PLL1CON", PLL1CON);
-    console_kv_hex("PLL1DIV", PLL1DIV);
-    console_kv_hex("PLL2CON", PLL2CON);
-    console_kv_hex("PLL2DIV", PLL2DIV);
-    console_kv_hex("CLK1CON", CLK1CON);
-    console_kv_hex("CLK1DIV", CLK1DIV);
-    console_kv_hex("CLK6CON", CLK6CON);
-    console_kv_hex("CLK6DIV", CLK6DIV);
-    console_puts("[regs] adc\r\n");
-    console_kv_hex("ADxCON", ADCREG(CON));
-    console_kv_hex("ADxSTAT", ADCREG(STAT));
-    console_kv_hex("ADxCH0CON1", ADCREG(CH0CON1));
-    console_kv_hex("ADxCH0CNT", ADCREG(CH0CNT));
-    console_kv_hex("ADxCH0RES", ADCREG(CH0RES));
-    console_kv_hex("ADxCH0DATA", ADCREG(CH0DATA));
-    console_puts("[regs] dma\r\n");
-    console_kv_hex("DMACON", DMACON);
-    console_kv_hex("DMALOW", DMALOW);
-    console_kv_hex("DMAHIGH", DMAHIGH);
-    console_kv_hex("DMA0CH", DMA0CH);
-    console_kv_hex("DMA0SEL", DMA0SEL);
-    console_kv_hex("DMA0STAT", DMA0STAT);
-    console_kv_hex("DMA0SRC", DMA0SRC);
-    console_kv_hex("DMA0DST", DMA0DST);
-    console_kv_hex("DMA0CNT", DMA0CNT);
-    console_puts("[regs] interrupts, uart\r\n");
-    console_kv_hex("IEC2", IEC2);           /* DMA0 enable,  bit 13      */
-    console_kv_hex("IFS2", IFS2);           /* DMA0 flag,    bit 13      */
-    console_kv_hex("IPC9", IPC9);           /* DMA0 priority             */
+    clock_regs_dump();
+    adc_regs_dump();
+    capture_regs_dump();
+    console_regs_dump();
+    console_puts("[regs] cpu\r\n");
     console_kv_hex("INTCON1", INTCON1);
-    console_kv_hex("IEC3", IEC3);           /* U2RX enable,  bit 6       */
-    console_kv_hex("IFS3", IFS3);           /* U2RX flag,    bit 6       */
-    console_kv_hex("IPC12", IPC12);         /* U2RX priority, bits 26:24 */
-    console_kv_hex("IEC0", IEC0);           /* CLKFAIL enable, bit 9     */
-    console_kv_hex("IFS0", IFS0);           /* CLKFAIL flag,   bit 9     */
-    console_kv_hex("IEC6", IEC6);           /* AD3CH0 enable,  bit 9     */
-    console_kv_hex("IFS6", IFS6);           /* AD3CH0 flag,    bit 9     */
-    console_kv_hex("U2CON", U2CON);
-    console_kv_hex("U2STAT", U2STAT);
-    console_kv_hex("U2BRG", U2BRG);
-    /* Pin routing of the console itself: with a silent terminal these say
-     * whether console_early_init() took effect. Expected: IOLOCK set,
-     * RP114R (bits 14:8 of RPOR28) = 21 = 0x15, U2RXR (bits 23:16 of
-     * RPINR13) = 50 = 0x32, TRISH bit 1 clear, TRISD bit 1 set. */
-    console_kv_hex("RPCON", RPCON);
-    console_kv_hex("RPOR28", RPOR28);
-    console_kv_hex("RPINR13", RPINR13);
-    console_kv_hex("TRISH", TRISH);
-    console_kv_hex("TRISD", TRISD);
-    console_puts("[regs] counters\r\n");
-    console_kv("blocks_done", blocks_done);
-    console_kv("dma_overrun", dma_overrun);
-    console_kv("late_service", late_service);
-    console_kv("proc_missed", proc_missed);
-    console_kv("dma_addr_err", dma_addr_err);
-    console_kv("dma_bus_err", dma_bus_err);
-    console_kv("selftest_mean", selftest_mean);
     console_kv("fail_code", fail_code);
 }

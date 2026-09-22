@@ -61,6 +61,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "board.h"
+#include "clock.h"
 #include "capture.h"
 #include "led.h"
 #include "diag.h"
@@ -147,7 +148,7 @@ static void console_drain(void)
  * can have happened anywhere, including inside clock_init() or after some
  * other code disturbed the peripheral, and in that situation
  * console_sync_baud() is not enough: it only fixes the baud divider, and
- * it trusts CLK1CON to say what the clock is. Here the routing is written
+ * it trusts clock.c to say what the clock is. Here the routing is written
  * again and the baud rate is picked from the clock the CPU is actually
  * on, so the one message that explains the fault has the best chance of
  * getting out.
@@ -166,7 +167,7 @@ void console_force_up(void)
     CONSOLE_TX_RPOR  = CONSOLE_TX_FN;
     RPCONbits.IOLOCK = 1u;
 
-    uart2_setup((CLK1CONbits.COSC == 0x6u) ? UART_BRG_PLL : UART_BRG_FRC);
+    uart2_setup(clock_cpu_on_pll() ? UART_BRG_PLL : UART_BRG_FRC);
 }
 
 /* Make the baud generator match whatever clock the CPU is on right now.
@@ -174,7 +175,7 @@ void console_force_up(void)
  * cli_init() would otherwise print at the wrong rate. */
 void console_sync_baud(void)
 {
-    const uint32_t want = (CLK1CONbits.COSC == 0x6u) ? UART_BRG_PLL : UART_BRG_FRC;
+    const uint32_t want = clock_cpu_on_pll() ? UART_BRG_PLL : UART_BRG_FRC;
     if (U2BRG != want) {
         console_drain();
         uart2_setup(want);
@@ -282,6 +283,26 @@ void console_kv_hex(const char *key, uint32_t v)
     console_puts(key);
     console_puts(": ");
     console_puts(num);
+}
+
+void console_regs_dump(void)
+{
+    console_puts("[regs] uart\r\n");
+    console_kv_hex("IEC3", IEC3);           /* U2RX enable,  bit 6       */
+    console_kv_hex("IFS3", IFS3);           /* U2RX flag,    bit 6       */
+    console_kv_hex("IPC12", IPC12);         /* U2RX priority, bits 26:24 */
+    console_kv_hex("U2CON", U2CON);
+    console_kv_hex("U2STAT", U2STAT);
+    console_kv_hex("U2BRG", U2BRG);
+    /* Pin routing of the console itself: with a silent terminal these say
+     * whether console_early_init() took effect. Expected: IOLOCK set,
+     * RP114R (bits 14:8 of RPOR28) = 21 = 0x15, U2RXR (bits 23:16 of
+     * RPINR13) = 50 = 0x32, TRISH bit 1 clear, TRISD bit 1 set. */
+    console_kv_hex("RPCON", RPCON);
+    console_kv_hex("RPOR28", RPOR28);
+    console_kv_hex("RPINR13", RPINR13);
+    console_kv_hex("TRISH", TRISH);
+    console_kv_hex("TRISD", TRISD);
 }
 
 static void put_kv(const char *key, uint32_t v)
