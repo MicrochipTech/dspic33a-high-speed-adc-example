@@ -2,7 +2,6 @@
 #
 # Usage:   make            firmware for the board  -> ../build/adc_dma_40msps.elf
 #          make hex        Intel HEX for the programmer
-#          make sim        simulator build for sim_cli.py -> ../build/adc_dma_40msps_sim.elf
 #          make size       section sizes
 #          make clean
 #
@@ -31,7 +30,7 @@ OUTDIR   = ../build
 CFLAGS   = -mcpu=$(MCU) -mdfp="$(DFP)" -O1 -Wall -Wextra
 LDFLAGS  = -T"$(GLD)"
 
-.PHONY: all hex sim size clean
+.PHONY: all hex size clean
 
 all: $(OUTDIR)/$(TARGET).elf
 
@@ -41,13 +40,6 @@ $(OUTDIR):
 $(OUTDIR)/$(TARGET).elf: $(SRC) $(HDR) | $(OUTDIR)
 	"$(CC)" $(CFLAGS) $(LDFLAGS) $(SRC) -o $@
 
-# Same sources, but the simulator flavour: no clock/ADC/DMA, console from
-# the RAM mailbox, debug symbols for sim_cli.py.
-sim: $(OUTDIR)/$(TARGET)_sim.elf
-
-$(OUTDIR)/$(TARGET)_sim.elf: $(SRC) $(HDR) | $(OUTDIR)
-	"$(CC)" $(CFLAGS) -g -D__MPLAB_DEBUGGER_SIMULATOR=1 $(LDFLAGS) $(SRC) -o $@
-
 hex: $(OUTDIR)/$(TARGET).elf
 	"$(BIN2HEX)" $(OUTDIR)/$(TARGET).elf
 
@@ -55,4 +47,4 @@ size: $(OUTDIR)/$(TARGET).elf
 	"$(OBJDUMP)" -h $(OUTDIR)/$(TARGET).elf
 
 clean:
-	rm -f $(OUTDIR)/$(TARGET).elf $(OUTDIR)/$(TARGET).hex $(OUTDIR)/$(TARGET)_sim.elf $(OUTDIR)/*.uart.txt
+	rm -f $(OUTDIR)/$(TARGET).elf $(OUTDIR)/$(TARGET).hex

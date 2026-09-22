@@ -12,17 +12,6 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-/* Build flavour. MPLAB X defines __MPLAB_DEBUGGER_SIMULATOR when the
- * project's tool is the simulator; tools/sim_cli.py passes it explicitly.
- * In that build the clock, ADC and DMA are not touched (the simulator does
- * not model them) and the console reads from a RAM mailbox instead of the
- * UART receiver (which the simulator does not model either). */
-#if defined(__MPLAB_DEBUGGER_SIMULATOR)
-#define SIM_BUILD 1
-#else
-#define SIM_BUILD 0
-#endif
-
 /* ---- Compile-time configuration (documented in README) ---- */
 
 /* ADC core and input. EV74H48A defaults: ADC3, AD3AN5 = mikroBUS A pin AN
@@ -98,6 +87,5 @@ void fail(uint32_t code);
 
 /* ---- Console (implemented in cli.c) ---- */
 void cli_init(void);
-void cli_poll(void);
 
 #endif /* ADC_DMA_40MSPS_H */

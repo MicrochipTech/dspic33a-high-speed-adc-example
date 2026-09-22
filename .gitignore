@@ -30,6 +30,5 @@ adc_dma_40msps.X/nbproject/Makefile-*.mk
 adc_dma_40msps.X/nbproject/Makefile-genesis.properties
 adc_dma_40msps.X/nbproject/private/
 
-# Command-line build output (tools/build.bat) and the simulator's UART capture
+# Command-line build output (tools/build.bat)
 build/
-*.uart.txt

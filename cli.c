@@ -24,15 +24,6 @@
  *   matters. Ctrl+C aborts a long reply: the yield hook, which runs
  *   while the transmit buffer is full, peeks at the receiver for it.
  *
- * Simulator build
- *   The MPLAB X simulator writes UART1 output to a file but has no model
- *   for UART reception on this device. The simulator build therefore
- *   takes its input from a RAM mailbox that tools/sim_cli.py fills
- *   through the debugger: sim_rx_words[] holds the line, four characters
- *   per 32-bit word, and sim_rx_len (written last) says how many bytes
- *   are valid. cli_poll() feeds it to the parser and clears the count.
- *   The transmit path is the real UART either way.
- *
  * Commands
  *   help                       list of commands (built into the parser)
  *   version                    build, board, ADC core and input
@@ -68,14 +59,8 @@
 /* Baud rate. UART clock = Standard Speed Peripheral Clock, 100 MHz
  * (1:2 of the 200 MHz CPU clock). CLKMOD = 1 selects the fractional
  * baud generator, where BRG = F_clk / baud (no -1): 100 000 000 / 115 200
- * = 868 -> 115 207 baud, the value MCC generates for this board.
- * In the simulator the CPU runs on the 8 MHz FRC at about 1/80 of real
- * time; a small integer divisor keeps the output moving. */
-#if SIM_BUILD
-#define UART_BRG          1u
-#else
+ * = 868 -> 115 207 baud, the value MCC generates for this board. */
 #define UART_BRG          868u
-#endif
 
 #define UART_RX_PRIORITY  1u      /* below the DMA interrupt (4)        */
 
@@ -91,9 +76,7 @@ static void uart1_init(void)
     RPCONbits.IOLOCK = 1u;
 
     U1CON = 0u;
-#if !SIM_BUILD
     U1CONbits.CLKMOD = 1u;            /* fractional baud generator      */
-#endif
     U1CONbits.CLKSEL = 0u;            /* standard speed peripheral clock*/
     U1CONbits.MODE   = 0u;            /* 8-bit, no parity               */
     U1CONbits.STP    = 0u;            /* one stop bit                   */
@@ -103,12 +86,10 @@ static void uart1_init(void)
     U1CONbits.TXEN = 1u;
     U1CONbits.RXEN = 1u;
 
-#if !SIM_BUILD
     /* Receive interrupt: IRQ 98, IEC3/IFS3 bit 2, priority in IPC12. */
     IPC12bits.U1RXIP = UART_RX_PRIORITY;
     IFS3bits.U1RXIF  = 0u;
     IEC3bits.U1RXIE  = 1u;
-#endif
 }
 
 /* Output sink for the parser: take what fits into the transmit FIFO and
@@ -126,8 +107,8 @@ static size_t console_write(const char *data, size_t len)
 /* Called by the parser while the transmit FIFO is full. Nothing to yield
  * to on a bare-metal build, but this is the moment to look for Ctrl+C:
  * a long reply must be abortable, and while it drains the receive
- * interrupt cannot run (we are inside it on hardware). Other bytes typed
- * during a reply are dropped. */
+ * interrupt cannot run (we are inside it). Other bytes typed during a
+ * reply are dropped. */
 static void console_yield(void)
 {
     while (!U1STATbits.RXBE) {
@@ -137,7 +118,6 @@ static void console_yield(void)
     }
 }
 
-#if !SIM_BUILD
 /* The parser thread: every received byte goes to the line editor, and
  * a completed line is dispatched right here, in interrupt context. */
 void __attribute__((interrupt, no_auto_psv)) _U1RXInterrupt(void)
@@ -146,33 +126,6 @@ void __attribute__((interrupt, no_auto_psv)) _U1RXInterrupt(void)
         cmd_parser_feed_char((char)U1RXB);
     }
     IFS3bits.U1RXIF = 0u;
-}
-#endif
-
-/* ------------------------------------------------------------------ *
- * Simulator mailbox (see the file header)
- * ------------------------------------------------------------------ */
-#if SIM_BUILD
-#define SIM_MBOX_WORDS 16u
-volatile uint32_t sim_rx_words[SIM_MBOX_WORDS] __attribute__((aligned(4)));
-volatile uint32_t sim_rx_len = 0u;   /* bytes valid; the host writes it last */
-#endif
-
-void cli_poll(void)
-{
-#if SIM_BUILD
-    const uint32_t n = sim_rx_len;
-    if (n != 0u) {
-        const uint32_t lim = (n > 4u * SIM_MBOX_WORDS) ? 4u * SIM_MBOX_WORDS : n;
-        for (uint32_t i = 0; i < lim; i++) {
-            const uint32_t w = sim_rx_words[i / 4u];
-            cmd_parser_feed_char((char)((w >> (8u * (i % 4u))) & 0xFFu));
-        }
-        sim_rx_len = 0u;
-    }
-#else
-    /* On hardware the receive interrupt does the feeding. */
-#endif
 }
 
 /* ------------------------------------------------------------------ *
@@ -235,7 +188,6 @@ static void cmd_version_fn(int argc, char **argv)
     put_kv("adc core", ADC_INSTANCE);
     put_kv("default input", ADC_PINSEL);
     put_kv("samples per half", SAMPLES_PER_HALF);
-    put_kv("simulator build", SIM_BUILD);
 }
 CMD_DEFINE(version, "version", cmd_version_fn, "version - build, board, ADC core");
 
@@ -407,5 +359,15 @@ void cli_init(void)
     (void)cmd_register(&cmd_clear);
     (void)cmd_register(&cmd_led);
     (void)cmd_register(&cmd_reset);
+
+    /* Banner, once at start-up. A human sees what is talking and which
+     * build it is; a script simply reads on until the readiness byte that
+     * follows the first prompt. */
+    cmd_parser_write("\r\n"
+                     "adc_dma_40msps - ADC at 40 MSPS into RAM via DMA\r\n"
+                     "board: EV74H48A, dsPIC33AK512MPS512 GP DIM\r\n"
+                     "build: " __DATE__ " " __TIME__ "\r\n"
+                     "type 'help' for the commands\r\n");
+
     cmd_parser_prompt();                     /* sync point for a reader */
 }

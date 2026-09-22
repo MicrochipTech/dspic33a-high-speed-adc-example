@@ -2,12 +2,7 @@
 rem ---------------------------------------------------------------------
 rem  dsPIC33AK512MPS512 (EV74H48A) ADC/DMA demo - build without MPLAB X
 rem
-rem    build.bat          firmware for the board      -> ..\build\adc_dma_40msps.elf/.hex
-rem    build.bat sim      simulator build for sim_cli.py -> ..\build\adc_dma_40msps_sim.elf
-rem
-rem  The simulator build defines __MPLAB_DEBUGGER_SIMULATOR (as MPLAB X
-rem  does for a simulator project) and keeps debug symbols, which
-rem  sim_cli.py needs to find the console mailbox.
+rem  Just run:  build.bat        ->  ..\build\adc_dma_40msps.elf and .hex
 rem
 rem  Verified with the versions below on 2026-09-22. Adjust the two paths
 rem  if your installation differs; nothing else needs to change.
@@ -21,13 +16,7 @@ set DFP=C:\Program Files\Microchip\MPLABX\v6.35\packs\Microchip\dsPIC33AK-MP_DFP
 set MCU=33AK512MPS512
 set TARGET=adc_dma_40msps
 set SOURCES=..\adc_dma_40msps.c ..\cli.c ..\cmd_parser.c
-set EXTRA=
 set OUT=..\build\%TARGET%
-
-if /i "%1"=="sim" (
-  set EXTRA=-D__MPLAB_DEBUGGER_SIMULATOR=1 -g
-  set OUT=..\build\%TARGET%_sim
-)
 
 if not exist ..\build mkdir ..\build
 
@@ -38,7 +27,7 @@ rem device" because c30_device.info lives one level down.
 "%XC_DSC%\bin\xc-dsc-gcc.exe" ^
   -mcpu=%MCU% ^
   -mdfp="%DFP%" ^
-  -O1 -Wall -Wextra %EXTRA% ^
+  -O1 -Wall -Wextra ^
   -T"%DFP%\support\dsPIC33A\gld\p%MCU%.gld" ^
   %SOURCES% -o %OUT%.elf
 
@@ -50,9 +39,7 @@ if errorlevel 1 (
 
 echo.
 echo Build OK: %OUT%.elf
-if /i "%1"=="sim" goto :done
 "%XC_DSC%\bin\xc-dsc-bin2hex.exe" %OUT%.elf
 if exist %OUT%.hex echo HEX written: %OUT%.hex
 
-:done
 endlocal

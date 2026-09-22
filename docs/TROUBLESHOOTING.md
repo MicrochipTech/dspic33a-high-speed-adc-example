@@ -121,8 +121,7 @@ So you do not hunt here first. Each was read from a primary source and cross-che
 - **Self-test input** — ADxAN6 is the internal 15/16·VDD reference on every core and
   package (Table 16-2), the datasheet samples it the same way (Example 16-3).
 - **The command parser** — `cmd_parser.c` is unchanged from its repository, where it
-  has a PC test harness and has run on two other microcontrollers. Its commands here
-  were exercised in the simulator (20 of 20, `docs/SIMULATION.md`).
+  has a PC test harness and has run on two other microcontrollers.
 - **`FICD_NOBTSWP` values** — read from both pack versions, see the README.
 
 ---

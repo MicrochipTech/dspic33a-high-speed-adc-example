@@ -47,12 +47,6 @@
  *   and there it is bounded by CNT (max 65535), so the burst has to be
  *   restarted. Tying CNT to the DMA buffer keeps ADC and DMA in step.
  *
- * Simulator build (SIM_BUILD, see adc_dma_40msps.h)
- *   The MPLAB X simulator models neither the PLLs nor the ADC nor the DMA,
- *   so main() would stop at the first clock wait. In that build main()
- *   runs nothing but the console, from a RAM mailbox, so the command
- *   parser can be exercised without a board (tools/sim_cli.py).
- *
  * Every register write below cites the datasheet table or page it comes from.
  * Revision history in README.md.
  */
@@ -152,14 +146,8 @@
 #define HEARTBEAT_ERR     3906u
 
 /* Bound for every hardware wait loop, in loop iterations. A step that
- * needs longer than this has failed; fail() then reports which one. The
- * simulator runs about 80 times slower than the silicon, so its bound is
- * shorter - it only exists to make "no data" come back in seconds. */
-#if SIM_BUILD
-#define WAIT_LIMIT        20000u
-#else
+ * needs longer than this has failed; fail() then reports which one. */
 #define WAIT_LIMIT        2000000u
-#endif
 
 /* ------------------------------------------------------------------ *
  * Sample buffer
@@ -314,7 +302,7 @@ void fail(uint32_t code)
  * Constraints checked against Table 40-23 and page 777: F_PFD >= 5 MHz,
  * F_VCO 500...1600 MHz, M in 16...320, POSTDIV1 >= POSTDIV2.
  * ------------------------------------------------------------------ */
-static void __attribute__((unused)) clock_init(void)
+static void clock_init(void)
 {
     /* If the system clock is currently running off a PLL, park it on the
      * FRC first. Changing PLL settings underneath a running CPU clock can
@@ -401,7 +389,7 @@ static void __attribute__((unused)) clock_init(void)
  * software trigger) is what Microchip's 40 MSPS example uses on this
  * board, and what datasheet Example 16-6 (p1331) does.
  * ------------------------------------------------------------------ */
-static void __attribute__((unused)) adc_init(uint8_t pinsel, uint8_t samc)
+static void adc_init(uint8_t pinsel, uint8_t samc)
 {
     ADCREG(CONbits).ON = 0;
 
@@ -464,7 +452,7 @@ static inline void adc_start_burst(void)
  * DMAxSTAT flags are "R/C/HS" - clearable by writing 0 (legend p815,
  * Example 13-4 p835: "DMA0STATbits.DONE=0"). Writing 1 does not clear.
  * ------------------------------------------------------------------ */
-static void __attribute__((unused)) dma0_init(void)
+static void dma0_init(void)
 {
     DMACONbits.ON = 0;
     DMA0CHbits.CHEN = 0;
@@ -733,21 +721,12 @@ int main(void)
     LED_OFF();
     LED_TRIS = 0u;
 
-    /* The console first: on hardware it lives in the UART1 receive
-     * interrupt from here on; in the simulator it is all there is. */
-    cli_init();
-
-#if SIM_BUILD
-    /* Simulator: no PLL, no ADC, no DMA, no UART receiver. Feed the
-     * parser from the RAM mailbox (tools/sim_cli.py) and blink so a
-     * watcher sees the loop is alive. */
-    for (;;) {
-        static uint32_t tick = 0;
-        cli_poll();
-        if ((++tick % 20000u) == 0u && led_auto == 2u) { LED_TOGGLE(); }
-    }
-#else
     clock_init();
+
+    /* The console lives in the UART1 receive interrupt from here on. It
+     * is started before the self-test so that a stop code is preceded
+     * by the banner on the terminal. */
+    cli_init();
 
     /* ---- Self-test on the internal 15/16 * VDD reference ----
      * Same clock, ADC, DMA and ISR as the real measurement, only the
@@ -779,7 +758,6 @@ int main(void)
         } else {
             idle = 0;
         }
-        cli_poll();                   /* abort key, nothing else here   */
 
         /* What to look at with the debugger or "status":
          *   blocks_done   x SAMPLES_PER_HALF / elapsed time = actual rate
@@ -792,7 +770,6 @@ int main(void)
          *   fail_code     0 while running; the LED pattern otherwise
          */
     }
-#endif
 
     return 0;
 }

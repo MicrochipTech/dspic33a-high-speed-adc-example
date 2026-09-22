@@ -50,8 +50,8 @@ To be precise about how much of this code rests on something that has run on sil
 | **ADC burst → DMA in Repeated Continuous mode → one buffer with `HALF`/`DONE` interrupts → burst restarted from the `DONE` ISR** | **our own construction**, assembled from datasheet §13.4.8 (Example 13-4, p835), §13.6.1.2 (HALF interrupt, p848) and §16.4.5 (p1322) | **no.** There is no Microchip example for this combination. This is the part `docs/TROUBLESHOOTING.md` §1.1 flags as the remaining risk |
 | Self-test on the internal 15/16·VDD reference (ADxAN6) | the input and its sample time come from datasheet Example 16-3 (p1328), which uses it for gain calibration; the pass/fail logic is ours | the input yes, the check no |
 | Board pins, UART1 on the PKOB4 channel, PPS codes, baud generator setting | the MCC-generated `pins.c` and `uart2.c` of the same 40 MSPS example (UART1/UART2 on this board) and the DIM info sheet | yes, in that example |
-| Command parser (`cmd_parser.c/.h`) | [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser), copied unchanged; it has run on a SAM E54 and a PIC32CM there | yes, on other targets — here only in the simulator |
-| Console commands, transport, receive interrupt, simulator mailbox (`cli.c`) | our own | the commands in the simulator, the interrupt no |
+| Command parser (`cmd_parser.c/.h`) | [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser), copied unchanged; it has run on a SAM E54 and a PIC32CM there | yes, on other targets — not yet on this one |
+| Console commands, transport, receive interrupt (`cli.c`) | our own | no |
 | Measurement counters, ISR, `main()` loop, LED reporting, bounded waits, file structure | our own | no |
 
 Nothing was copied verbatim. The examples served as the reference for register values
@@ -79,8 +79,7 @@ of use — so every setting can be checked against the primary source.
   channel: `status`, `start`/`stop`, `samc`, `input`, `selftest`, `stats`, `dump`,
   `clear`, `led`, `reset`. The console runs in the UART receive interrupt below the DMA
   interrupt. The ADC core is now a compile-time choice (`ADC_INSTANCE`), so the
-  potentiometer on ADC5 is two defines away. The console was **tested in the MPLAB X
-  simulator** through a RAM mailbox, see `docs/SIMULATION.md`.
+  potentiometer on ADC5 is two defines away.
 - **2026-09-22, second revision** — tailored so that the first run needs nothing but
   the board: a **self-test** on the ADC's internal 15/16·VDD reference runs before the
   external input is used; **LED0 reports** heartbeat, error and a stop code; every
@@ -419,14 +418,25 @@ the cause of the next overrun.
 
 ## The console
 
-Open the PKOB4's COM port (115200 8N1) and press Enter — a `> ` prompt answers. The
-console is the [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser) module in
+Open the PKOB4's COM port (115200 8N1). At start-up the firmware prints a banner with
+the build time stamp, then the `> ` prompt; if you connect later, press Enter and the
+prompt answers:
+
+```
+adc_dma_40msps - ADC at 40 MSPS into RAM via DMA
+board: EV74H48A, dsPIC33AK512MPS512 GP DIM
+build: Sep 22 2026 14:31:07
+type 'help' for the commands
+>
+```
+
+The console is the [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser) module in
 `cmd_parser.c`, unchanged, with the commands of this example in `cli.c`:
 
 | Command | Does |
 |---|---|
 | `help` | lists the commands |
-| `version` | build date, board, ADC core, default input, whether this is the simulator build |
+| `version` | build date, board, ADC core, default input |
 | `status` | run state and every counter from "What to measure", plus input, sample time, self-test mean and stop code |
 | `start`, `stop` | start the burst stream / let the current buffer finish and stop |
 | `samc <0..31>` | sample time in TAD steps: (2·SAMC + 0.5) TAD, i.e. 40 / (SAMC + 1) MSPS at 320 MHz. Applied between two bursts |
@@ -450,15 +460,7 @@ Two things about it are worth knowing:
   A script reads until that byte, checks it, and only then sends the next line. Usage
   errors give NAK and a usage line; an unknown command gives NAK. The reference client
   for that protocol is `test/cmd_parser_host/cmd_console.py` in the parser's repository,
-  and `tools/sim_cli.py` here uses the same rule.
-
-**Tested without a board.** The parser, all commands and their error paths were run in
-the MPLAB X simulator, which cannot run the ADC or the DMA but can run the console: the
-simulator build of the firmware skips the hardware entirely and reads its input from a
-RAM mailbox that `tools/sim_cli.py` fills through the debugger. That test covers the
-parser and the UART transmit path and nothing else — it says nothing about the
-measurement. 20 of 20 checks passed on 2026-09-22; `docs/SIMULATION.md` has the details
-and the limits.
+  (`test/cmd_parser_host/cmd_console.py`).
 
 ## Which sample rates you can get
 
@@ -655,13 +657,12 @@ the value up in the ATDF (`<value-group name="FICD_NOBTSWP">`) and write the num
 |---|---|
 | `adc_dma_40msps.c` | clock, ADC, DMA, self-test, LED, `main()` — commented with datasheet references |
 | `adc_dma_40msps.h` | what the console may read and control; the compile-time choices (`ADC_INSTANCE`, `ADC_PINSEL`, `ADC_SAMC`) |
-| `cli.c` | the console: UART1 on the PKOB4 channel, the receive interrupt, the commands, the simulator mailbox |
+| `cli.c` | the console: UART1 on the PKOB4 channel, the receive interrupt, the commands |
 | `cmd_parser.c`, `cmd_parser.h` | the command parser, unchanged from [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser) (Apache 2.0) |
 | `adc_dma_40msps.X/` | MPLAB X project — build, program and debug from here |
 | `docs/TROUBLESHOOTING.md` | **what to do when it does not work** — including where we doubt our own code |
-| `docs/SIMULATION.md` | how the console is tested in the MPLAB X simulator, and what that proves |
 | `docs/*.png`, `docs/*.mmd` | the block diagrams above, with their Mermaid sources |
-| `tools/` | command-line build (`build.bat`, `build.bat sim`) and `sim_cli.py`, the simulator console driver |
+| `tools/` | command-line build without the IDE; **ignore this unless you want it** |
 
 ### About `tools/`
 
