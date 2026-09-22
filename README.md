@@ -29,11 +29,17 @@ Verified on 2026-09-21 with:
 
 | Tool | Version |
 |---|---|
-| MPLAB X IDE | v6.35 |
-| XC-DSC compiler | v3.31.00 (also builds with v3.21 when the pack supplies the device) |
-| Device pack | dsPIC33AK-MP_DFP 1.4.260 |
+| MPLAB X IDE | v6.35 (project format `version="65"`, which v6.25 also reads) |
+| XC-DSC compiler | v3.31.00; also builds with v3.21 when the pack supplies the device |
+| Device pack | dsPIC33AK-MP_DFP **1.4.260 and 1.3.185** — the source builds against both |
 | Target | dsPIC33AK512MPS512 |
 | Board | EV17P63A (dsPIC33AK512MPS506 Curiosity Nano) — 64 pins, fewer analog inputs than the 128-pin part, enough for a functional check |
+
+**If MPLAB X complains about the toolchain version** when you open the project: the
+`.X` has a version recorded in it, and yours will differ. Go to *Project Properties →
+XC-DSC* and pick the version you have. Nothing in the source depends on it — we have
+built this with v3.21 and v3.31, and the configuration bits are written so that the
+pack version does not matter either (see "One trap worth knowing about" below).
 
 There is exactly **one** source file, `adc_dma_40msps.c`, in the repository root. The
 MPLAB X project references it; nothing is duplicated.
@@ -320,8 +326,23 @@ rejects a value that is perfectly valid elsewhere:
 error: unknown value for configuration setting 'FICD_NOBTSWP': 'BTSWP_ENABLED'
 ```
 
-The fix is not to guess the value but to align the versions. This project carries a
-`PACK_14_OR_NEWER` switch at the top of the source so it builds with either pack.
+**This is very likely why an MCC-generated `config_bits.c` suddenly stops compiling:**
+MCC generated it against a different pack than the build is using. The value is not
+wrong — the spelling belongs to another pack version.
+
+This project sidesteps the problem by writing the bit **numerically**:
+
+```c
+#pragma config FICD_NOBTSWP = 0x0   /* BOOTSWP enabled */
+```
+
+Every pack version accepts that. Verified: `0x0` built against packs 1.3.185 and
+1.4.260, and `BTSWP_ENABLED` built against 1.4.260, all produce a **bit-identical HEX
+file**. So the numeric form is not a workaround with side effects — it is the same
+setting, spelled in a way that does not depend on the pack.
+
+The same trick works for any configuration bit whose symbolic names have moved: look
+the value up in the ATDF (`<value-group name="FICD_NOBTSWP">`) and write the number.
 
 ## Files
 

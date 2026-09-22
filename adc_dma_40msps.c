@@ -27,34 +27,30 @@
 /* ------------------------------------------------------------------ *
  * Configuration bits
  *
- * FICD_NOBTSWP: the accepted symbolic values DEPEND ON THE PACK VERSION.
- * This is worth knowing, because it produces a confusing compiler error:
+ * FICD_NOBTSWP is written as a NUMBER on purpose, because the accepted
+ * symbolic names DEPEND ON THE PACK VERSION:
  *
  *   dsPIC33AK-MP_DFP 1.3.185 : ON            / OFF
  *   dsPIC33AK-MP_DFP 1.4.260 : BTSWP_ENABLED / BTSWP_DISABLED
  *
- * Both name the same bit (FICD mask 0x8000, value 0x0 = BOOTSWP enabled).
- * If MCC generates config_bits.c against one pack and the build uses the
- * other, the compiler rejects a value that is perfectly valid elsewhere:
+ * Same bit, same meaning, different spelling - so a file written against
+ * one pack fails to compile against the other, with a message that makes
+ * it look as if the value itself were invalid:
  *
  *   error: unknown value for configuration setting 'FICD_NOBTSWP'
  *
- * The fix is not to guess the value but to align the versions. The switch
- * below keeps this file building with either pack.
- * (Values read from the ATDF value-group FICD_NOBTSWP of each pack.)
+ * That is also the most likely reason an MCC-generated config_bits.c
+ * suddenly stops compiling: MCC generated it against a different pack
+ * than the one the build uses.
  *
- * The pack version cannot be detected at compile time: it defines no
- * preprocessor macro, and the accepted values are not macros either. So
- * this is a manual switch. setup.py sets it for the pack you selected.
+ * The numeric form is accepted by every pack version. Verified: 0x0 built
+ * against packs 1.3.185 and 1.4.260, and BTSWP_ENABLED built against
+ * 1.4.260, all produce a bit-identical HEX file.
+ *
+ * FICD, mask 0x8000, value 0x0 = BOOTSWP instruction enabled.
+ * (From the ATDF value-group FICD_NOBTSWP of both packs.)
  * ------------------------------------------------------------------ */
-
-/* Set to 1 for pack 1.4.x or newer, 0 for pack 1.3.x. */
-#define PACK_14_OR_NEWER  1
-#if PACK_14_OR_NEWER
-  #pragma config FICD_NOBTSWP = BTSWP_ENABLED   /* pack >= 1.4.x */
-#else
-  #pragma config FICD_NOBTSWP = ON              /* pack 1.3.x    */
-#endif
+#pragma config FICD_NOBTSWP = 0x0   /* BOOTSWP enabled - see above */
 
 /* Watchdog left under software control, so it stays off unless the
  * application turns it on via WDTCON.ON. Valid values are SW and HW

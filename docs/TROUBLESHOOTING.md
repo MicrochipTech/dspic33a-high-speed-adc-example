@@ -102,6 +102,28 @@ So you do not hunt here first. Each was read from a primary source and cross-che
 
 ## Part 2 — Symptoms, in the order you will meet them
 
+### 2.0 It does not even compile
+
+Before anything else: **a configuration-bit error is almost always a version
+mismatch, not a wrong value.**
+
+```
+error: unknown value for configuration setting 'FICD_NOBTSWP': 'BTSWP_ENABLED'
+```
+
+The symbolic names changed between pack versions (`ON`/`OFF` in 1.3.x,
+`BTSWP_ENABLED`/`BTSWP_DISABLED` in 1.4.x). If MCC generated the file against one pack
+and your build uses another, you get this. The fix is either to align the versions or
+to write the bit numerically, which is what this project does — see the README.
+
+Other build failures worth knowing:
+
+| Message | Cause |
+|---|---|
+| `does not seem to support the selected device` | `-mdfp` points at the pack root instead of its `xc16` subdirectory — only relevant for command-line builds |
+| `incompatible with 30Fxxxx output` | the linker script was not passed; MPLAB X does this for you |
+| toolchain version warning on opening the project | harmless — *Project Properties → XC-DSC*, select the version you have |
+
 ### 2.1 It never reaches `main()`, or halts immediately
 
 Almost certainly a wait loop in `clock_init()`. Halt the debugger and look at **which

@@ -117,7 +117,6 @@ def find_packs():
                     "version": ver.name,
                     "origin": "MPLAB X" if "MPLABX" in str(root) else "user",
                     "has_info": (dfp / "bin" / "c30_device.info").is_file(),
-                    "pack14": version_key(ver.name)[:2] >= (1, 4),
                 })
 
     found.sort(key=lambda f: version_key(f["version"]), reverse=True)
@@ -185,35 +184,6 @@ def patch_makefile(path, compiler, pack):
     text = re.sub(r"(?m)^DFP\s*\?=.*$", lambda m: f"DFP     ?= {dfp}", text)
 
     path.write_text(text, encoding="utf-8")
-    return True
-
-
-def patch_source_pack_switch(path, pack):
-    """Set PACK_14_OR_NEWER in the source to match the selected pack.
-
-    The symbolic values for FICD_NOBTSWP were renamed between pack
-    versions (ON/OFF in 1.3.x, BTSWP_ENABLED/BTSWP_DISABLED in 1.4.x), and
-    nothing in the compiler reports which pack is in use. Hence a switch in
-    the source, set here.
-    """
-    if not path.is_file():
-        print(f"  ! {path.name} not found, skipped")
-        return False
-    text = path.read_text(encoding="utf-8", errors="replace")
-    want = 1 if pack["pack14"] else 0
-
-    new, n = re.subn(r"(?m)^#define PACK_14_OR_NEWER\s+\d+\s*$",
-                     lambda m: f"#define PACK_14_OR_NEWER  {want}", text)
-    if n == 0:
-        print(f"  ! PACK_14_OR_NEWER not found in {path.name}, skipped")
-        return False
-    if new == text:
-        print(f"  unchanged:    {path.name}  (PACK_14_OR_NEWER already {want})")
-        return True
-
-    shutil.copy2(path, path.with_suffix(path.suffix + ".bak"))
-    path.write_text(new, encoding="utf-8")
-    print(f"  wrote:        {path.name}  (PACK_14_OR_NEWER = {want})")
     return True
 
 
@@ -347,8 +317,8 @@ def main():
     print(f"  compiler : {compiler['dir']}")
     print(f"  DFP      : {pack['dfp']}")
     print(f"  linker   : {pack['gld'].name}")
-    print(f"  pack gen : {'1.4.x or newer' if pack['pack14'] else '1.3.x'}"
-          "  (decides the FICD_NOBTSWP spelling)")
+    print("  note     : the source writes FICD_NOBTSWP numerically, so it")
+    print("             builds against any pack version")
 
     print()
     n = 0
@@ -358,7 +328,6 @@ def main():
     if patch_makefile(HERE / "Makefile", compiler, pack):
         print("  wrote:        Makefile   (backup: Makefile.bak)")
         n += 1
-    patch_source_pack_switch(ROOT / SOURCE, pack)
 
     if n == 0:
         print("  Nothing changed.")
