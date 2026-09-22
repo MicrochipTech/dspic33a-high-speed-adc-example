@@ -234,11 +234,35 @@ static uint32_t         seen_blocks    = 0;
  * depends on which clock the CPU is on at the time; the count is what
  * counts.
  * ------------------------------------------------------------------ */
+static const char *const fail_text[] = {
+    "no error",
+    "PLL1 (ADC clock) did not configure or lock",
+    "PLL2 (system clock) did not configure or lock",
+    "CLKGEN1 did not switch",
+    "CLKGEN6 did not switch to PLL1",
+    "ADC core never reported ready (ADRDY)",
+    "no DMA blocks arrived, or the stream stopped",
+    "self-test mean outside 3648..4032",
+    "DMA channel switched itself off (CHEN = 0)",
+};
+
 void fail(uint32_t code)
 {
     fail_code = code;
     IEC2bits.DMA0IE = 0;
     DMA0CHbits.CHEN = 0;
+
+    /* Say why, with everything a reader needs, before blinking forever.
+     * The UART is up from the first line of main() on, so this works for
+     * the clock steps too. */
+    console_sync_baud();
+    console_puts("\r\n");
+    console_kv("[FAIL] code", code);
+    console_puts("[FAIL] ");
+    console_puts((code < 9u) ? fail_text[code] : "unknown code");
+    console_puts("\r\n");
+    regs_dump();
+    console_puts("[FAIL] LED0 blinks the code from now on\r\n");
 
     /* 100 ms in CPU cycles: 200 MHz once PLL2 drives CLKGEN1, else the
      * 8 MHz FRC we started on. */
@@ -311,7 +335,9 @@ void clock_init(void)
      * FRC first. Changing PLL settings underneath a running CPU clock can
      * overclock the core - this matters on a debugger restart, where the
      * part is not freshly reset. (The MCC example does the same.) */
+    console_kv_hex("[clk] CLK1CON at entry", CLK1CON);
     if ((CLK1CONbits.COSC >= NOSC_PLL1_OUT) && (CLK1CONbits.COSC <= 0x8u)) {
+        console_puts("[clk] system clock on a PLL, parking on FRC\r\n");
         CLK1CONbits.NOSC  = NOSC_FRC;
         CLK1CONbits.OSWEN = 1u;
         WAIT_WHILE(CLK1CONbits.OSWEN, 3u);
@@ -332,6 +358,7 @@ void clock_init(void)
     VCO1DIV = 0x10000u;         /* VCO divider output, unused here       */
     PLL1CONbits.DIVSWEN = 1u;
     WAIT_WHILE(PLL1CONbits.DIVSWEN, 1u);
+    console_puts("[clk] PLL1 locked, 320 MHz\r\n");
 
     /* ---- PLL2: 200 MHz for the system clock ---- */
     PLL2CON = 0x8100u;
@@ -348,6 +375,7 @@ void clock_init(void)
     VCO2DIV = 0x10000u;
     PLL2CONbits.DIVSWEN = 1u;
     WAIT_WHILE(PLL2CONbits.DIVSWEN, 2u);
+    console_puts("[clk] PLL2 locked, 200 MHz\r\n");
 
     /* ---- CLKGEN1 = system clock, from PLL2, no divider ----
      * DS70005591D 12.4.9, p795: "Clock Generator 1 is the clock source
@@ -356,6 +384,9 @@ void clock_init(void)
     CLK1DIV = 0u;               /* 200 MHz straight through               */
     CLK1CONbits.OSWEN = 1u;
     WAIT_WHILE(CLK1CONbits.OSWEN, 3u);
+    /* From here on the CPU runs at 200 MHz and the UART's baud generator
+     * is off by 25x until cli_init() re-sets it - so no trace output
+     * until then. */
 
     /* ---- CLKGEN6 = ADC clock, from PLL1, no divider ----
      * DS70005591D Table 16-1, p1223 names CLKGEN6 as the ADC clock
@@ -419,6 +450,9 @@ void adc_init(uint8_t pinsel, uint8_t samc)
 
     ADCREG(CONbits).ON = 1;
     WAIT_WHILE(!ADCREG(CONbits).ADRDY, 5u);    /* wait for the core     */
+    console_puts("[adc] core ready, Integration mode, CNT 2048\r\n");
+    console_kv("[adc] pinsel", pinsel);
+    console_kv("[adc] samc", samc);
 }
 
 /* Start one burst of SAMPLES_PER_BUF conversions. Reading ADxCH0DATA
@@ -493,6 +527,7 @@ void dma0_init(void)
      * priority 4. Nothing fires until the first burst is started. */
     IFS2bits.DMA0IF = 0;
     IEC2bits.DMA0IE = 1;
+    console_puts("[dma] channel 0 armed, window 0x4000..0x13FFF, IRQ on\r\n");
 }
 
 bool dma0_enabled(void)
@@ -724,6 +759,16 @@ uint32_t capture_selftest(uint32_t *mean)
         if ((m < SELFTEST_MIN) || (m > SELFTEST_MAX)) { rc = 7u; }
     }
 
+    if (rc == 0u) {
+        console_kv("[selftest] mean on internal 15/16 VDD (expect ~3840)", selftest_mean);
+    } else if (rc == 6u) {
+        console_puts("[selftest] no DMA blocks arrived\r\n");
+    } else if (rc == 7u) {
+        console_kv("[selftest] mean outside 3648..4032", selftest_mean);
+    } else {
+        console_puts("[selftest] DMA channel disabled\r\n");
+    }
+
     (void)capture_set_input(keep_pinsel, keep_samc);
     if (rc == 0u) {
         rc = wait_for_blocks(blocks_done + SELFTEST_HALVES);   /* settle */
@@ -732,4 +777,55 @@ uint32_t capture_selftest(uint32_t *mean)
         capture_stop();
     }
     return rc;
+}
+
+/* ------------------------------------------------------------------ *
+ * Register dump - what Part 4 of docs/TROUBLESHOOTING.md asks for
+ * ------------------------------------------------------------------ */
+void regs_dump(void)
+{
+    console_puts("[regs] clock\r\n");
+    console_kv_hex("OSCCTRL", OSCCTRL);
+    console_kv_hex("PLL1CON", PLL1CON);
+    console_kv_hex("PLL1DIV", PLL1DIV);
+    console_kv_hex("PLL2CON", PLL2CON);
+    console_kv_hex("PLL2DIV", PLL2DIV);
+    console_kv_hex("CLK1CON", CLK1CON);
+    console_kv_hex("CLK1DIV", CLK1DIV);
+    console_kv_hex("CLK6CON", CLK6CON);
+    console_kv_hex("CLK6DIV", CLK6DIV);
+    console_puts("[regs] adc\r\n");
+    console_kv_hex("ADxCON", ADCREG(CON));
+    console_kv_hex("ADxSTAT", ADCREG(STAT));
+    console_kv_hex("ADxCH0CON1", ADCREG(CH0CON1));
+    console_kv_hex("ADxCH0CNT", ADCREG(CH0CNT));
+    console_kv_hex("ADxCH0RES", ADCREG(CH0RES));
+    console_kv_hex("ADxCH0DATA", ADCREG(CH0DATA));
+    console_puts("[regs] dma\r\n");
+    console_kv_hex("DMACON", DMACON);
+    console_kv_hex("DMALOW", DMALOW);
+    console_kv_hex("DMAHIGH", DMAHIGH);
+    console_kv_hex("DMA0CH", DMA0CH);
+    console_kv_hex("DMA0SEL", DMA0SEL);
+    console_kv_hex("DMA0STAT", DMA0STAT);
+    console_kv_hex("DMA0SRC", DMA0SRC);
+    console_kv_hex("DMA0DST", DMA0DST);
+    console_kv_hex("DMA0CNT", DMA0CNT);
+    console_puts("[regs] interrupts, uart\r\n");
+    console_kv_hex("IEC2", IEC2);
+    console_kv_hex("IFS2", IFS2);
+    console_kv_hex("IPC9", IPC9);
+    console_kv_hex("INTCON1", INTCON1);
+    console_kv_hex("U1CON", U1CON);
+    console_kv_hex("U1STAT", U1STAT);
+    console_kv_hex("U1BRG", U1BRG);
+    console_puts("[regs] counters\r\n");
+    console_kv("blocks_done", blocks_done);
+    console_kv("dma_overrun", dma_overrun);
+    console_kv("late_service", late_service);
+    console_kv("proc_missed", proc_missed);
+    console_kv("dma_addr_err", dma_addr_err);
+    console_kv("dma_bus_err", dma_bus_err);
+    console_kv("selftest_mean", selftest_mean);
+    console_kv("fail_code", fail_code);
 }

@@ -440,6 +440,7 @@ The console is the [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser) mod
 | `help` | lists the commands |
 | `version` | build date, board, ADC core, default input |
 | `status` | run state and every counter from "What to measure", plus input, sample time, self-test mean and stop code |
+| `regs` | the clock, ADC, DMA, interrupt and UART registers as hex, plus the counters — the dump `docs/TROUBLESHOOTING.md` Part 4 asks for |
 | `start`, `stop` | start the burst stream / let the current buffer finish and stop |
 | `samc <0..31>` | sample time in TAD steps: (2·SAMC + 0.5) TAD, i.e. 40 / (SAMC + 1) MSPS at 320 MHz. Applied between two bursts |
 | `input <0..15>` | PINSEL of the ADC core; 6 is the internal 15/16·VDD reference. Applied between two bursts |
@@ -449,6 +450,42 @@ The console is the [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser) mod
 | `clear` | zeroes the error counters |
 | `led on`, `led off`, `led auto` | LED0 by hand, or back to the heartbeat |
 | `reset` | software reset |
+
+**The firmware also talks without being asked.** From reset on, every start-up step
+reports itself on the same port — the UART is brought up on the 8 MHz FRC before the
+clocks are touched and re-timed once PLL2 runs — so a terminal log from power-up reads
+like this on a good day:
+
+```
+[boot] uart up on FRC, 115200 8N1
+[boot] adc_dma_40msps Sep 22 2026 15:02:11
+[clk] CLK1CON at entry: 0x00000101
+[clk] PLL1 locked, 320 MHz
+[clk] PLL2 locked, 200 MHz
+[boot] uart reclocked to PLL2, 115200 8N1
+
+adc_dma_40msps - ADC at 40 MSPS into RAM via DMA
+board: EV74H48A, dsPIC33AK512MPS512 GP DIM
+build: Sep 22 2026 15:02:11
+type 'help' for the commands
+please log this terminal from power-up and send it back
+>
+[adc] core ready, Integration mode, CNT 2048
+[adc] pinsel: 5
+[adc] samc: 0
+[dma] channel 0 armed, window 0x4000..0x13FFF, IRQ on
+[boot] self-test on the internal reference
+[selftest] mean on internal 15/16 VDD (expect ~3840): 3851
+[boot] self-test passed, measurement running on the external input
+[stat] blocks=195312 overrun=0 late=0 missed=0 addr_err=0 bus_err=0 last=2047 input=5 samc=0 run=1
+[stat] blocks=390624 overrun=0 ...
+```
+
+A `[stat]` line comes every 5 s for the first minute, then every minute. If a step
+fails, the log ends with `[FAIL] code n`, the reason in words, and the full register
+dump (`[regs] …`) — the same thing the `regs` command prints — and then LED0 blinks
+the code. **That log is what to send back** if the board is not on your desk: it
+answers most of `docs/TROUBLESHOOTING.md` Part 4 without a debugger.
 
 Two things about it are worth knowing:
 

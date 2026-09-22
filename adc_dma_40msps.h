@@ -105,7 +105,26 @@ uint8_t led_get_mode(void);
 /* Stop with a blink code (never returns). */
 void fail(uint32_t code);
 
+/* ---- Register dump (implemented in adc_dma_40msps.c) ---- */
+/* Clock, ADC, DMA, interrupt and UART registers as "name: 0x........"
+ * lines on the console. Printed by fail() and by the "regs" command. */
+void regs_dump(void);
+
 /* ---- Console (implemented in cli.c) ---- */
+
+/* UART1 up on the FRC, before the clocks are touched. From here on
+ * console_puts() works. */
+void console_early_init(void);
+/* After clock_init(): baud generator on the PLL clock, parser, banner,
+ * receive interrupt. */
 void cli_init(void);
+/* Baud generator re-matched to the current CPU clock; used by fail(). */
+void console_sync_baud(void);
+/* Blocking trace output, safe from main() and from fail(). */
+void console_puts(const char *s);
+void console_kv(const char *key, uint32_t v);        /* "key: 123"        */
+void console_kv_hex(const char *key, uint32_t v);    /* "key: 0x00000123" */
+/* One line with every counter, for the periodic trace from main(). */
+void console_status_line(void);
 
 #endif /* ADC_DMA_40MSPS_H */

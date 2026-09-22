@@ -1,8 +1,9 @@
 /*
  * cli.c
  *
- * Command console for the ADC/DMA example, built on cmd_parser.c
- * (https://github.com/zabooh/cmd_parser, Apache 2.0). This file owns the
+ * Console for the ADC/DMA example: the UART, a trace channel for the
+ * start-up sequence, and the command parser from
+ * https://github.com/zabooh/cmd_parser (Apache 2.0). This file owns the
  * transport and the commands; the parser itself knows no hardware.
  *
  * Transport on the EV74H48A
@@ -13,6 +14,14 @@
  *   DS70005562D 2.1.2). The PPS codes are the ones Microchip's own
  *   example uses on this board (U1TX = 19, Table "Output Selection for
  *   Remappable Pins", p613).
+ *
+ * Two phases
+ *   console_early_init() runs before the clocks are touched, on the
+ *   8 MHz FRC, so that every step of clock_init() and a failure inside
+ *   it can be reported. console_puts() is the blocking trace output used
+ *   from then on. cli_init() runs after the clocks: it moves the baud
+ *   generator to the 100 MHz peripheral clock, starts the parser, prints
+ *   the banner and enables the receive interrupt.
  *
  * The parser as its own thread
  *   Received bytes are handled in the UART1 receive interrupt, which
@@ -28,6 +37,7 @@
  *   help                       list of commands (built into the parser)
  *   version                    build, board, ADC core and input
  *   status                     run state, counters, input, self-test
+ *   regs                       dump of the clock, ADC, DMA and UART registers
  *   start | stop               burst stream on/off
  *   samc <0..31>               sample time, (2*SAMC + 0.5) TAD
  *   input <0..15>              PINSEL of the ADC core (6 = internal ref)
@@ -56,15 +66,32 @@
  * UART1 transport
  * ------------------------------------------------------------------ */
 
-/* Baud rate. UART clock = Standard Speed Peripheral Clock, 100 MHz
- * (1:2 of the 200 MHz CPU clock). CLKMOD = 1 selects the fractional
- * baud generator, where BRG = F_clk / baud (no -1): 100 000 000 / 115 200
- * = 868 -> 115 207 baud, the value MCC generates for this board. */
-#define UART_BRG          868u
+/* Baud rate generator, fractional mode (CLKMOD = 1): BRG = F_clk / baud,
+ * no -1 (the value MCC generates for this board is 868 at 100 MHz).
+ * F_clk is the Standard Speed Peripheral Clock = CPU clock / 2:
+ *   after reset, on the 8 MHz FRC:        4 MHz  -> BRG 35, 114 286 baud
+ *   after clock_init(), PLL2 at 200 MHz: 100 MHz -> BRG 868, 115 207 baud
+ * Both are within 1 % of 115 200. */
+#define UART_BRG_FRC      35u
+#define UART_BRG_PLL      868u
 
 #define UART_RX_PRIORITY  1u      /* below the DMA interrupt (4)        */
 
-static void uart1_init(void)
+static void uart1_setup(uint32_t brg)
+{
+    U1CON = 0u;                       /* off while reconfiguring        */
+    U1CONbits.CLKMOD = 1u;            /* fractional baud generator      */
+    U1CONbits.CLKSEL = 0u;            /* standard speed peripheral clock*/
+    U1CONbits.MODE   = 0u;            /* 8-bit, no parity               */
+    U1CONbits.STP    = 0u;            /* one stop bit                   */
+    U1BRG = brg;
+    U1STAT = 0u;                      /* RXWM = 0: IRQ on one byte      */
+    U1CONbits.ON   = 1u;
+    U1CONbits.TXEN = 1u;
+    U1CONbits.RXEN = 1u;
+}
+
+void console_early_init(void)
 {
     /* Pins: RH0 = U1TX (output), RD10 = U1RX (input). Neither port has an
      * analog function. Peripheral pin select needs IOLOCK cleared. */
@@ -75,21 +102,36 @@ static void uart1_init(void)
     _RP113R = 19u;                    /* RP113 <- U1TX                  */
     RPCONbits.IOLOCK = 1u;
 
-    U1CON = 0u;
-    U1CONbits.CLKMOD = 1u;            /* fractional baud generator      */
-    U1CONbits.CLKSEL = 0u;            /* standard speed peripheral clock*/
-    U1CONbits.MODE   = 0u;            /* 8-bit, no parity               */
-    U1CONbits.STP    = 0u;            /* one stop bit                   */
-    U1BRG = UART_BRG;
-    U1STAT = 0u;                      /* RXWM = 0: IRQ on one byte      */
-    U1CONbits.ON   = 1u;
-    U1CONbits.TXEN = 1u;
-    U1CONbits.RXEN = 1u;
+    uart1_setup(UART_BRG_FRC);
+    console_puts("\r\n[boot] uart up on FRC, 115200 8N1\r\n");
+}
 
-    /* Receive interrupt: IRQ 98, IEC3/IFS3 bit 2, priority in IPC12. */
-    IPC12bits.U1RXIP = UART_RX_PRIORITY;
-    IFS3bits.U1RXIF  = 0u;
-    IEC3bits.U1RXIE  = 1u;
+/* Blocking output, usable at any time after console_early_init(): from
+ * main(), from fail(), and from the receive interrupt (the parser's own
+ * output goes through console_write() below instead). */
+void console_puts(const char *s)
+{
+    while (*s) {
+        while (U1STATbits.TXBF) { }
+        U1TXB = (uint8_t)*s++;
+    }
+}
+
+static void console_drain(void)
+{
+    while (!U1STATbits.TXMTIF) { }    /* shift register empty too       */
+}
+
+/* Make the baud generator match whatever clock the CPU is on right now.
+ * fail() calls this first: a failure after the switch to PLL2 but before
+ * cli_init() would otherwise print at the wrong rate. */
+void console_sync_baud(void)
+{
+    const uint32_t want = (CLK1CONbits.COSC == 0x6u) ? UART_BRG_PLL : UART_BRG_FRC;
+    if (U1BRG != want) {
+        console_drain();
+        uart1_setup(want);
+    }
 }
 
 /* Output sink for the parser: take what fits into the transmit FIFO and
@@ -141,14 +183,54 @@ static char *u32_to_str(char *out, uint32_t v)
     return out;
 }
 
+static char *u32_to_hex(char *out, uint32_t v)
+{
+    static const char digits[] = "0123456789ABCDEF";
+    *out++ = '0'; *out++ = 'x';
+    for (int shift = 28; shift >= 0; shift -= 4) {
+        *out++ = digits[(v >> shift) & 0xFu];
+    }
+    *out = '\0';
+    return out;
+}
+
+static char *copy_str(char *out, const char *s)
+{
+    while (*s) { *out++ = *s++; }
+    *out = '\0';
+    return out;
+}
+
+/* "key: value" lines. The console_* variants go out blocking through
+ * console_puts() (trace, fail, dump); put_kv() goes through the parser
+ * and is for command replies. */
+void console_kv(const char *key, uint32_t v)
+{
+    char line[48];
+    char *p = copy_str(line, key);
+    *p++ = ':'; *p++ = ' ';
+    p = u32_to_str(p, v);
+    copy_str(p, "\r\n");
+    console_puts(line);
+}
+
+void console_kv_hex(const char *key, uint32_t v)
+{
+    char line[48];
+    char *p = copy_str(line, key);
+    *p++ = ':'; *p++ = ' ';
+    p = u32_to_hex(p, v);
+    copy_str(p, "\r\n");
+    console_puts(line);
+}
+
 static void put_kv(const char *key, uint32_t v)
 {
     char line[48];
-    char *p = line;
-    while (*key) { *p++ = *key++; }
+    char *p = copy_str(line, key);
     *p++ = ':'; *p++ = ' ';
     p = u32_to_str(p, v);
-    *p++ = '\r'; *p++ = '\n'; *p = '\0';
+    copy_str(p, "\r\n");
     cmd_parser_write(line);
 }
 
@@ -156,6 +238,25 @@ static void put_line(const char *s)
 {
     cmd_parser_write(s);
     cmd_parser_write("\r\n");
+}
+
+/* One status line, blocking, for the periodic trace from main(). */
+void console_status_line(void)
+{
+    char line[160];
+    char *p = copy_str(line, "[stat] blocks=");
+    p = u32_to_str(p, blocks_done);
+    p = copy_str(p, " overrun=");  p = u32_to_str(p, dma_overrun);
+    p = copy_str(p, " late=");     p = u32_to_str(p, late_service);
+    p = copy_str(p, " missed=");   p = u32_to_str(p, proc_missed);
+    p = copy_str(p, " addr_err="); p = u32_to_str(p, dma_addr_err);
+    p = copy_str(p, " bus_err=");  p = u32_to_str(p, dma_bus_err);
+    p = copy_str(p, " last=");     p = u32_to_str(p, last_sample);
+    p = copy_str(p, " input=");    p = u32_to_str(p, capture_pinsel());
+    p = copy_str(p, " samc=");     p = u32_to_str(p, capture_samc());
+    p = copy_str(p, " run=");      p = u32_to_str(p, capture_running() ? 1u : 0u);
+    copy_str(p, "\r\n");
+    console_puts(line);
 }
 
 /* Decimal argument in [lo, hi]; false (and NAK) otherwise. */
@@ -208,6 +309,13 @@ static void cmd_status_fn(int argc, char **argv)
     put_kv("fail_code", fail_code);
 }
 CMD_DEFINE(status, "status", cmd_status_fn, "status - run state and counters");
+
+static void cmd_regs_fn(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    regs_dump();
+}
+CMD_DEFINE(regs, "regs", cmd_regs_fn, "regs - clock, ADC, DMA and UART registers");
 
 static void cmd_start_fn(int argc, char **argv)
 {
@@ -306,7 +414,7 @@ static void cmd_dump_fn(int argc, char **argv)
             *p++ = ' ';
             p = u32_to_str(p, b[offset + i + k]);
         }
-        *p++ = '\r'; *p++ = '\n'; *p = '\0';
+        copy_str(p, "\r\n");
         cmd_parser_write(line);
         if (cmd_parser_aborted()) { return; }
     }
@@ -336,7 +444,7 @@ static void cmd_reset_fn(int argc, char **argv)
 {
     (void)argc; (void)argv;
     put_line("resetting");
-    while (!U1STATbits.TXMTIF) { }      /* let the reply leave first */
+    console_drain();                    /* let the reply leave first */
     __asm__ volatile ("reset");
 }
 CMD_DEFINE(reset, "reset", cmd_reset_fn, "reset - software reset");
@@ -344,11 +452,17 @@ CMD_DEFINE(reset, "reset", cmd_reset_fn, "reset - software reset");
 /* ------------------------------------------------------------------ */
 void cli_init(void)
 {
-    uart1_init();
+    /* The clocks have changed under the baud generator: re-set it for
+     * the 100 MHz peripheral clock, after the last FRC-timed byte is out. */
+    console_drain();
+    uart1_setup(UART_BRG_PLL);
+    console_puts("[boot] uart reclocked to PLL2, 115200 8N1\r\n");
+
     cmd_parser_init(console_write);
     cmd_parser_set_yield(console_yield);     /* after init - init clears it */
     (void)cmd_register(&cmd_version);
     (void)cmd_register(&cmd_status);
+    (void)cmd_register(&cmd_regs);
     (void)cmd_register(&cmd_start);
     (void)cmd_register(&cmd_stop);
     (void)cmd_register(&cmd_samc);
@@ -363,11 +477,19 @@ void cli_init(void)
     /* Banner, once at start-up. A human sees what is talking and which
      * build it is; a script simply reads on until the readiness byte that
      * follows the first prompt. */
-    cmd_parser_write("\r\n"
-                     "adc_dma_40msps - ADC at 40 MSPS into RAM via DMA\r\n"
-                     "board: EV74H48A, dsPIC33AK512MPS512 GP DIM\r\n"
-                     "build: " __DATE__ " " __TIME__ "\r\n"
-                     "type 'help' for the commands\r\n");
+    console_puts("\r\n"
+                 "adc_dma_40msps - ADC at 40 MSPS into RAM via DMA\r\n"
+                 "board: EV74H48A, dsPIC33AK512MPS512 GP DIM\r\n"
+                 "build: " __DATE__ " " __TIME__ "\r\n"
+                 "type 'help' for the commands\r\n"
+                 "please log this terminal from power-up and send it back\r\n");
+
+    /* Receive interrupt: IRQ 98, IEC3/IFS3 bit 2, priority in IPC12.
+     * Enabled last, so that nothing typed early runs a command before
+     * the measurement is set up. */
+    IPC12bits.U1RXIP = UART_RX_PRIORITY;
+    IFS3bits.U1RXIF  = 0u;
+    IEC3bits.U1RXIE  = 1u;
 
     cmd_parser_prompt();                     /* sync point for a reader */
 }

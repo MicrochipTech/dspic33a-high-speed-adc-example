@@ -155,8 +155,11 @@ Other build failures worth knowing:
 
 Nothing in this code waits forever. Every hardware wait is bounded by `WAIT_LIMIT`
 iterations; when it runs out, `fail(code)` switches the DMA off, stores the code in
-`fail_code`, and blinks it on LED0: *code* short blinks, a long pause, repeat. With a
-debugger you land in `fail()` and `fail_code` tells you the same.
+`fail_code`, **prints the code, its meaning and a full register dump on the console**
+(the UART is up before the clocks are touched, so this works for codes 1 to 4 too) and
+then blinks the code on LED0: *code* short blinks, a long pause, repeat. With a debugger
+you land in `fail()` and `fail_code` tells you the same. A terminal log therefore
+already contains what the "Where to look" column below asks for.
 
 | Code | Where it gave up | Meaning | Where to look |
 |---|---|---|---|
@@ -308,7 +311,17 @@ This order matters because each step leaves exactly one new thing that can be wr
 
 ## Part 4 — When to come back to us
 
-Please do, and bring this with you — it turns guesswork into a diagnosis:
+Please do, and bring this with you — it turns guesswork into a diagnosis.
+
+**The short version: the terminal log from power-up.** Open the PKOB4's COM port at
+115200 8N1 with logging on (Tera Term: *File → Log*; PuTTY: *Session → Logging*),
+then press the board's reset button or re-plug it. The firmware reports every start-up
+step, the self-test result, a `[stat]` line with all counters every 5 s, and on a
+failure the reason and a complete register dump. Let it run for a minute, then type
+`regs` and `stats` once, and send the file. That covers everything in the list below
+except the signal details.
+
+If you prefer the debugger, or the console itself is what does not work:
 
 - **Which step above got you stuck**, and at which source line
 - **Register dump while halted:** `AD3CON`, `AD3STAT`, `AD3CH0CON1`, `AD3CH0CNT`,
