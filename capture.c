@@ -42,6 +42,7 @@
 #include "led.h"
 #include "console.h"
 #include "diag.h"
+#include "sim.h"
 
 /* Self-test input and window. ADxAN6 is the internal 15/16 * VDD
  * reference on every core and package (Table 16-2, p1224), which the
@@ -214,6 +215,11 @@ bool capture_running(void)
     return run_enabled;
 }
 
+bool capture_burst_active(void)
+{
+    return burst_active;
+}
+
 bool capture_set_input(uint8_t pinsel, uint8_t samc)
 {
     if ((pinsel > 15u) || (samc > 31u)) {
@@ -265,6 +271,7 @@ static void process_buffer(const volatile uint16_t *b, uint32_t n)
         acc += (int32_t)b[i];
     }
     proc_result = acc;
+    SIM_CHECK_HALF(b, n);             /* simulator: is this really the next half? */
 }
 
 static uint32_t half_mean(const volatile uint16_t *b, uint32_t n)
@@ -305,6 +312,7 @@ static uint32_t wait_for_blocks(uint32_t target)
 {
     uint32_t n = WAIT_LIMIT;
     while (blocks_done < target) {
+        SIM_DMA_TICK();               /* simulator: deliver a half     */
         if (!dma0_enabled()) { return 8u; }
         if (--n == 0u)       { return 6u; }
     }

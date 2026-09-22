@@ -79,7 +79,11 @@
  *   after clock_init(), PLL2 at 200 MHz: 100 MHz -> BRG 868, 115 207 baud
  * Both are within 1 % of 115 200. */
 #define UART_BRG_FRC      35u
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+#define UART_BRG_PLL      UART_BRG_FRC   /* the simulator never leaves the 8 MHz FRC */
+#else
 #define UART_BRG_PLL      868u
+#endif
 
 #define UART_RX_PRIORITY  1u      /* below the DMA interrupt (4)        */
 
@@ -137,6 +141,10 @@ void console_puts(const char *s)
 
 static void console_drain(void)
 {
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+    return;     /* the simulator never sets TXMTIF: the bounded wait below
+                 * would take about a minute per call and look like a hang */
+#endif
     uint32_t n = TX_WAIT_LIMIT;
     while (!U2STATbits.TXMTIF && (--n != 0u)) { }   /* shift reg empty too */
 }
@@ -201,6 +209,9 @@ static size_t console_write(const char *data, size_t len)
  * reply are dropped. */
 static void console_yield(void)
 {
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+    return;     /* the simulator has no UART receiver: RXBE never rises */
+#endif
     while (!U2STATbits.RXBE) {
         if ((uint8_t)U2RXB == 0x03u) {
             cmd_parser_abort();
@@ -539,10 +550,16 @@ CMD_DEFINE(reset, "reset", cmd_reset_fn, "reset - software reset");
 void cli_init(void)
 {
     /* The clocks have changed under the baud generator: re-set it for
-     * the 100 MHz peripheral clock, after the last FRC-timed byte is out. */
-    console_drain();
-    uart2_setup(UART_BRG_PLL);
-    console_puts("[boot] uart reclocked to PLL2, 115200 8N1\r\n");
+     * the 100 MHz peripheral clock, after the last FRC-timed byte is out.
+     * Only when the divider really changes: in the simulator build the
+     * CPU never leaves the FRC, and toggling ON while the simulator's
+     * UART model is still transmitting leaves its transmitter dead
+     * (TXWRE set, nothing gets out any more). */
+    if (U2BRG != UART_BRG_PLL) {
+        console_drain();
+        uart2_setup(UART_BRG_PLL);
+        console_puts("[boot] uart reclocked to PLL2, 115200 8N1\r\n");
+    }
 
     cmd_parser_init(console_write);
     cmd_parser_set_yield(console_yield);     /* after init - init clears it */

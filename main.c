@@ -28,8 +28,8 @@
  *      can stop, start and reconfigure it at any time.
  *
  * Everything hardware-specific lives in the modules - board.h (pins,
- * ADC core), clock.c, adc.c, dma.c, capture.c (counters, burst restart,
- * self-test), led.c,
+ * ADC core), clock.c, adc.c, dma.c (sim_dma.c in the simulator build),
+ * capture.c (counters, burst restart, self-test), led.c,
  * diag.c (stop codes, traps) and cli.c (UART, commands); this file only
  * sequences them.
  */
@@ -43,10 +43,16 @@
 #include "led.h"
 #include "diag.h"
 #include "console.h"
+#include "sim.h"
 
 /* Status line every ~5 s for the first minute, then every ~60 s.
- * 39 062 halves per second at 40 MSPS. */
+ * 39 062 halves per second at 40 MSPS. In the simulator a half costs a
+ * few thousand instructions of the stand-in, so count halves, not time. */
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+#define STATUS_EVERY_HALVES   50u
+#else
 #define STATUS_EVERY_HALVES   195312u
+#endif
 #define STATUS_FAST_LINES     12u
 
 int main(void)
@@ -107,14 +113,21 @@ int main(void)
     uint32_t status_lines = 0;
 
     for (;;) {
+        SIM_DMA_TICK();               /* simulator: one half per pass    */
         if (capture_service()) {
             idle = 0;
             if (blocks_done >= next_status) {
-                console_status_line();
-                status_lines++;
-                next_status += (status_lines < STATUS_FAST_LINES)
-                               ? STATUS_EVERY_HALVES
-                               : 12u * STATUS_EVERY_HALVES;
+                if (SIM_CHECK_RUNNING()) {
+                    /* Simulator: the UART is slow, keep it quiet while
+                     * the ping-pong check runs. Empty on silicon. */
+                    next_status = blocks_done + STATUS_EVERY_HALVES;
+                } else {
+                    console_status_line();
+                    status_lines++;
+                    next_status += (status_lines < STATUS_FAST_LINES)
+                                   ? STATUS_EVERY_HALVES
+                                   : 12u * STATUS_EVERY_HALVES;
+                }
             }
         } else if (capture_running()) {
             /* The stream stopped: burst restart lost, or the DMA shut

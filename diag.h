@@ -8,7 +8,11 @@
 
 /* Bound for every hardware wait loop, in loop iterations. A step that
  * needs longer than this has failed; fail() then reports which one. */
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+#define WAIT_LIMIT        20000u     /* simulator runs at ~1/80 real time */
+#else
 #define WAIT_LIMIT        2000000u
+#endif
 
 /* != 0: stopped, see fail() */
 extern volatile uint32_t fail_code;
@@ -28,7 +32,16 @@ void boot_mark(uint32_t stage);
 void fail(uint32_t code);
 
 
-/* Wait until a condition becomes false, or give up with a code. */
+/* Wait until a condition becomes false, or give up with a code.
+ *
+ * Simulator build: no waiting at all. The MPLAB X simulator has no PLL,
+ * no ADC conversion and no DMA transfer, so every one of these conditions
+ * would time out and end the run in fail(1) before anything of interest
+ * had executed. The register writes stay exactly as on hardware; only the
+ * waits go - the same pattern MCC's clock.c uses. */
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+#define WAIT_WHILE(cond, code)  do { (void)(cond); } while (0)
+#else
 #define WAIT_WHILE(cond, code)                              \
     do {                                                    \
         uint32_t n_ = WAIT_LIMIT;                           \
@@ -36,6 +49,7 @@ void fail(uint32_t code);
             if (--n_ == 0u) { fail(code); }                 \
         }                                                   \
     } while (0)
+#endif
 
 /* Clock, ADC, DMA, interrupt and UART registers as "name: 0x........"
  * lines on the console. Printed by fail() and by the "regs" command. */

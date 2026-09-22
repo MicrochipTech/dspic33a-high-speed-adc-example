@@ -40,6 +40,8 @@ void capture_start(void);
 /* Let the current burst finish and do not restart it. */
 void capture_stop(void);
 bool capture_running(void);
+/* True from the burst trigger until the DMA DONE event. */
+bool capture_burst_active(void);
 
 /* Change input pin and sample time. Applied by the ISR between two bursts,
  * when the channel is idle; returns false for out-of-range arguments

@@ -2,6 +2,7 @@
 #
 # Usage:   make            firmware for the board  -> ../build/adc_dma_40msps.elf
 #          make hex        Intel HEX for the programmer
+#          make sim        simulator build (sim_dma.c instead of dma.c) -> ../build/adc_dma_40msps_sim.elf
 #          make size       section sizes
 #          make clean
 #
@@ -21,7 +22,8 @@ BIN2HEX  = $(XC_DSC)/bin/xc-dsc-bin2hex.exe
 
 TARGET   = adc_dma_40msps
 SRC      = ../main.c ../config_bits.c ../clock.c ../adc.c ../dma.c ../capture.c ../led.c ../diag.c ../cli.c ../cmd_parser.c
-HDR      = ../board.h ../clock.h ../adc.h ../dma.h ../capture.h ../led.h ../diag.h ../console.h ../cmd_parser.h
+HDR      = ../board.h ../clock.h ../adc.h ../dma.h ../capture.h ../led.h ../diag.h ../console.h ../sim.h ../cmd_parser.h
+SRC_SIM  = $(subst ../dma.c,../sim_dma.c,$(SRC))
 OUTDIR   = ../build
 
 # -mdfp must point at the xc16 SUBDIRECTORY of the pack, not the pack root.
@@ -30,7 +32,7 @@ OUTDIR   = ../build
 CFLAGS   = -mcpu=$(MCU) -mdfp="$(DFP)" -O1 -Wall -Wextra
 LDFLAGS  = -T"$(GLD)"
 
-.PHONY: all hex size clean
+.PHONY: all hex sim size clean
 
 all: $(OUTDIR)/$(TARGET).elf
 
@@ -40,6 +42,11 @@ $(OUTDIR):
 $(OUTDIR)/$(TARGET).elf: $(SRC) $(HDR) | $(OUTDIR)
 	"$(CC)" $(CFLAGS) $(LDFLAGS) $(SRC) -o $@
 
+sim: $(OUTDIR)/$(TARGET)_sim.elf
+
+$(OUTDIR)/$(TARGET)_sim.elf: $(SRC_SIM) $(HDR) | $(OUTDIR)
+	"$(CC)" $(CFLAGS) -D__MPLAB_DEBUGGER_SIMULATOR=1 -g $(LDFLAGS) $(SRC_SIM) -o $@
+
 hex: $(OUTDIR)/$(TARGET).elf
 	"$(BIN2HEX)" $(OUTDIR)/$(TARGET).elf
 
@@ -47,4 +54,4 @@ size: $(OUTDIR)/$(TARGET).elf
 	"$(OBJDUMP)" -h $(OUTDIR)/$(TARGET).elf
 
 clean:
-	rm -f $(OUTDIR)/$(TARGET).elf $(OUTDIR)/$(TARGET).hex
+	rm -f $(OUTDIR)/$(TARGET).elf $(OUTDIR)/$(TARGET).hex $(OUTDIR)/$(TARGET)_sim.elf

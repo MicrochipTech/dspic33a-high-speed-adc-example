@@ -2,7 +2,12 @@
 rem ---------------------------------------------------------------------
 rem  dsPIC33AK512MPS512 (EV74H48A) ADC/DMA demo - build without MPLAB X
 rem
-rem  Just run:  build.bat        ->  ..\build\adc_dma_40msps.elf and .hex
+rem    build.bat          firmware for the board -> ..\build\adc_dma_40msps.elf/.hex
+rem    build.bat sim      simulator build        -> ..\build\adc_dma_40msps_sim.elf
+rem
+rem  The simulator build compiles sim_dma.c instead of dma.c, defines
+rem  __MPLAB_DEBUGGER_SIMULATOR (as MPLAB X does for a Simulator
+rem  configuration) and keeps debug symbols for tools\sim_trap.py.
 rem
 rem  Verified with the versions below on 2026-09-22. Adjust the two paths
 rem  if your installation differs; nothing else needs to change.
@@ -15,8 +20,16 @@ set DFP=C:\Program Files\Microchip\MPLABX\v6.35\packs\Microchip\dsPIC33AK-MP_DFP
 
 set MCU=33AK512MPS512
 set TARGET=adc_dma_40msps
-set SOURCES=..\main.c ..\config_bits.c ..\clock.c ..\adc.c ..\dma.c ..\capture.c ..\led.c ..\diag.c ..\cli.c ..\cmd_parser.c
+set DMA=..\dma.c
+set EXTRA=
 set OUT=..\build\%TARGET%
+
+if /i "%1"=="sim" (
+  set DMA=..\sim_dma.c
+  set EXTRA=-D__MPLAB_DEBUGGER_SIMULATOR=1 -g
+  set OUT=..\build\%TARGET%_sim
+)
+set SOURCES=..\main.c ..\config_bits.c ..\clock.c ..\adc.c %DMA% ..\capture.c ..\led.c ..\diag.c ..\cli.c ..\cmd_parser.c
 
 if not exist ..\build mkdir ..\build
 
@@ -27,7 +40,7 @@ rem device" because c30_device.info lives one level down.
 "%XC_DSC%\bin\xc-dsc-gcc.exe" ^
   -mcpu=%MCU% ^
   -mdfp="%DFP%" ^
-  -O1 -Wall -Wextra ^
+  -O1 -Wall -Wextra %EXTRA% ^
   -T"%DFP%\support\dsPIC33A\gld\p%MCU%.gld" ^
   %SOURCES% -o %OUT%.elf
 
@@ -39,10 +52,12 @@ if errorlevel 1 (
 
 echo.
 echo Build OK: %OUT%.elf
+if /i "%1"=="sim" goto :done
 rem NOTE: bin2hex needs -mdfp too. Without it the HEX is still written, but
 rem it prints "Could not open resource file ... c30_device.info / Please
 rem specify the location of a DFP" and looks like a failed build.
 "%XC_DSC%\bin\xc-dsc-bin2hex.exe" -mdfp="%DFP%" %OUT%.elf
 if exist %OUT%.hex echo HEX written: %OUT%.hex
 
+:done
 endlocal

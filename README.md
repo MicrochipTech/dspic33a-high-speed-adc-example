@@ -178,8 +178,10 @@ nothing else.
 **This needs real hardware.** The clock generators, the PLLs, the ADC and the DMA are
 the four things this example is about, and all four only exist on silicon. The number
 that matters — `dma_overrun` staying at 0 at full rate — cannot be produced anywhere
-else. The project is therefore set up for the board and nothing else: the tool is the
-PKOB4 (`pkob4hybrid`).
+else. The project is therefore set up for the board: the tool is the PKOB4
+(`pkob4hybrid`). A second configuration, `sim`, runs the same code in the MPLAB X
+simulator with a stand-in for the DMA — useful for the software above the DMA, useless
+for the four things above; see "In the MPLAB X simulator" below.
 
 One part is worth exercising on its own: `process_buffer()`. Write test values into
 `buf`, call it directly, and you can check your arithmetic and its cycle count on a
@@ -711,6 +713,51 @@ register why that is right for this example. The one to never change by accident
 The same trick works for any configuration bit whose symbolic names have moved: look
 the value up in the ATDF (`<value-group name="FICD_NOBTSWP">`) and write the number.
 
+## In the MPLAB X simulator
+
+The simulator has no PLL, no ADC conversion and no DMA transfer, and in this project it
+does not dispatch interrupts either (any pending interrupt aborts the run with
+`E0110-SIM: Failed to execute instruction`; MPLAB X v6.35, checked 22.09.2026). So the
+DMA interrupt — the only producer of data on silicon — never runs there. The simulator
+build therefore swaps one module: `sim_dma.c` replaces `dma.c`. It implements the same
+`dma.h` interface without a DMA and delivers a buffer half whenever the firmware would
+otherwise wait for one (`SIM_DMA_TICK()` in `sim.h`, empty on silicon): a 1 MHz sine
+on the measurement input, a flat 3840 on the self-test input, through the same
+`dma0_event()` path the interrupt uses. Everything above that — counters, the burst
+restart, `capture_service()`, the self-test, the console — runs unchanged. The clock and
+ADC waits are no-ops (`WAIT_WHILE` in `diag.h`), and three spots in `cli.c` skip what
+the simulator's UART model cannot do (no receiver, `TXMTIF` never set).
+
+Two ways to build it:
+
+- MPLAB X: configuration **`sim`** (tool Simulator, `dma.c` excluded, `sim_dma.c`
+  included, `__MPLAB_DEBUGGER_SIMULATOR=1` defined).
+- Command line: `tools\build.bat sim` or `make -C tools sim` → `build\adc_dma_40msps_sim.elf`.
+
+`tools\sim_trap.py` drives that ELF in MDB, the command-line debugger, routes UART2 to a
+file and prints the result. The expected log ends with
+
+```
+[selftest] mean on internal 15/16 VDD (expect ~3840): 3840
+[simtest] halves compared against the sine vector: 100
+[simtest] full ping-pong buffers: 50
+[simtest] halves with a mismatch: 0
+[simtest] PASS: ping-pong order and data intact
+```
+
+The **ping-pong check** is what the simulator build is for: `sim_dma.c` writes a known
+vector, so every half that `process_buffer()` receives through `capture_completed_half()`
+is compared with it, and the phase must continue from the previous half (1024 mod 40 =
+24 samples). A half served twice, two halves swapped, a wrong pointer or a corrupted
+region all show up as a mismatch with the index. The negative test,
+`sim_trap.py --fault 65536`, drops one sine sample mid-run and must end in
+`[simtest] FAIL` with a mismatch at index 0. DMA status masks written the same way
+(`--fault 8` = OVERRUN) exercise the error counters.
+
+What it does not cover: timing and throughput, the interrupt path, the DMA address
+window and real DMA errors, the clock tree — everything the hardware run is for. A
+simulator run takes about 2.5 minutes for the 100 halves.
+
 ## Files
 
 | Path | Contents |
@@ -721,6 +768,7 @@ the value up in the ATDF (`<value-group name="FICD_NOBTSWP">`) and write the num
 | `clock.c`, `clock.h` | FRC → PLL1 320 MHz (ADC) and PLL2 200 MHz (CPU), the switching order, the clock-fail interrupt |
 | `adc.c`, `adc.h` | the ADC core: channel 0 in Integration mode, burst trigger, input/sample-time register |
 | `dma.c`, `dma.h` | DMA channel 0: address window, Repeated Continuous mode, HALF/DONE interrupt, status flags — knows no ADC and no buffer |
+| `sim_dma.c`, `sim.h` | **simulator build only:** stand-in for `dma.c` that produces buffer halves (1 MHz sine) and the ping-pong check; see "In the MPLAB X simulator" |
 | `capture.c`, `capture.h` | the measurement: wires ADC and DMA together, handles the DMA events with every error counter and the burst restart, start/stop/input, self-test, per-half processing — what the console may read and control |
 | `led.c`, `led.h` | LED0 |
 | `diag.c`, `diag.h` | stop codes (`fail()`), trap and unhandled-interrupt handler, boot-stage record, register dump |
@@ -729,6 +777,7 @@ the value up in the ATDF (`<value-group name="FICD_NOBTSWP">`) and write the num
 | `adc_dma_40msps.X/` | MPLAB X project — build, program and debug from here |
 | `docs/TROUBLESHOOTING.md` | **what to do when it does not work** — including where we doubt our own code |
 | `docs/*.png`, `docs/*.mmd` | the block diagrams above, with their Mermaid sources |
+| `tools/sim_trap.py` | drives the simulator build in MDB and reports the verdict ("In the MPLAB X simulator" above) |
 | `tools/` | command-line build without the IDE; **ignore this unless you want it** |
 
 ### About `tools/`
