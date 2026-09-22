@@ -30,6 +30,22 @@ with no throughput figure given anywhere.
 **If you only need the ADC and can read conversions in software, use the official
 example instead of this one.** It has run on hardware.
 
+### What comes from where
+
+To be precise about how much of this code rests on something that has run on silicon:
+
+| Part of this code | Origin | Has run on hardware? |
+|---|---|---|
+| Clock setup: PLL1/PLL2 divider values, CLKGEN1/CLKGEN6 settings, switching sequence | bit-identical to the MCC-generated `clock.c` of [dspic33ak-curiosity-adc-40msps](https://github.com/microchip-pic-avr-examples/dspic33ak-curiosity-adc-40msps) | yes, in that example |
+| ADC trigger scheme: Integration mode, software trigger starts a burst, back-to-back re-trigger continues it (`MODE = 2`, `TRG1SRC = 1`, `TRG2SRC = 2`, `AD1SWTRG`) | the same example and datasheet Example 16-6 (p1331) | yes — but that example reads one 800-sample burst from `AD3CH0RES` in an assembler loop, **without DMA and without restarting the burst** |
+| DMA basics: `DMALOW`/`DMAHIGH` window, status flags cleared by writing 0, control register layout | MCC `dma.c` of [dspic33a-dac-dma-sinewave](https://github.com/microchip-pic-avr-examples/dspic33a-dac-dma-sinewave) and datasheet Examples 13-1 to 13-4 (p832 ff.) | yes — but memory-to-DAC in Repeated One-Shot mode, the opposite direction and a far lower rate |
+| **ADC burst → DMA in Repeated Continuous mode → one buffer with `HALF`/`DONE` interrupts → burst restarted from the `DONE` ISR** | **our own construction**, assembled from datasheet §13.4.8 (Example 13-4, p835), §13.6.1.2 (HALF interrupt, p848) and §16.4.5 (p1322) | **no.** There is no Microchip example for this combination. This is the part `docs/TROUBLESHOOTING.md` §1.1 flags as the remaining risk |
+| Measurement counters, ISR, `main()` loop, file structure | our own | no |
+
+Nothing was copied verbatim. The examples served as the reference for register values
+and patterns; every line here was written for this project and cites the datasheet
+page it rests on.
+
 ## Read this first
 
 **This code has never run on hardware.** It compiles and links cleanly with the real
@@ -260,14 +276,10 @@ Two more consequences of Integration mode that are easy to miss:
 - **`IRQSEL` must be 0** so that the channel event fires for every conversion; with
   `IRQSEL = 1` it fires once per burst and the DMA would move one value per 51.2 µs.
 
-For an exact lower rate the repeat timer is the tool: period via `RPTCNT[5:0]` in
-`AD1CON`, 1 to 64 ADC clock cycles between triggers (page 1258). At an 80 MHz ADC clock
-the achievable rates sit on 80/n MHz, i.e. 40 / 26.67 / 20 / 16 MSPS. **Exactly 25 MSPS
-is not among them.** If it has to be 25, go via the input clock: 200 MHz in → TAD 20 ns
-→ 50 MHz ADC clock → /2 = 25 MSPS.
-
-PWM or SCCP are only needed if sampling must be tied to a switching event, PTG only
-for staggered sequences across several cores.
+Lower rates are set through the sample time, the repeat timer or the ADC input clock —
+see "Which sample rates you can get" below. PWM or SCCP triggers are only needed if
+sampling must be tied to a switching event or run far below 1 MSPS, PTG only for
+staggered sequences across several cores.
 
 ### 3. DMA into one buffer with two halves
 
@@ -313,6 +325,59 @@ the cause of the next overrun.
 ### 4. What the CPU does, and what to measure
 
 ![CPU and counters](docs/04_cpu_and_counters.png)
+
+## Which sample rates you can get
+
+All figures are **per ADC core**; the dsPIC33AK512MPS512 has five (Table 16-1,
+page 1223).
+
+**The basis.** The ADC clock period is TAD = 4 / F_IN, with F_IN allowed from 32 to
+320 MHz, so TAD runs from 12.5 to 125 ns (AD50, page 2034). One conversion takes the
+sample time plus 1.5 TAD; with the minimum sample time of 0.5 TAD that is 2 TAD, hence
+40 MSPS at 320 MHz (AD51). There are three knobs.
+
+**1. Sample time `SAMC` — back-to-back, the way this example runs.** Sample time is
+(2·SAMC + 0.5) TAD (page 1266), so the conversion period is (2·SAMC + 2) TAD. At
+320 MHz input clock:
+
+| `SAMC` | Rate |
+|---|---|
+| 0 | 40 MSPS |
+| 1 | 20 MSPS |
+| 2 | 13.3 MSPS |
+| 3 | 10 MSPS |
+| 4 | 8 MSPS |
+| 9 | 4 MSPS |
+| 31 | 1.25 MSPS |
+
+That is 40 / (SAMC + 1) MSPS. It is the only knob that changes a single value in the
+source (`ADC1_SAMC`), and it is at the same time the remedy for a source impedance that
+is too high for a 6.25 ns sample window.
+
+**2. Repeat timer instead of back-to-back** (`TRG2SRC = 3`, period in `RPTCNT[5:0]` of
+`AD1CON`, page 1258). A trigger every k ADC clock cycles, k = 2 … 64, at the 80 MHz
+ADC clock: 80 / k MSPS, i.e. 40, 26.7, 20, 16, 13.3, 11.4, 10, 8.9, 8 … down to
+1.25 MSPS. A finer grid than `SAMC`, but **25 MSPS is not on it**.
+
+**3. The ADC input clock, CLKGEN6.** Rate = F_IN / 8 at `SAMC = 0`. With the 9-bit
+fractional divider in `CLK6DIV` almost any value between 4 MSPS (32 MHz) and 40 MSPS is
+reachable — 25 MSPS, for example, with 200 MHz in. Combined with `SAMC` or the repeat
+timer the range extends down to about 125 kSPS (32 MHz, k = 64).
+
+**Below that** the burst mechanism is the wrong tool. For rates like the 40 kHz of a
+piezo grain sensor, use Single Conversion mode with an SCCP or PWM trigger as
+`TRG1SRC`: the DMA transfer per conversion works exactly the same way, and the burst
+restart disappears entirely. That goes down to a few Hz.
+
+Three caveats:
+
+- The figures are per core. Five cores together are nominally 200 MSPS — whether the
+  single DMA bus carries that is precisely the open question this example is meant to
+  measure.
+- The burst restart costs one interrupt latency per 2048 samples, so the measured rate
+  sits a few tenths of a percent below the nominal value.
+- AD51 carries the footnote "design guidance only, not characterised or tested in
+  manufacturing". 40 MSPS is the design target, not a tested limit.
 
 ## The point of the whole thing
 

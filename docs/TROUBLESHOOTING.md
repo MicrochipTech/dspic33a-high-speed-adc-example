@@ -24,8 +24,10 @@ Read this before debugging anything. These are our own doubts, most suspect firs
 The ADC cannot free-run indefinitely: back-to-back triggering exists only in the
 multisample modes, and Integration mode stops after `CNT` conversions (max 65535).
 This code sets `CNT = 2048` = one full DMA buffer and restarts the burst with a software
-trigger from the DMA `DONE` interrupt. That keeps ADC and DMA in lock-step, but it rests
-on two things we could not test:
+trigger from the DMA `DONE` interrupt. That keeps ADC and DMA in lock-step, but it is
+**our own construction — no Microchip example combines an ADC burst, a continuous DMA
+transfer and a restart from the ISR** (the README section "What comes from where" lists
+what was taken from which example). It rests on two things we could not test:
 
 - **The restart is accepted.** Datasheet Example 16-6 (p1331) retriggers a finished
   integration burst in a loop after reading `AD1CH0DATA`, which clears `CH0RDY`. The
