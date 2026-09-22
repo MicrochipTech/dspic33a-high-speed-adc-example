@@ -82,6 +82,17 @@ Using two PLLs means neither clock needs a fractional divider — `CLK1DIV` and
 the PLLs, because changing PLL settings underneath a running CPU clock can overclock
 the core. This matters on a debugger restart, where the part is not freshly reset.
 
+**One open question in this sequence.** Microchip's two references disagree on how
+the PLL is enabled. The MCC example sets only `PLLxCON.ON` and then applies the
+dividers (`PLLSWEN` first). The datasheet's own clock example (Example 16-3, page 1328)
+additionally sets `OSCCTRL.PLLxEN` and waits for `PLLxRDY` *before* it changes any
+divider. If `PLLSWEN` never clears (blink code 1, the first PLL wait), this is the
+suspect: the divider-switch logic may need the PLL enabled through `PLLxEN`. The code
+therefore sets `PLLxEN` as well and does a bounded, non-fatal wait for `PLLxRDY` before
+the first divider switch; the trace line `[clk] PLL1 ready with POR dividers` or
+`[clk] PLL1 not ready yet, continuing` tells which way it went. With a `[FAIL] code 1`
+log, look at `OSCCTRL` in the register dump: `PLL1EN` (bit 6) and `PLL1RDY` (bit 14).
+
 One thing to keep in mind for anything beyond a functional check: 320 MHz is the
 specified maximum ADC input clock, and it is derived from the FRC, whose tolerance puts
 the actual value on either side of that limit. The MCC example does the same, so it is
@@ -150,6 +161,17 @@ Other build failures worth knowing:
 | `does not seem to support the selected device` | `-mdfp` points at the pack root instead of its `xc16` subdirectory — only relevant for command-line builds |
 | `incompatible with 30Fxxxx output` | the linker script was not passed; MPLAB X does this for you |
 | toolchain version warning on opening the project | harmless — *Project Properties → XC-DSC*, select the version you have |
+
+### 2.0a "Stuck at the first PLL wait, nothing on the COM port" — check the tool
+
+Before anything else, look at the MPLAB X Dashboard (or *Project Properties →
+Conn.*). If the tool is **Simulator**, nothing ran on the board: the simulator has no
+PLL, so `WAIT_WHILE(PLL1CONbits.PLLSWEN, 1u)` never clears, and it has no UART
+receiver on the PC side, so the terminal stays empty — exactly the picture of a dead
+board, on a board that was never touched. Select the **PKOB4** and program again.
+The decisive check on hardware: LED0 either blinks slowly (good) or blinks a code
+(the reason is in the terminal log). A dark LED0 after programming means the code is
+not on the board.
 
 ### 2.1 The LED blinks a code — it stopped at a checkpoint
 
@@ -258,6 +280,11 @@ For the external input, after the self-test passed:
 - **Which COM port.** The board has two: the PKOB4's (this console) and the
   MCP2221A's (unused). Both appear when you plug the USB cable in. Try the other one.
   115200 8N1, no flow control.
+- **With a debugger attached and no output at all**, read these while halted and
+  compare: `RPCON` (IOLOCK), `RPOR28` (RP113R must be 19), `RPINR13` (U1RXR 59),
+  `TRISH` (bit 0 clear), `U1CON` (ON, TXEN, RXEN set, CLKMOD set), `U1BRG` (35 on the
+  FRC, 868 on PLL2), `U1STAT` (`TXBE` set when idle). A `U1BRG` of 0 or `RPOR28` of 0
+  means the init did not run or did not take.
 - **Nothing at all, LED blinks normally.** Press Enter — the prompt is only sent once
   at start-up and after each command. If still nothing: the PPS mapping (`_RP113R`,
   `_U1RXR`) or `TRISH0`. Read `U1STATbits.TXBE`: 1 means the transmitter is idle and

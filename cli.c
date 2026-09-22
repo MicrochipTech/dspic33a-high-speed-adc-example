@@ -11,9 +11,10 @@
  *   P102 "UART_PKoB_TX"), U1RX <- RD10 (RP59, DIM pin P100
  *   "UART_PKoB_RX"), 115200 8N1. The channel shares the USB cable with
  *   the debugger and shows up on the PC as a COM port (user guide
- *   DS70005562D 2.1.2). The PPS codes are the ones Microchip's own
- *   example uses on this board (U1TX = 19, Table "Output Selection for
- *   Remappable Pins", p613).
+ *   DS70005562D 2.1.2). The PPS code is the one Microchip's own example
+ *   uses on this board (U1TX = 19, Table "Output Selection for
+ *   Remappable Pins", p613). The board's other USB-UART channel (the
+ *   MCP2221A) is not used by this console.
  *
  * Two phases
  *   console_early_init() runs before the clocks are touched, on the

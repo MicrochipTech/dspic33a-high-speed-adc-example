@@ -345,6 +345,21 @@ void clock_init(void)
 
     /* ---- PLL1: 320 MHz for the ADC ---- */
     PLL1CON = 0x8100u;          /* ON = 1, NOSC = FRC                   */
+
+    /* Two Microchip references disagree here. The MCC example enables
+     * the PLL with PLLxCON.ON alone and applies the dividers first. The
+     * datasheet's own clock example (Example 16-3, p1328) additionally
+     * sets OSCCTRL.PLLxEN and waits for PLLxRDY before it touches any
+     * divider. Doing both cannot hurt: PLLxEN is set here, and the wait
+     * is bounded and non-fatal - the trace says which way it went. */
+    OSCCTRLbits.PLL1EN = 1u;
+    {
+        uint32_t n = 200000u;
+        while (!OSCCTRLbits.PLL1RDY && (--n != 0u)) { }
+    }
+    console_puts(OSCCTRLbits.PLL1RDY ? "[clk] PLL1 ready with POR dividers\r\n"
+                                     : "[clk] PLL1 not ready yet, continuing\r\n");
+
     PLL1DIV = 0x0100C829u;      /* N1=1, M=200, POSTDIV1=5, POSTDIV2=1  */
 
     PLL1CONbits.PLLSWEN  = 1u;  /* (a) apply input and feedback dividers */
@@ -362,6 +377,14 @@ void clock_init(void)
 
     /* ---- PLL2: 200 MHz for the system clock ---- */
     PLL2CON = 0x8100u;
+    OSCCTRLbits.PLL2EN = 1u;    /* see PLL1 above                        */
+    {
+        uint32_t n = 200000u;
+        while (!OSCCTRLbits.PLL2RDY && (--n != 0u)) { }
+    }
+    console_puts(OSCCTRLbits.PLL2RDY ? "[clk] PLL2 ready with POR dividers\r\n"
+                                     : "[clk] PLL2 not ready yet, continuing\r\n");
+
     PLL2DIV = 0x01007D29u;      /* N1=1, M=125, POSTDIV1=5, POSTDIV2=1  */
 
     PLL2CONbits.PLLSWEN  = 1u;

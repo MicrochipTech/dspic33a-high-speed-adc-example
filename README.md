@@ -72,6 +72,11 @@ of use — so every setting can be checked against the primary source.
 
 **Revision history**
 
+- **2026-09-22, after the first report from a board** — the project's tool is the PKOB4
+  now (`pkob4hybrid`) instead of the simulator, which had let a first attempt run on the
+  PC and look like a dead board. The PLL start additionally sets `OSCCTRL.PLLxEN` and
+  waits (bounded) for `PLLxRDY` before the first divider switch, as the datasheet's own
+  example does and the MCC example does not; the trace reports which path was taken.
 - **2026-09-22, third revision** — moved to the **EV74H48A** with the dsPIC33AK512MPS512
   DIM (the board of Microchip's own 40 MSPS example): ADC3 on the mikroBUS A analog pin,
   LED0 on RC8, pin table below. A **command console** (`cli.c`, on the parser from
@@ -108,9 +113,10 @@ and the debugger tell you the same things.
 1. Plug the board in. The PKOB4 debugger enumerates, and a second COM port appears for
    the console (user guide DS70005562D 2.1.2).
 2. Open `adc_dma_40msps.X`, press **Build**, then **Program** (or **Debug**).
-3. The project's tool is set to *Simulator* so that it opens on any machine; MPLAB X
-   asks which tool to use the first time, pick the PKOB4. You can also set it under
-   *Project Properties → Conn.*
+3. The project's tool is the board's **PKOB4** (`pkob4hybrid`). Check it once in the
+   Dashboard or under *Project Properties → Conn.*: if it says *Simulator*, the code
+   runs on the PC, stops at the first PLL wait forever and nothing reaches the COM
+   port — which looks exactly like a broken board.
 4. Watch LED0 (green, the row of eight): **slow blink = everything works.** The
    self-test on the internal reference has passed, the ADC, the DMA and the interrupt
    are running at 40 MSPS. What the other patterns mean is under "First run on
