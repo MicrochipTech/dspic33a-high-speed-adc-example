@@ -15,9 +15,9 @@ for something that already did this. These are the ones we evaluated:
 
 | Repository | What it does | What we took from it |
 |---|---|---|
-| [dspic33ak-curiosity-adc-40msps](https://github.com/microchip-pic-avr-examples/dspic33ak-curiosity-adc-40msps) | **40 MSPS ADC on dsPIC33AK128MC106 and dsPIC33AK512MPS512** — MCC-generated, runs on a Curiosity board. Reads conversions in software; **no DMA**. | Studied in detail. **Our clock setup follows its divider values and switching sequence**, because that code has been on silicon and ours has not. |
-| [dspic33a-dac-dma-sinewave](https://github.com/microchip-pic-avr-examples/dspic33a-dac-dma-sinewave) | DAC fed by DMA to emit a 100 Hz sine without CPU intervention. | Checked for DMA setup patterns. Different direction (memory → peripheral) and a far lower rate, so nothing carried over. |
-| [dspic33a-curiosity-dma-spi-eeprom-demo](https://github.com/microchip-pic-avr-examples/dspic33a-curiosity-dma-spi-eeprom-demo) | SPI transfers driven by DMA. | Same: DMA, but not from an ADC and not at rate. |
+| [dspic33ak-curiosity-adc-40msps](https://github.com/microchip-pic-avr-examples/dspic33ak-curiosity-adc-40msps) | **40 MSPS ADC on dsPIC33AK128MC106 and dsPIC33AK512MPS512** — MCC-generated, runs on a Curiosity board. Reads conversions in software; **no DMA**. | Studied in detail. **Our clock setup and our ADC trigger scheme follow it**, because that code has been on silicon and ours has not. |
+| [dspic33a-dac-dma-sinewave](https://github.com/microchip-pic-avr-examples/dspic33a-dac-dma-sinewave) | DAC fed by DMA to emit a 100 Hz sine without CPU intervention. | Checked for DMA setup patterns: it sets the DMA address window and clears the status flags by writing 0 — both of which we had wrong before the 2026-09-22 review. |
+| [dspic33a-curiosity-dma-spi-eeprom-demo](https://github.com/microchip-pic-avr-examples/dspic33a-curiosity-dma-spi-eeprom-demo) | SPI transfers driven by DMA. | DMA, but not from an ADC and not at rate. |
 | [dspic33a-code-examples](https://github.com/microchip-pic-avr-examples/dspic33a-code-examples) | Collection of smaller dsPIC33A examples. | Scanned for an ADC-plus-DMA combination; there is none. |
 | [dspic33ak512mps506-dppim-demo](https://github.com/microchip-pic-avr-examples/dspic33ak512mps506-dppim-demo) | PWM and ADC on the dsPIC33AK512MPS506. | PWM-triggered conversion, not continuous sampling into memory. |
 
@@ -38,9 +38,23 @@ but nobody has executed it on a board or measured a signal with it. Treat it as 
 clean scaffold with measurement points, not as a reference implementation.
 
 Parts of this example were **AI-assisted**. All register names, bitfields and value
-ranges were taken from datasheet **DS70005591D** and from the ATDF files of the
-**dsPIC33AK-MP_DFP** device pack, and each one is cited at the point of use — so every
-setting can be checked against the primary source.
+ranges were taken from datasheet **DS70005591D**, the errata **DS80001162E** and the
+ATDF files of the **dsPIC33AK-MP_DFP** device pack, and each one is cited at the point
+of use — so every setting can be checked against the primary source.
+
+**Revision history**
+
+- **2026-09-22** — full review against the datasheet, the errata and Microchip's MCC
+  examples. Four mistakes found and fixed, all of which would have stopped the first
+  run dead: (1) the ADC was set to single-conversion mode with a re-trigger source,
+  which the datasheet says is ignored in that mode — it would never have converted;
+  (2) `DMALOW`/`DMAHIGH` were left at their reset value 0, so the first DMA write would
+  have faulted and disabled the channel; (3) the DMA status flags were "cleared" by
+  writing 1 — they clear on 0 — so every counter would have stuck; (4) the two sample
+  buffers were swapped by rewriting the DMA destination inside the ISR while the
+  transfer was already running, which splits every block. Details in the sections below
+  and in `docs/TROUBLESHOOTING.md`.
+- **2026-09-21** — first version.
 
 ## Getting started
 
@@ -48,13 +62,13 @@ Open `adc_dma_40msps.X` in MPLAB X, press **Build**, then **Debug** or **Program
 That is all — the project is configured for dsPIC33AK512MPS512 and pulls the source
 from the folder above it.
 
-Verified on 2026-09-21 with:
+Verified on 2026-09-22 with:
 
 | Tool | Version |
 |---|---|
 | MPLAB X IDE | v6.35 (project format `version="65"`, which v6.25 also reads) |
-| XC-DSC compiler | v3.31.00; also builds with v3.21 when the pack supplies the device |
-| Device pack | dsPIC33AK-MP_DFP **1.4.260 and 1.3.185** — the source builds against both |
+| XC-DSC compiler | v3.31.00; the source also builds with v3.21 when the pack supplies the device |
+| Device pack | dsPIC33AK-MP_DFP **1.4.260 and 1.3.185** — the source builds against both, `-Wall -Wextra` clean |
 | Target | dsPIC33AK512MPS512 |
 | Board | EV17P63A (dsPIC33AK512MPS506 Curiosity Nano) — 64 pins, fewer analog inputs than the 128-pin part, enough for a functional check |
 
@@ -80,7 +94,7 @@ convert, the DMA would not transfer and the ISR would never fire, so the run wou
 show that the code starts — not that the configuration works. The number that matters,
 `dma_overrun` staying at 0 at full rate, only exists on silicon.
 
-One part *is* worth simulating: `process_buffer()`. Write test values into `buf_a`,
+One part *is* worth simulating: `process_buffer()`. Write test values into `buf`,
 call it on its own, and you can check your arithmetic and its cycle count without a
 board.
 
@@ -95,17 +109,21 @@ likely to trip you up.
 
 ### Step 1 — check that anything runs at all, no signal needed
 
-Program the board, let it run, then halt it and look at four variables:
+Program the board, let it run, then halt it and look at these variables:
 
 | Variable | Should be |
 |---|---|
-| `blocks_done` | increasing — at 40 MSPS a block completes every 25.6 µs, so this climbs fast |
+| `blocks_done` | increasing — at 40 MSPS a buffer half completes every 25.6 µs, so this climbs fast |
 | `last_sample` | changing |
 | `dma_overrun` | **0** |
-| `late_service` | **0** |
+| `dma_addr_err` | **0** — non-zero means the DMA address window is wrong |
+| `late_service`, `proc_missed` | **0** |
 
 An unconnected pin gives you noise around some level. As a sign of life that is
 perfectly sufficient — it proves clock, ADC, DMA and the ISR are working together.
+
+If `blocks_done` stops at exactly 2, the first burst ran and the restart from the ISR
+did not — `docs/TROUBLESHOOTING.md` §1.1 and §2.2 are for that.
 
 ### Step 2 — feed a signal in
 
@@ -117,10 +135,10 @@ Table 16-2 of DS70005591D, from page 1224.
 **What level.** 0 to 3.3 V, single ended against AVSS, unipolar (`DIFF = 0`). Anything
 with a negative excursion gets clipped at the bottom.
 
-**What frequency.** This matters more than people expect. One buffer is 1024 samples,
-which at 40 MSPS is **25.6 µs**. A 1 kHz sine fills 2.5 % of one period — in the buffer
-that is a straight line. For a recognisable waveform use something in the **100 kHz to
-a few MHz** range, then several periods fit in the window.
+**What frequency.** This matters more than people expect. One buffer half is 1024
+samples, which at 40 MSPS is **25.6 µs**. A 1 kHz sine fills 2.5 % of one period — in
+the buffer that is a straight line. For a recognisable waveform use something in the
+**100 kHz to a few MHz** range, then several periods fit in the window.
 
 **Source impedance — the most likely reason for odd values.** `SAMC = 0` means a sample
 time of 0.5 TAD = 6.25 ns, and in that time your source has to charge the hold
@@ -131,23 +149,25 @@ whether the amplitude comes up.
 
 ### Step 3 — look at the buffer
 
-The buffers refill 39 000 times per second, so you have to stop the capture to see
-anything: set a breakpoint in the DMA0 ISR, then view `buf_a` / `buf_b` in the watch
-window or as a memory view.
+The halves refill 39 000 times per second, so you have to stop the capture to see
+anything: set a breakpoint in the DMA0 ISR, then view `buf` in the watch window or as
+a memory view.
 
-Which one to look at: `active_buf` points at the buffer currently **being filled**, so
-the *other* one holds the complete block.
+Which half to look at: `ready_half` says which one was completed last (0 = `buf[0]` to
+`buf[1023]`, 1 = `buf[1024]` to `buf[2047]`). The DMA is filling the *other* one.
 
 ### If it does not work
 
 | Symptom | Where to look first |
 |---|---|
 | stuck before `main()`, or nothing counts up | clock configuration — a wait loop in `clock_init()` never exits |
-| `blocks_done` stays 0 | ADC not converting (`ADRDY`?) or wrong DMA trigger (`DMA0SEL`) |
+| `blocks_done` stays 0 | ADC not converting (`ADRDY`? `CNTSTAT`?), DMA channel disabled by the address window (`CHEN` = 0, `dma_addr_err` > 0), or wrong DMA trigger (`DMA0SEL`) |
+| `blocks_done` stops at 2 | the burst restart in the ISR did not take |
 | `dma_overrun` counting up | the shared DMA bus is not keeping up — see below, this is the interesting result |
 | values far too small or flat | source impedance, raise `ADC1_SAMC` |
 | values look like a straight line | signal frequency too low for a 25.6 µs window |
-| `late_service` counting up | the ISR is not keeping up, reduce the processing or enlarge `SAMPLES_PER_BUF` |
+| values above 4095 | `DMA0SRC` points at the accumulator (`AD1CH0DATA`) instead of `AD1CH0RES` |
+| `late_service` or `proc_missed` counting up | the ISR or `main()` is not keeping up, reduce the processing or enlarge `SAMPLES_PER_HALF` |
 
 Note that `dma_overrun` counting up is not a bug in this code — it is the measurement
 this example exists for.
@@ -194,7 +214,7 @@ this operating point — *"Input frequency 320 MHz, ADC clock 80 MHz, TAD 12.5 n
 so non-integer ratios are possible — but this example does not need one: both clock
 generators take their PLL output straight through, `CLK1DIV = CLK6DIV = 0`.
 
-### 2. ADC — one core, one channel, free running
+### 2. ADC — one core, one channel, bursts of 2048 back-to-back conversions
 
 ![ADC path](docs/02_adc_path.png)
 
@@ -203,54 +223,92 @@ generators take their PLL output straight through, `CLK1DIV = CLK6DIV = 0`.
 | `PINSEL` | 0 | analog input AD1AN0 (Table 16-2, from page 1224) |
 | `NINSEL` | 0 | negative input on AVSS, i.e. single ended |
 | `DIFF` | 0 | single ended → unsigned result |
-| `FRAC` | 0 | integer, right aligned |
+| `FRAC` | 0 | integer, right aligned (page 1265) |
 | `SAMC` | 0 | sample time 0.5 TAD = minimum (page 1266) |
-| `MODE` | 0 | single conversion, no averaging |
-| `ACCNUM` | 0 | no oversampling |
-| `TRG2SRC` | 0x02 | **immediate re-trigger** (Table 16-4, page 1227) |
+| `MODE` | 2 | **Integration**: a burst of `CNT` conversions (page 1267) |
+| `CNT` | 2048 | conversions per burst = one DMA buffer (`AD1CH0CNT`, page 1272) |
+| `TRG1SRC` | 0x01 | **software trigger** starts the burst (Table 16-3, page 1226) |
+| `TRG2SRC` | 0x02 | **back-to-back** re-trigger for every further conversion (Table 16-4, page 1227) |
+| `IRQSEL` | 0 | channel event **after each conversion**, when `AD1CH0RES` is ready (page 1266) |
+| `EIEN` | 0 | no early interrupt — note 4 on page 1265 forbids it with DMA |
+| `ACCNUM` | 0 | oversampling only, unused in this mode |
 
-**On the trigger choice**, since that was the original question: for maximum
-continuous rate you need neither PWM nor SCCP nor PTG. The ADC triggers itself. Two
-variants appear in Table 16-4:
+**On the trigger choice**, since that was the original question — and since the first
+version of this code got it wrong: there is no register setting that makes a channel
+free-run forever. §16.4.5 (page 1322) is explicit:
 
-- `0b000010` **immediate re-trigger** — gapless, no period arithmetic. This is what
-  the code uses.
-- `0b000011` **conversion repeat timer** — fixed rate, period via `RPTCNT[5:0]` in
-  `AD1CON`, counting 1 to 64 ADC clock cycles between triggers (page 1258).
+- `TRG2SRC` *"are not used for a Single Conversion mode (MODE = 00)"*, and Table 16-3
+  lists the back-to-back value as *reserved* for `TRG1SRC`. So "single conversion plus
+  immediate re-trigger" converts exactly nothing.
+- Back-to-back triggering (`0b000010`) and the repeat timer (`0b000011`) exist only as
+  `TRG2SRC`, i.e. in the multisample modes (Window, Integration, Oversampling), and
+  there the **first** conversion needs a `TRG1SRC` trigger. Integration mode then runs
+  `CNT` conversions (max 65535) and stops.
 
-One caveat for the second variant and the alternative rate of 25 MSPS: at an 80 MHz
-ADC clock the achievable rates sit on 80/n MHz, i.e. 40 / 26.67 / 20 / 16 MSPS.
-**Exactly 25 MSPS is not among them.** If it has to be 25, go via the input clock:
-200 MHz in → TAD 20 ns → 50 MHz ADC clock → /2 = 25 MSPS.
+That is why this code works in bursts: a software trigger starts 2048 conversions, the
+ADC re-triggers itself for each of them, and the DMA `DONE` interrupt — which arrives
+when the 2048th sample has landed in RAM — starts the next burst. The gap between
+bursts is the interrupt latency, once per 51.2 µs, so the measured rate will sit a
+little below 40 MSPS. Microchip's own 40 MSPS example uses the same triple (`MODE = 2`,
+`TRG1SRC` = software, `TRG2SRC` = back-to-back), as does datasheet Example 16-6.
+
+Two more consequences of Integration mode that are easy to miss:
+
+- **The per-conversion result is `AD1CH0RES`**, `RES[11:0]`. `AD1CH0DATA` is the
+  accumulator of the whole burst (page 1270) — pointing the DMA there gives you a
+  running sum, not samples.
+- **`IRQSEL` must be 0** so that the channel event fires for every conversion; with
+  `IRQSEL = 1` it fires once per burst and the DMA would move one value per 51.2 µs.
+
+For an exact lower rate the repeat timer is the tool: period via `RPTCNT[5:0]` in
+`AD1CON`, 1 to 64 ADC clock cycles between triggers (page 1258). At an 80 MHz ADC clock
+the achievable rates sit on 80/n MHz, i.e. 40 / 26.67 / 20 / 16 MSPS. **Exactly 25 MSPS
+is not among them.** If it has to be 25, go via the input clock: 200 MHz in → TAD 20 ns
+→ 50 MHz ADC clock → /2 = 25 MSPS.
 
 PWM or SCCP are only needed if sampling must be tied to a switching event, PTG only
 for staggered sequences across several cores.
 
-### 3. DMA with ping-pong buffers
+### 3. DMA into one buffer with two halves
 
 ![DMA path](docs/03_dma_path.png)
 
 | Field | Value | Why |
 |---|---|---|
+| `DMALOW` / `DMAHIGH` | 0x4000 / 0x13FFF | **the data RAM window — mandatory.** Both reset to 0; every transaction is checked against them (page 829, step 5) and an access above `DMAHIGH` sets `ADRERR` and clears `CHEN` (pages 810, 826). Taken from the device header (`__DATA_BASE`, `__DATA_LENGTH`). |
 | `DMA0SEL` | 0x2F | trigger source "ADC1 Done CH0" (ATDF value group `DMA_SEL__CHSEL`) |
-| `DMA0SRC` | `&AD1CH0DATA` | the channel's result register |
-| `SIZE` | 1 | **16-bit transfers** |
+| `DMA0SRC` | `&AD1CH0RES` | the per-conversion result register |
+| `SIZE` | 1 | **16-bit transfers** (page 812) |
 | `SAMODE` | 0 | source address stays put |
 | `DAMODE` | 1 | destination increments |
 | `TRMODE` | 3 | repeated continuous |
-| `RELOADD`, `RELOADC` | 1 | reload destination and count per block |
-| `DONEEN` | 1 | interrupt on block completion |
+| `RELOADD`, `RELOADC` | 1 | back to the buffer start after each block, in hardware (page 812) |
+| `HALFEN`, `DONEEN` | 1 | one interrupt when the first half is full, one when the second is (page 848) |
 
 **On 2 bytes per sample:** the DMA handles 8, 16 and 32-bit transactions, selected
-through `SIZE[1:0]` (§13.4.2, page 824). A 12-bit result therefore costs 2 bytes, not
-4. The result registers themselves are 32 bits wide; with `FRAC = 0` the value is
-right aligned, so the lower half carries the data. **That is the one assumption in
-this code the datasheet does not state outright** — please verify it on hardware.
+through `SIZE[1:0]`. A 12-bit result therefore costs 2 bytes, not 4. `AD1CH0RES` is
+32 bits wide with `RES[11:0]` in the low half and `RESF[11:0]` in bits 31:20 (register
+summary, page 1229), so the 16-bit read of the low half is the sample.
 
-Two buffers of 1024 samples, 2 KiB each. At 40 MSPS one buffer is 25.6 µs of signal
-and the block interrupt arrives at about 39 kHz. The ISR only swaps the destination
-address and counts errors — deliberately short, because at this rate a long ISR
-becomes the cause of the next overrun.
+**On the two halves:** the first version of this code used two separate buffers and
+rewrote `DMA0DST` from the ISR to swap them. That cannot work at this rate — with
+`RELOADD` the DMA restarts at the old address the moment a block completes, samples
+keep arriving every 25 ns, and by the time the ISR rewrites the pointer a dozen of
+them have landed in the buffer the CPU is reading, while the rest of the block goes
+to the new address minus those samples. The hardware has the right tool for this:
+the `HALF` flag. One buffer of 2048, an interrupt at the halfway point and one at the
+end, and **no address is ever touched by software while the channel runs**.
+(The device also has a hardware ping-pong mode across a channel pair, `PPEN`/`PCHEN`,
+§13.4.11 page 841 — more than this example needs.)
+
+**On the status flags:** `DMAxSTAT` bits are *R/C/HS* — set by hardware, **cleared by
+writing 0** (legend page 815; Example 13-4 page 835 does `DMA0STATbits.DONE=0`).
+Writing 1, as the first version did, leaves them set.
+
+At 40 MSPS one half is 25.6 µs of signal and the interrupt arrives at about 39 kHz.
+The ISR only clears flags, notes which half is complete, counts errors and — at `DONE`
+— restarts the ADC burst. Deliberately short, because at this rate a long ISR becomes
+the cause of the next overrun.
 
 ### 4. What the CPU does, and what to measure
 
@@ -280,12 +338,14 @@ Read these in the debugger after a run:
 
 | Variable | Meaning | Expectation |
 |---|---|---|
-| `blocks_done` | completed DMA blocks | × 1024 / elapsed time = **actual sample rate** |
-| `dma_overrun` | `DMA0STAT.OVERRUN` seen | **must stay 0**, otherwise samples were lost |
-| `late_service` | ISR was too slow | **must stay 0** |
-| `dma_bus_err` | bus read/write error | 0 |
-| `dma_addr_err` | address error | 0 |
-| `last_sample` | last value read | changing = data really moving |
+| `blocks_done` | completed buffer halves | × 1024 / elapsed time = **actual sample rate** (includes the burst restart gap) |
+| `dma_overrun` | `DMA0STAT.OVERRUN` seen: triggered again before the previous transfer finished (page 816) | **must stay 0**, otherwise samples were lost on the DMA bus |
+| `late_service` | ISR found `HALF` and `DONE` pending together, i.e. it was more than one half late | **must stay 0** |
+| `proc_missed` | `main()` did not reach a completed half before the next one finished | **must stay 0** |
+| `dma_bus_err` | bus write error (`BWERR`; `BRERR` needs `RETEN`, see errata) | 0 |
+| `dma_addr_err` | access outside `DMALOW`…`DMAHIGH` | 0 |
+| `last_sample` | last value of the completed half | changing = data really moving |
+| `ready_half` | which half completed last | alternating 0 / 1 |
 
 A sequence we would suggest:
 
@@ -301,8 +361,8 @@ A sequence we would suggest:
 
 ## If the bandwidth is not enough
 
-The ADC can average internally, before a DMA transfer even happens — `ACCNUM[1:0]` in
-`AD1CH0CON1` (page 1266):
+The ADC can average internally, before a DMA transfer even happens — Oversampling mode
+(`MODE = 3`) with `ACCNUM[1:0]` in `AD1CH0CON1` (page 1266):
 
 | `ACCNUM` | Samples | Result width |
 |---|---|---|
@@ -312,15 +372,16 @@ The ADC can average internally, before a DMA transfer even happens — `ACCNUM[1
 | 0b11 | 256 | 16 bit |
 
 At 16× averaging, 240 MB/s becomes 15 MB/s and the result still fits in 2 bytes with
-14 bits. Sampling stays at 40 MSPS; only the output rate drops.
+14 bits. Sampling stays at 40 MSPS; only the output rate drops. In that mode the
+averaged result lives in `AD1CH0DATA` and the channel event with `IRQSEL = 1` fires
+once per average — so `DMA0SRC`, `IRQSEL` and the burst restart change accordingly.
 
 **Whether that is an option depends on your measurement method** — for a pure
 amplitude measurement it helps, for a phase-based method averaging can destroy the
 information. That is worth a phone call.
 
-`MODE[1:0]` also offers three further sampling modes (integration, window/gated,
-single conversion), and the last three setting channels have a second accumulator for
-second-order filters.
+`MODE[1:0]` also offers Window mode (gated by an external signal), and the last three
+setting channels have a second accumulator for second-order filters.
 
 ## What this code does not do
 
@@ -338,6 +399,19 @@ second-order filters.
   resistance) all carry the note "design guidance only, not tested". The ENOB of
   10.5 bits was characterised with a 1 kHz sine and says nothing about high input
   frequencies.
+- **No gapless stream.** The burst restart costs one interrupt latency per 2048
+  samples. If that matters, the datasheet's hardware ping-pong across two DMA channels
+  and a second ADC channel alternating bursts would close the gap — a different
+  example.
+
+## Errata
+
+Silicon errata DS80001162E (rev. E, July 2026) was checked. Nothing in it concerns
+the ADC, the PLLs or the clock generators. Two items touch this code: `BRERR` is only
+reported when `RETEN` is set (item 2 — this code leaves it clear, so `dma_bus_err`
+counts write errors only), and on **rev A1 silicon** the compiler option
+`-merrata=base_offset` is recommended (item 22). `docs/TROUBLESHOOTING.md` has the
+details.
 
 ## One trap worth knowing about
 

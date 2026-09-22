@@ -8,31 +8,35 @@ This guide is written for that. It is ordered by how likely each thing is to be 
 problem, and it tells you **where we are least certain of our own code**, so you do not
 waste time on the parts that are solid.
 
+**Revision 2026-09-22:** a review against the datasheet and the silicon errata found
+four real mistakes in the previous version (ADC trigger mode, DMA address limits, status
+flag clearing, buffer switching). They are fixed; the README has the list. This guide was
+rewritten to match.
+
 ---
 
 ## Part 1 — Where this code is most likely wrong
 
 Read this before debugging anything. These are our own doubts, most suspect first.
 
-### 1.1 Is the sample actually in the lower 16 bits? (highest risk)
+### 1.1 The burst restart (highest remaining risk)
 
-`AD1CH0DATA` is a **32-bit** register. The DMA is set to 16-bit transfers
-(`SIZE = 1`), so it copies half of it. We assume the 12-bit result sits in the lower
-half because `FRAC = 0` selects right-aligned integer format — but **the datasheet
-never states this outright**, and it is the one assumption that would silently produce
-garbage rather than an error.
+The ADC cannot free-run indefinitely: back-to-back triggering exists only in the
+multisample modes, and Integration mode stops after `CNT` conversions (max 65535).
+This code sets `CNT = 2048` = one full DMA buffer and restarts the burst with a software
+trigger from the DMA `DONE` interrupt. That keeps ADC and DMA in lock-step, but it rests
+on two things we could not test:
 
-**How to check:** halt after a few blocks and compare. Read `AD1CH0DATA` directly in
-the watch window, then look at the last value written into the buffer. They should show
-the same number.
+- **The restart is accepted.** Datasheet Example 16-6 (p1331) retriggers a finished
+  integration burst in a loop after reading `AD1CH0DATA`, which clears `CH0RDY`. The
+  ISR does the same (`adc1_start_burst()`). If bursts stop after the first one,
+  `blocks_done` stays at 2 — see §2.2.
+- **DMA and ADC stay in step.** Both count 2048. If `blocks_done` runs but the buffer
+  content drifts (the first sample of a half is not where you expect), check
+  `AD1CH0CNTbits.CNTSTAT` against `DMA0CNT` while halted.
 
-**If they differ:** the sample is elsewhere in the 32-bit word. Then either
-- set `DMA0CHbits.SIZE = 2` (32-bit) and make the buffers `uint32_t`, at the cost of
-  4 bytes per sample, or
-- point `DMA0SRC` at the odd 16-bit half: `(uint32_t)&AD1CH0DATA + 2`.
-
-Try `FRAC = 1` as a cross-check: that switches to fractional (left-aligned) format. If
-the numbers change in a way that makes sense, the alignment theory is confirmed.
+The restart costs the interrupt latency once per 51.2 µs, so the measured rate will sit
+slightly below 40 MSPS. That is expected and not an overrun.
 
 ### 1.2 The PLL setup
 
@@ -43,8 +47,8 @@ MCC-generated example for this exact part and aligned the code with it:
 
 That example runs at 40 MSPS on a Curiosity board and covers both dsPIC33AK128MC106
 and dsPIC33AK512MPS512. It has no DMA — which is why this project exists — but its
-clock setup has been on hardware, and ours now uses the same divider values and, more
-importantly, the same switching sequence.
+clock setup has been on hardware, and ours uses the same register values (checked bit
+for bit) and the same switching sequence.
 
 **The switching sequence is the part that bites.** DS70005591D page 778:
 
@@ -70,20 +74,21 @@ Current values, cross-checked against Table 40-23 and page 777:
 | Output | **320 MHz** → CLKGEN6 → ADC | **200 MHz** → CLKGEN1 → CPU |
 
 Using two PLLs means neither clock needs a fractional divider — `CLK1DIV` and
-`CLK6DIV` are both 0. An earlier version divided one 320 MHz PLL by 1.6 using the
-9-bit `FRACDIV` field, which worked arithmetically but rested on our reading of how
-that field scales. That uncertainty is gone.
+`CLK6DIV` are both 0. The code also parks the system clock on the FRC before touching
+the PLLs, because changing PLL settings underneath a running CPU clock can overclock
+the core. This matters on a debugger restart, where the part is not freshly reset.
 
-The code also parks the system clock on the FRC before touching the PLLs, because
-changing PLL settings underneath a running CPU clock can overclock the core. This
-matters on a debugger restart, where the part is not freshly reset.
+One thing to keep in mind for anything beyond a functional check: 320 MHz is the
+specified maximum ADC input clock, and it is derived from the FRC, whose tolerance puts
+the actual value on either side of that limit. The MCC example does the same, so it is
+fine for a bench test; a product would use the primary oscillator.
 
 ### 1.3 Interrupt priority is left at default
 
-The code enables the DMA0 interrupt but never sets its priority. Whatever the reset
-default is, it applies. At 39 000 interrupts per second that is usually fine because
-nothing competes — but if you add UART or CAN later, this is where jitter and
-`late_service` counts will come from.
+The code enables the DMA0 interrupt but never sets its priority; the reset default of
+`IPC9.DMA0IP` is 4. At 39 000 interrupts per second that is usually fine because
+nothing competes — but if you add UART or CAN later, this is where jitter,
+`late_service` and `proc_missed` counts will come from.
 
 ### 1.4 Things we consider solid
 
@@ -91,12 +96,21 @@ So you do not hunt here first. Each was read from a primary source and cross-che
 
 - **`DMA0SEL = 0x2F`** = "ADC1 Done CH0" — straight from the ATDF value group
   `DMA_SEL__CHSEL`.
-- **`SIZE = 1` = 16-bit** — §13.4.2 page 824 states 8, 16 and 32-bit transactions
-  explicitly.
-- **`TRG2SRC = 0x02` = immediate re-trigger** — Table 16-4 page 1227.
+- **`SIZE = 1` = 16-bit** — §13.4.2 page 824 and the register description on page 812.
+- **`AD1CH0RES` low half = the sample** — `RES[11:0]` sits in bits 11:0, `RESF` in
+  bits 31:20 (register summary p1229). With `FRAC = 0` the result is right aligned
+  (p1265).
+- **`MODE = 2`, `TRG1SRC = 1`, `TRG2SRC = 2`, then a software trigger** — §16.4.5
+  page 1322, Example 16-6 page 1331, and the MCC 40 MSPS example.
+- **`DMALOW`/`DMAHIGH` required** — page 809 f., §13.4.5 page 826, and every code
+  example in the DMA chapter sets them.
+- **`DMAxSTAT` flags clear by writing 0** — legend "C = Clearable" page 815, Example
+  13-4 page 835.
 - **320 MHz is the ADC maximum, TAD = 4/F_IN** — Table 40-24 page 2016 and AD50.
 - **CLKGEN6 feeds the ADC, CLKGEN1 the system** — Table 16-1 page 1223, §12.4.9
   page 795.
+- **Interrupt plumbing** — DMA0 is IRQ 77, `IEC2`/`IFS2` bit 13, `INTCON1.GIE` is
+  set at reset; the linked ELF has `_DMA0Interrupt` at IVT entry 85.
 - **`FICD_NOBTSWP` values** — read from both pack versions, see the README.
 
 ---
@@ -121,14 +135,15 @@ Other build failures worth knowing:
 
 | Message | Cause |
 |---|---|
+| `__DATA_BASE / __DATA_LENGTH not provided by the device header` | very old pack; replace the two macros in `dma0_init()` with `0x4000` and `0x10000` from your linker script |
 | `does not seem to support the selected device` | `-mdfp` points at the pack root instead of its `xc16` subdirectory — only relevant for command-line builds |
 | `incompatible with 30Fxxxx output` | the linker script was not passed; MPLAB X does this for you |
 | toolchain version warning on opening the project | harmless — *Project Properties → XC-DSC*, select the version you have |
 
 ### 2.1 It never reaches `main()`, or halts immediately
 
-Almost certainly a wait loop in `clock_init()`. Halt the debugger and look at **which
-line** you are on — each one tells you something different:
+Almost certainly a wait loop in `clock_init()` or `adc1_init()`. Halt the debugger and
+look at **which line** you are on — each one tells you something different:
 
 | Stuck at | Meaning | Where to look |
 |---|---|---|
@@ -148,31 +163,36 @@ describes, and it is silent.
 **In the simulator all of these hang** — it models no PLL and no ADC. That is expected,
 see the README. Use a hardware debugger.
 
-**A useful trick:** put a breakpoint on the first line of `clock_init()` and step
-through. After each switch, read the `CLKxCON` and `OSCCTRL` registers in the watch
-window; `CLKRDY` and `PLL1RDY` tell you exactly how far you got.
-
-### 2.2 It runs, but `blocks_done` stays at 0
+### 2.2 It runs, but `blocks_done` stays at 0 — or stops at 2
 
 Work through this in order:
 
-1. **Is the ADC converting?** Read `AD1CH0DATA` repeatedly while halted. Does it
-   change? If not, the ADC is not running: check `AD1CONbits.ON`, `ADRDY`, and that
-   `TRG2SRC = 0x02` really is set.
-2. **Is the DMA enabled?** `DMACONbits.ON` and `DMA0CHbits.CHEN` must both be 1.
-3. **Right trigger?** Read back `DMA0SEL` — it must be `0x2F`. A wrong value here means
+1. **Is the ADC converting?** Halt and read `AD1CH0CNTbits.CNTSTAT`: it counts the
+   conversions of the current burst. 0 means the burst never started — check
+   `AD1CONbits.ON`, `ADRDY`, `TRG1SRC = 1`, `MODE = 2`, and that
+   `AD1SWTRGbits.CH0TRG` was written (it is in `main()` and in the ISR).
+2. **Did the DMA channel get disabled?** Read `DMA0CHbits.CHEN`. If it is 0 although
+   the code set it, the DMA hit an address outside `DMALOW`…`DMAHIGH` and shut the
+   channel off (p829 step 5). `dma_addr_err` will be non-zero. Check the two window
+   registers contain `0x4000` and `0x13FFF`.
+3. **Is the DMA enabled at all?** `DMACONbits.ON` and `DMA0CHbits.CHEN` must both be 1.
+4. **Right trigger?** Read back `DMA0SEL` — it must be `0x2F`. A wrong value here means
    the channel waits for an event that never comes.
-4. **Is the interrupt enabled?** `IEC2bits.DMA0IE` must be 1. Note it is `IEC2`, not
+5. **Is the interrupt enabled?** `IEC2bits.DMA0IE` must be 1. Note it is `IEC2`, not
    `IEC1` — DMA0 lives in the second interrupt register set.
-5. **Is data arriving but the ISR not firing?** Look at `DMA0CNT`: if it counts down,
+6. **Is data arriving but the ISR not firing?** Look at `DMA0CNT`: if it counts down,
    transfers are happening and the problem is only the interrupt. Check
-   `DMA0CHbits.DONEEN` and `IFS2bits.DMA0IF`.
+   `DMA0CHbits.DONEEN`, `HALFEN` and `IFS2bits.DMA0IF`.
+7. **`blocks_done` stops at exactly 2:** the first burst ran, the restart from the ISR
+   did not take. See §1.1 — read `AD1STATbits.CH0RDY` and `AD1CH0CNTbits.CNTSTAT`
+   while halted.
 
 ### 2.3 `dma_overrun` is counting up
 
-**This is not a bug — it is the measurement.** It means the DMA could not keep up with
-the ADC, which is exactly the question this example exists to answer (see the README
-section on the shared DMA bus).
+**This is not a bug — it is the measurement.** It means the DMA channel was triggered
+again before it had finished the previous transfer (p816), i.e. the DMA bus could not
+keep up with the ADC — exactly the question this example exists to answer (see the
+README section on the shared DMA bus).
 
 What to do with the result:
 
@@ -181,9 +201,9 @@ What to do with the result:
    and check the overruns disappear.
 3. Then decide: average inside the ADC (`ACCNUM`, see README) or use fewer channels.
 
-**Before reporting it as the bus limit, rule out the trivial cause:** if
-`late_service` is also counting, your ISR is too slow and *that* is causing the
-overrun, not the bus.
+**Before reporting it as the bus limit, rule out the trivial causes:** with one channel
+and nothing else running, an overrun means the bus lost against something — check that
+no other DMA channel is enabled and that no other interrupt is hogging the CPU.
 
 ### 2.4 The values look wrong
 
@@ -194,19 +214,21 @@ overrun, not the bus.
 | amplitude far too small | **source impedance too high for a 6.25 ns sample time** | raise `ADC1_SAMC` step by step and watch the amplitude come up |
 | a straight line | signal frequency too low for a 25.6 µs window | use 100 kHz … a few MHz |
 | plausible but noisy | expected — ENOB is 10.5 bits typical, and the example has no anti-alias filter | |
-| values in a strange numeric range | **see §1.1** — the sample may not be in the lower 16 bits | compare `AD1CH0DATA` against the buffer content |
-| every second value looks wrong | alignment or the buffers are not 4-byte aligned | the source uses `__attribute__((aligned(4)))`; check it survived |
+| values above 4095 or growing | the DMA source is the accumulator | `DMA0SRC` must be `&AD1CH0RES`, not `AD1CH0DATA` |
+| every second value looks wrong | alignment, or the buffer is not 4-byte aligned | the source uses `__attribute__((aligned(4)))`; check it survived |
 
-### 2.5 `late_service` is counting up
+### 2.5 `late_service` or `proc_missed` is counting up
 
-The ISR did not finish before the next block was ready. At 39 kHz there is about 25 µs
-per block, which is a lot of CPU cycles — so this usually means something else is
-consuming them:
+`late_service`: the ISR found `HALF` and `DONE` set at the same time, so it arrived
+more than one half (25.6 µs) late and the first half had already been overwritten.
+`proc_missed`: the ISR was fine, but `main()` did not get to a completed half before the
+next one was done. Both usually mean something else is consuming the CPU:
 
-- `process_buffer()` is called from `main()`, not the ISR, but it competes for the CPU.
-  Shorten it or let it process every second block.
-- Enlarge `SAMPLES_PER_BUF` (fewer, larger blocks — 2048 halves the interrupt rate).
-- Check whether another interrupt is interfering.
+- `process_buffer()` competes with everything else in `main()`. Shorten it or let it
+  process every second half.
+- Enlarge `SAMPLES_PER_HALF` (fewer, larger blocks — 2048 halves the interrupt rate;
+  keep `CNT` ≤ 65535).
+- Check whether another interrupt is interfering (§1.3).
 
 ---
 
@@ -218,12 +240,13 @@ If nothing above fits, strip the problem down. Each step is provable on its own:
    loop. See it on a scope or an LED. This separates "device and toolchain work" from
    "our configuration works".
 2. **Does the clock setup survive?** Keep `clock_init()`, then toggle a pin in a
-   counted loop. The period tells you the real CPU frequency (see §1.3).
-3. **Does the ADC convert without DMA?** Comment out `dma0_init()` and poll
-   `AD1CH0DATA` in the main loop. Now you have ADC values with no DMA in the way.
-4. **Does the DMA transfer without interrupts?** Leave `DONEEN = 0` and watch
+   counted loop. The period tells you the real CPU frequency (see §1.2).
+3. **Does the ADC convert without DMA?** Comment out `dma0_init()`, trigger one burst
+   with `adc1_start_burst()` and watch `AD1CH0CNTbits.CNTSTAT` climb to 2048 and
+   `AD1STATbits.CH0RDY` go to 1. Now you have ADC values with no DMA in the way.
+4. **Does the DMA transfer without interrupts?** Leave `DONEEN = HALFEN = 0` and watch
    `DMA0CNT` count down and the buffer fill.
-5. **Then switch the interrupt on.** If it breaks at this step, the problem is the
+5. **Then switch the interrupts on.** If it breaks at this step, the problem is the
    ISR, not the ADC or the DMA.
 
 This order matters because each step leaves exactly one new thing that can be wrong.
@@ -235,21 +258,37 @@ This order matters because each step leaves exactly one new thing that can be wr
 Please do, and bring this with you — it turns guesswork into a diagnosis:
 
 - **Which step above got you stuck**, and at which source line
-- **Register dump while halted:** `AD1CON`, `AD1CH0CON1`, `AD1CH0DATA`, `DMACON`,
-  `DMA0CH`, `DMA0SEL`, `DMA0STAT`, `DMA0CNT`, `PLL1CON`, `PLL1DIV`, `PLL2CON`,
-  `PLL2DIV`, `CLK1CON`, `CLK1DIV`, `CLK6CON`, `CLK6DIV`, `OSCCTRL`, `IEC2`, `IFS2`
-- **The counters:** `blocks_done`, `dma_overrun`, `late_service`, `dma_bus_err`,
-  `dma_addr_err`, `last_sample`
-- **The first 32 values** from the buffer that was complete
-- **Your versions:** MPLAB X, XC-DSC, dsPIC33AK-MP_DFP — and which board
+- **Register dump while halted:** `AD1CON`, `AD1STAT`, `AD1CH0CON1`, `AD1CH0CNT`,
+  `AD1CH0RES`, `AD1CH0DATA`, `DMACON`, `DMALOW`, `DMAHIGH`, `DMA0CH`, `DMA0SEL`,
+  `DMA0STAT`, `DMA0CNT`, `DMA0DST`, `PLL1CON`, `PLL1DIV`, `PLL2CON`, `PLL2DIV`,
+  `CLK1CON`, `CLK1DIV`, `CLK6CON`, `CLK6DIV`, `OSCCTRL`, `IEC2`, `IFS2`
+- **The counters:** `blocks_done`, `dma_overrun`, `late_service`, `proc_missed`,
+  `dma_bus_err`, `dma_addr_err`, `last_sample`, `ready_half`
+- **The first 32 values** from the half that was complete
+- **Your versions:** MPLAB X, XC-DSC, dsPIC33AK-MP_DFP — and which board and silicon
+  revision (errata below)
 - **Your signal:** frequency, amplitude, source impedance, which pin
 
 The register dump is the important part. With it, most of these questions can be
 answered without the board in front of us.
 
-## One more thing we have not checked
+## The errata
 
-**The errata.** We have not read the silicon errata for this device, and ADC, DMA,
-clocking and high-resolution PWM are exactly the kind of modules that get errata
-entries. If something behaves in a way that contradicts the datasheet, that is the next
-place to look — and please tell us, because we would want to know too.
+Silicon errata DS80001162E (July 2026) was read for this revision. Of its 28 items,
+these touch what this code does:
+
+- **Item 2, DMA:** `BRERR` is only set when `RETEN = 1`, and `RETEN` also raises a
+  trap. This code leaves `RETEN = 0`, so `dma_bus_err` only ever counts write errors.
+- **Item 22, CPU (rev A1 only):** an address error trap can occur with indirect
+  register-offset addressing. Workaround is the compiler option
+  `-merrata=base_offset` (*Project Properties → XC-DSC → xc-dsc-gcc → Additional
+  options*). Not needed on rev A2 — check the marking on your board.
+- **Item 26, CPU:** a cache invalidation followed by an IVT fetch can stall the CPU.
+  Only triggered by `BOOTSWP`, manual cache invalidation or run-time self-programming,
+  none of which this code does.
+- **Item 28, debugger:** hardware breakpoints at branch targets can be missed. If a
+  breakpoint in the ISR does not hit, enable software breakpoints.
+
+Nothing in the errata concerns the ADC, the clock generators or the PLLs. If something
+behaves in a way that contradicts the datasheet anyway, please tell us — we would want
+to know too.

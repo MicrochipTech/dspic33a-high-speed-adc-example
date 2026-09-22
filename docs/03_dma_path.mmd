@@ -2,9 +2,9 @@
 flowchart LR
 
     REQ{{"trigger<br/>DMA0SEL = 0x2F<br/>ADC1 Done CH0"}} --> BUS["⚠ <b>ONE shared DMA data bus</b><br/>all 8 channels arbitrate<br/>for this one path to RAM<br/><i>§13.4.4, p825</i>"]
-    BUS --> CFG["SIZE = 1 → 2 byte per sample<br/>SAMODE = 0 → source fixed<br/>DAMODE = 1 → dst++<br/>TRMODE = 3 → repeated continuous"]
-    CFG --> BA["buf_a<br/>1024 × 2 byte<br/>= 25.6 µs"]
-    CFG --> BB["buf_b<br/>1024 × 2 byte<br/>= 25.6 µs"]
+    BUS --> WIN["<b>DMALOW / DMAHIGH</b><br/>= data RAM window<br/>reset value 0 → every access faults,<br/>CHEN cleared<br/><i>p809 f., p829 step 5</i>"]
+    WIN --> CFG["SIZE = 1 → 2 byte per sample<br/>SAMODE = 0 → source AD1CH0RES fixed<br/>DAMODE = 1 → dst++<br/>TRMODE = 3 + RELOADD/RELOADC<br/>HALFEN + DONEEN → one IRQ per half"]
+    CFG --> BUF["buf[2048]<br/>half 0: 1024 × 2 byte = 25.6 µs<br/>half 1: 1024 × 2 byte = 25.6 µs<br/>no address rewritten by software"]
 
     classDef adc  fill:#e6f4ea,stroke:#34a853
     classDef dma  fill:#fef7e0,stroke:#f9ab00
@@ -12,5 +12,5 @@ flowchart LR
     classDef buf  fill:#ffffff,stroke:#5f6368
 
     class REQ,CFG dma
-    class BUS warn
-    class BA,BB buf
+    class BUS,WIN warn
+    class BUF buf

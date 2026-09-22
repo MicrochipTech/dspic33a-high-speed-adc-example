@@ -30,7 +30,7 @@
         <targetPluginBoard></targetPluginBoard>
         <platformTool>Simulator</platformTool>
         <languageToolchain>XCDSC</languageToolchain>
-        <languageToolchainVersion>3.21</languageToolchainVersion>
+        <languageToolchainVersion>3.31</languageToolchainVersion>
         <platform>3</platform>
       </toolsSet>
       <packs>

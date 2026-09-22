@@ -5,8 +5,8 @@
  *
  * Purpose
  *   Minimal, readable starting point to measure what the device really
- *   sustains: one ADC core at full rate, DMA ping-pong into two buffers,
- *   and counters for every error the hardware can report.
+ *   sustains: one ADC core at full rate, DMA into a double buffer, and
+ *   counters for every error the hardware can report.
  *
  *   This is a measurement harness, not a product. Nothing here has run on
  *   silicon - see README.md.
@@ -17,7 +17,24 @@
  *   TAD = 4 / 320 MHz = 12.5 ns, throughput 40 MSPS (DS70005591D, AD50/AD51).
  *   CLKGEN6 is the ADC clock source per DS70005591D Table 16-1.
  *
+ * Data path
+ *   The ADC channel runs in Integration mode: a software trigger starts a
+ *   burst, the back-to-back trigger keeps it going for CNT conversions,
+ *   and each conversion raises the "ADC1 Done CH0" event that triggers
+ *   the DMA. The DMA copies the 12-bit result from AD1CH0RES into one
+ *   buffer of two halves; its HALF and DONE flags tell the CPU which half
+ *   is complete. At DONE the ISR starts the next burst.
+ *
+ *   Why not "single conversion + immediate re-trigger": the datasheet
+ *   states that TRG2SRC is not used in Single Conversion mode (p1322) and
+ *   lists the back-to-back value as reserved for TRG1SRC (Table 16-3,
+ *   p1226). Free-running conversion exists only in the multisample modes,
+ *   and there it is bounded by CNT (max 65535), so the burst has to be
+ *   restarted. Tying CNT to the DMA buffer keeps ADC and DMA in step.
+ *
  * Every register write below cites the datasheet table or page it comes from.
+ * Revision 2026-09-22: reviewed against DS70005591D and errata DS80001162E,
+ * see README "Revision history".
  */
 
 #include <xc.h>
@@ -61,11 +78,14 @@
  * Tunables
  * ------------------------------------------------------------------ */
 
-/* Samples per DMA half-buffer. 1024 x 2 byte = 2 KiB per buffer, 4 KiB
- * total, which at 40 MSPS is 25.6 us of signal per buffer. Small enough
- * to leave RAM for everything else, large enough that the completion
- * interrupt does not fire absurdly often (39 kHz per buffer). */
-#define SAMPLES_PER_BUF   1024u
+/* Samples per buffer half. The DMA fills one buffer of 2 x 1024 samples
+ * (4 KiB) and raises HALF after the first half and DONE after the second,
+ * so the CPU always has one complete half while the other one fills.
+ * At 40 MSPS a half is 25.6 us of signal and the interrupt rate is
+ * 39 kHz. One ADC burst (CNT) fills the whole buffer, so the burst is
+ * restarted every 51.2 us. */
+#define SAMPLES_PER_HALF  1024u
+#define SAMPLES_PER_BUF   (2u * SAMPLES_PER_HALF)
 
 /* Analog input to sample: ADC1 positive input 0 (AD1AN0).
  * Input availability per package is in DS70005591D Table 16-2, p1224 ff. */
@@ -78,32 +98,43 @@
 #define ADC1_SAMC         0u
 
 /* ------------------------------------------------------------------ *
- * Sample buffers
+ * Sample buffer
  *
- * Two buffers, alternated by the DMA completion interrupt. 16-bit words
- * because the DMA is configured for 16-bit transfers (SIZE = 1) and a
- * 12-bit result fits. Aligned to 4 bytes: the DMA writes through a
- * 32-bit path and unaligned buffers are asking for trouble.
+ * One buffer, two halves. 16-bit words because the DMA is configured for
+ * 16-bit transfers (SIZE = 1) and the 12-bit result in AD1CH0RES[11:0]
+ * fits. Aligned to 4 bytes: the DMA writes through a 32-bit path and
+ * unaligned buffers are asking for trouble.
  * ------------------------------------------------------------------ */
-static volatile uint16_t buf_a[SAMPLES_PER_BUF] __attribute__((aligned(4)));
-static volatile uint16_t buf_b[SAMPLES_PER_BUF] __attribute__((aligned(4)));
+static volatile uint16_t buf[SAMPLES_PER_BUF] __attribute__((aligned(4)));
+
+/* RAM window for the DMA address limit registers. __DATA_BASE and
+ * __DATA_LENGTH come from the device header (0x4000 and 0x10000 for the
+ * 64 KB parts, matching p33AK512MPS512.gld), so the window follows the
+ * device instead of being a magic number. */
+#if !defined(__DATA_BASE) || !defined(__DATA_LENGTH)
+#error "__DATA_BASE / __DATA_LENGTH not provided by the device header"
+#endif
 
 /* ------------------------------------------------------------------ *
  * Measurement counters - the actual point of this program
  *
- * Read these with the debugger after a run. dma_overrun and adc_overrun
- * are the numbers that answer "does the bus keep up": the datasheet
- * documents a single shared DMA data bus (DS70005591D 13.4.4, p825) but
- * gives no throughput figure.
+ * Read these with the debugger after a run. dma_overrun is the number
+ * that answers "does the bus keep up": the datasheet documents a single
+ * shared DMA data bus (DS70005591D 13.4.4, p825) but gives no throughput
+ * figure.
  * ------------------------------------------------------------------ */
-volatile uint32_t blocks_done   = 0;   /* completed DMA half-buffers      */
-volatile uint32_t dma_overrun   = 0;   /* DMA0STAT.OVERRUN seen           */
-volatile uint32_t dma_addr_err  = 0;   /* DMA0STAT.ADRERR                 */
-volatile uint32_t dma_bus_err   = 0;   /* DMA0STAT.BRERR | BWERR          */
-volatile uint32_t late_service  = 0;   /* ISR found next block already due */
+volatile uint32_t blocks_done   = 0;   /* completed buffer halves          */
+volatile uint32_t dma_overrun   = 0;   /* DMA0STAT.OVERRUN seen            */
+volatile uint32_t dma_addr_err  = 0;   /* DMA0STAT.ADRERR != 0             */
+volatile uint32_t dma_bus_err   = 0;   /* DMA0STAT.BRERR | BWERR (note 1)  */
+volatile uint32_t late_service  = 0;   /* HALF and DONE pending together   */
+volatile uint32_t proc_missed   = 0;   /* main() skipped a completed half  */
 volatile uint16_t last_sample   = 0;   /* sanity check: is data moving?    */
+volatile uint32_t ready_half    = 0;   /* 0 = buf[0..], 1 = buf[1024..]    */
 
-static volatile uint16_t *active_buf = buf_a;
+/* Note 1: errata DS80001162E item 2 - BRERR is only set when RETEN = 1,
+ * and RETEN also raises a trap. This example leaves RETEN = 0, so
+ * dma_bus_err effectively counts write errors (BWERR) only. */
 
 /* ------------------------------------------------------------------ *
  * Clock setup
@@ -139,6 +170,9 @@ static volatile uint16_t *active_buf = buf_a;
  *                          8 MHz -> FVCO 1600 MHz -> 320 MHz
  *   PLL2DIV = 0x01007D29 : N1=1, M=125, POSTDIV1=5, POSTDIV2=1
  *                          8 MHz -> FVCO 1000 MHz -> 200 MHz
+ *
+ * Bit layout of PLLxDIV (ATDF): POSTDIV2[2:0], POSTDIV1[5:3],
+ * PLLFBDIV[16:8], PLLPRE[27:24].
  *
  * Constraints checked against Table 40-23 and page 777: F_PFD >= 5 MHz,
  * F_VCO 500...1600 MHz, M in 16...320, POSTDIV1 >= POSTDIV2.
@@ -212,14 +246,32 @@ static void clock_init(void)
 }
 
 /* ------------------------------------------------------------------ *
- * ADC1 setup - one channel, continuous at maximum rate
+ * ADC1 setup - one channel, Integration mode, back-to-back inside a burst
  *
- * Trigger choice: TRG2SRC = 0b000010, "Immediate re-trigger request"
- * (DS70005591D Table 16-4, p1227). This retriggers without a period
- * calculation and is the right thing for maximum continuous rate.
+ * DS70005591D 16.4.4 (p1321) and 16.4.5 (p1322):
+ *   - MODE = 10 (Integration): CNT conversions per burst, "the first
+ *     conversion is initiated by a trigger selected by TRG1SRC and all
+ *     subsequent conversions are executed by a trigger selected by
+ *     TRG2SRC".
+ *   - TRG1SRC = 000001: software trigger, ADnSWTRG (Table 16-3, p1226).
+ *   - TRG2SRC = 000010: back-to-back, "re-triggered immediately after
+ *     the previous conversion is finished" (Table 16-4, p1227).
+ *   - TRG2SRC "are not used for a Single Conversion mode" (p1322), and
+ *     000010 is reserved for TRG1SRC - so MODE = 00 cannot free-run.
+ *   - IRQSEL = 0: "the channel interrupt is generated after each single
+ *     conversion when result is ready in ADxRESn" (p1266). That per-
+ *     conversion event is what triggers the DMA. IRQSEL = 1 would fire
+ *     only once per burst.
+ *   - EIEN = 0: note 4 on p1265, no early interrupt with DMA transfers.
+ *   - The per-conversion result is AD1CH0RES[11:0]; AD1CH0DATA is the
+ *     accumulator of the burst (p1270) and is not what we want.
+ *
+ * The same pattern (MODE = 2, CNT = n, TRG1SRC = 1, TRG2SRC = 2, then a
+ * software trigger) is what Microchip's 40 MSPS example uses on
+ * hardware, and what datasheet Example 16-6 (p1331) does.
  *
  * The alternative for an exact lower rate is the conversion repeat timer
- * (TRG2SRC = 0b000011) with RPTCNT in AD1CON counting ADC clock cycles,
+ * (TRG2SRC = 000011) with RPTCNT in AD1CON counting ADC clock cycles,
  * 1 to 64 between triggers (DS70005591D p1258). At an 80 MHz ADC clock
  * that yields 80/n MSPS: 40, 26.67, 20, 16 ... - note that exactly
  * 25 MSPS is NOT on that grid and needs a different ADC input clock
@@ -235,14 +287,29 @@ static void adc1_init(void)
     AD1CH0CON1bits.DIFF    = 0u;          /* single ended -> unsigned   */
     AD1CH0CON1bits.FRAC    = 0u;          /* integer, right aligned     */
     AD1CH0CON1bits.SAMC    = ADC1_SAMC;   /* sample time in TAD         */
-    AD1CH0CON1bits.MODE    = 0u;          /* single conversion mode     */
-    AD1CH0CON1bits.ACCNUM  = 0u;          /* no oversampling            */
-    AD1CH0CON1bits.IRQSEL  = 0u;          /* IRQ per single conversion  */
-    AD1CH0CON1bits.TRG1SRC = 0u;          /* trigger 1 off              */
-    AD1CH0CON1bits.TRG2SRC = 0x02u;       /* immediate re-trigger       */
+    AD1CH0CON1bits.MODE    = 2u;          /* Integration: CNT per burst */
+    AD1CH0CON1bits.ACCNUM  = 0u;          /* oversampling only, unused  */
+    AD1CH0CON1bits.IRQSEL  = 0u;          /* event per conversion (RES) */
+    AD1CH0CON1bits.EIEN    = 0u;          /* no early interrupt w/ DMA  */
+    AD1CH0CON1bits.TRG1SRC = 0x01u;       /* software trigger starts    */
+    AD1CH0CON1bits.TRG2SRC = 0x02u;       /* back-to-back continues     */
+
+    /* Conversions per burst. One burst fills the whole DMA buffer, so
+     * the DMA DONE interrupt is also the moment to start the next one.
+     * CNT[15:0] in AD1CH0CNT (p1272), max 65535. */
+    AD1CH0CNT = SAMPLES_PER_BUF;
 
     AD1CONbits.ON = 1;
     while (!AD1CONbits.ADRDY) { }         /* wait for the core          */
+}
+
+/* Start one burst of SAMPLES_PER_BUF conversions. Reading AD1CH0DATA
+ * first clears CH0RDY from the previous burst, as datasheet Example 16-6
+ * does before re-triggering. */
+static inline void adc1_start_burst(void)
+{
+    (void)AD1CH0DATA;
+    AD1SWTRGbits.CH0TRG = 1u;
 }
 
 /* ------------------------------------------------------------------ *
@@ -250,35 +317,49 @@ static void adc1_init(void)
  *
  * CHSEL = 0x2F is "ADC1 Done CH0" (ATDF value-group DMA_SEL__CHSEL).
  * SIZE = 1 selects 16-bit transfers; the DMA supports 8, 16 and 32 bit
- * (DS70005591D 13.4.2, p824), so a 12-bit result costs 2 bytes.
+ * (DS70005591D 13.4.2, p824 and p812), so a 12-bit result costs 2 bytes.
+ * AD1CH0RES holds RES[11:0] in the low half and RESF[11:0] in bits
+ * 31:20 (p1229), so the 16-bit read of the low half is the sample.
  *
- * AD1CH0DATA is 32 bit wide and the result is right aligned (FRAC = 0),
- * so a 16-bit read of its low half carries the sample. Worth verifying
- * on hardware - it is the one assumption here that the datasheet does
- * not state outright.
+ * DMALOW / DMAHIGH MUST be set. They reset to 0, every transaction is
+ * checked against them (13.4.8.1 p829, step 5), and an access above
+ * DMAHIGH sets ADRERR = 10 and clears CHEN (p810, p826). With the reset
+ * values the very first sample would disable the channel. Every
+ * datasheet example (p832 ff.) and MCC set them.
  *
- * TRMODE = Repeated Continuous keeps the channel armed; the completion
- * interrupt swaps the destination buffer.
+ * TRMODE = Repeated Continuous with RELOADD/RELOADC restarts at the
+ * buffer start after each block on its own (p812, p829 step 4). HALFEN
+ * and DONEEN give one interrupt per half (13.6.1.2, p848). No address
+ * is ever rewritten from software while the channel runs.
+ *
+ * DMAxSTAT flags are "R/C/HS" - clearable by writing 0 (legend p815,
+ * Example 13-4 p835: "DMA0STATbits.DONE=0"). Writing 1 does not clear.
  * ------------------------------------------------------------------ */
-static void dma0_init(volatile uint16_t *dst)
+static void dma0_init(void)
 {
     DMACONbits.ON = 0;
-
     DMA0CHbits.CHEN = 0;
 
-    DMA0SEL = 0x2Fu;                  /* ADC1 Done CH0                  */
-    DMA0SRC = (uint32_t)&AD1CH0DATA;  /* peripheral source              */
-    DMA0DST = (uint32_t)dst;          /* RAM destination                */
-    DMA0CNT = SAMPLES_PER_BUF;        /* words per block                */
+    /* Address window = the device's data RAM (p809 f.). */
+    DMALOW  = (uint32_t)__DATA_BASE;
+    DMAHIGH = (uint32_t)__DATA_BASE + (uint32_t)__DATA_LENGTH - 1u; /* 0x13FFF */
 
+    DMA0SEL = 0x2Fu;                  /* ADC1 Done CH0                  */
+    DMA0SRC = (uint32_t)&AD1CH0RES;   /* per-conversion result          */
+    DMA0DST = (uint32_t)buf;          /* RAM destination                */
+    DMA0CNT = SAMPLES_PER_BUF;        /* transactions per block         */
+    DMA0STAT = 0u;                    /* clear any stale flags          */
+
+    DMA0CH = 0u;
     DMA0CHbits.SIZE    = 1u;          /* 16-bit transfers               */
     DMA0CHbits.SAMODE  = 0u;          /* source address unchanged       */
     DMA0CHbits.DAMODE  = 1u;          /* destination incremented        */
     DMA0CHbits.TRMODE  = 3u;          /* repeated continuous            */
     DMA0CHbits.RELOADD = 1u;          /* reload destination each block  */
     DMA0CHbits.RELOADC = 1u;          /* reload count each block        */
+    DMA0CHbits.HALFEN  = 1u;          /* interrupt at half              */
     DMA0CHbits.DONEEN  = 1u;          /* interrupt on block complete    */
-    DMA0CHbits.HALFEN  = 0u;
+    DMA0CHbits.RETEN   = 0u;          /* see note 1 at the counters     */
 
     /* Round robin arbitration. With one channel it makes no difference,
      * but it is the setting that matters once several ADC streams share
@@ -290,49 +371,61 @@ static void dma0_init(volatile uint16_t *dst)
 }
 
 /* ------------------------------------------------------------------ *
- * DMA completion ISR - swap buffers, record anything that went wrong
+ * DMA interrupt - one per buffer half
+ *
+ * HALF: the first half is complete, the DMA is filling the second.
+ * DONE: the second half is complete, the DMA has reloaded to the start
+ *       and the ADC burst has ended - start the next burst here.
  *
  * Deliberately short. Everything this counts is a hardware flag, so a
  * long ISR would itself become the reason for the next overrun.
  * ------------------------------------------------------------------ */
 void __attribute__((interrupt, no_auto_psv)) _DMA0Interrupt(void)
 {
-    if (DMA0STATbits.OVERRUN) {
+    const uint32_t st = DMA0STAT;     /* one snapshot, then act on it   */
+
+    if (st & _DMA0STAT_OVERRUN_MASK) {
+        /* Triggered while the previous transfer was still in progress
+         * (p816): the bus did not keep up. This is the measurement. */
         dma_overrun++;
-        DMA0STATbits.OVERRUN = 1;      /* write 1 to clear             */
+        DMA0STATbits.OVERRUN = 0;
     }
-    if (DMA0STATbits.ADRERR) {
+    if (st & _DMA0STAT_ADRERR_MASK) {
         dma_addr_err++;
-        DMA0STATbits.ADRERR = 1;
+        DMA0STATbits.ADRERR = 0;
     }
-    if (DMA0STATbits.BRERR || DMA0STATbits.BWERR) {
+    if (st & (_DMA0STAT_BRERR_MASK | _DMA0STAT_BWERR_MASK)) {
         dma_bus_err++;
-        DMA0STATbits.BRERR = 1;
-        DMA0STATbits.BWERR = 1;
+        DMA0STATbits.BRERR = 0;
+        DMA0STATbits.BWERR = 0;
     }
 
-    if (DMA0STATbits.DONE) {
-        /* Point the next block at the other buffer. The filled one is
-         * now free for processing. */
-        active_buf = (active_buf == buf_a) ? buf_b : buf_a;
-        DMA0DST = (uint32_t)active_buf;
+    /* Both halves pending at once means this ISR arrived more than one
+     * half (25.6 us) late and the first half has already been
+     * overwritten by the DMA reload. */
+    if ((st & _DMA0STAT_HALF_MASK) && (st & _DMA0STAT_DONE_MASK)) {
+        late_service++;
+    }
 
-        last_sample = active_buf[0];
+    if (st & _DMA0STAT_HALF_MASK) {
+        DMA0STATbits.HALF = 0;
+        ready_half  = 0u;
+        last_sample = buf[SAMPLES_PER_HALF - 1u];
         blocks_done++;
-
-        DMA0STATbits.DONE = 1;
-
-        /* Already flagged again: the ISR did not keep up. */
-        if (DMA0STATbits.DONE) {
-            late_service++;
-        }
+    }
+    if (st & _DMA0STAT_DONE_MASK) {
+        DMA0STATbits.DONE = 0;
+        ready_half  = 1u;
+        last_sample = buf[SAMPLES_PER_BUF - 1u];
+        blocks_done++;
+        adc1_start_burst();           /* next SAMPLES_PER_BUF samples   */
     }
 
     IFS2bits.DMA0IF = 0;
 }
 
 /* ------------------------------------------------------------------ *
- * Process one filled buffer
+ * Process one completed buffer half
  *
  * Placeholder for the customer's "+ and -" arithmetic. Written as a
  * plain accumulate so the cost of touching every sample is visible in
@@ -356,27 +449,38 @@ int main(void)
 {
     clock_init();
     adc1_init();
-    dma0_init(buf_a);
+    dma0_init();
 
-    /* Enable the DMA0 interrupt. */
+    /* Enable the DMA0 interrupt (IEC2 bit 13, IPC9 default priority 4). */
     IFS2bits.DMA0IF = 0;
     IEC2bits.DMA0IE = 1;
+
+    /* Everything is armed - start the first burst. From here on the DMA
+     * DONE interrupt restarts it. */
+    adc1_start_burst();
 
     uint32_t seen = 0;
 
     for (;;) {
-        /* Wait for a block, then work on the buffer the DMA is not
-         * currently filling. */
-        if (blocks_done != seen) {
-            seen = blocks_done;
-            process_buffer((active_buf == buf_a) ? buf_b : buf_a,
-                           SAMPLES_PER_BUF);
+        /* Wait for a half, then work on it while the DMA fills the
+         * other one. If more than one half completed since the last
+         * pass, the older one is already gone - count that. */
+        const uint32_t done = blocks_done;
+        if (done != seen) {
+            if ((done - seen) > 1u) {
+                proc_missed += (done - seen) - 1u;
+            }
+            seen = done;
+            process_buffer(&buf[ready_half ? SAMPLES_PER_HALF : 0u],
+                           SAMPLES_PER_HALF);
         }
 
         /* What to look at with the debugger:
-         *   blocks_done  x SAMPLES_PER_BUF / elapsed time = actual rate
-         *   dma_overrun  must stay 0, otherwise samples were lost
+         *   blocks_done  x SAMPLES_PER_HALF / elapsed time = actual rate
+         *                (includes the re-trigger gap once per buffer)
+         *   dma_overrun  must stay 0, otherwise the DMA bus lost samples
          *   late_service must stay 0, otherwise the ISR is too slow
+         *   proc_missed  must stay 0, otherwise main() is too slow
          *   last_sample  changing means data is really moving
          */
     }
