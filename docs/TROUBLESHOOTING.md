@@ -127,8 +127,8 @@ So you do not hunt here first. Each was read from a primary source and cross-che
 - **Interrupt plumbing** — DMA0 is IRQ 77, `IEC2`/`IFS2` bit 13, `INTCON1.GIE` is
   set at reset; the linked ELF has `_DMA0Interrupt` at IVT entry 85.
 - **Board facts** — LED0 on RC8, driven high to light; AD3AN5 on RA0 = mikroBUS A pin
-  AN; UART1 to the PKOB4 COM port on RH0/RD10 with the PPS codes Microchip's own example
-  uses on this board (DIM info sheet DS70005563A Table 1, user guide DS70005562D).
+  AN; UART2 to the MCP2221A COM port on RH1/RD1 with the PPS codes Microchip's own
+  example uses on this board (DIM info sheet DS70005563A Table 1, user guide DS70005562D).
 - **Self-test input** — ADxAN6 is the internal 15/16·VDD reference on every core and
   package (Table 16-2), the datasheet samples it the same way (Example 16-3).
 - **The command parser** — `cmd_parser.c` is unchanged from its repository, where it
@@ -277,24 +277,24 @@ For the external input, after the self-test passed:
 
 ### 2.4a No console, or garbage on the terminal
 
-- **Which COM port.** The board has two: the PKOB4's (this console) and the
-  MCP2221A's (unused). Both appear when you plug the USB cable in. Try the other one.
+- **Which COM port.** The board has two: the MCP2221A's (this console) and the
+  PKOB4's (unused). Both appear when you plug the USB cable in. Try the other one.
   115200 8N1, no flow control.
 - **With a debugger attached and no output at all**, read these while halted and
-  compare: `RPCON` (IOLOCK), `RPOR28` (RP113R must be 19), `RPINR13` (U1RXR 59),
-  `TRISH` (bit 0 clear), `U1CON` (ON, TXEN, RXEN set, CLKMOD set), `U1BRG` (35 on the
-  FRC, 868 on PLL2), `U1STAT` (`TXBE` set when idle). A `U1BRG` of 0 or `RPOR28` of 0
-  means the init did not run or did not take.
+  compare: `RPCON` (IOLOCK), `RPOR28` (RP114R, bits 8-14, must be 21), `RPINR13`
+  (U2RXR, bits 16-23, must be 50), `TRISH` (bit 1 clear), `U2CON` (ON, TXEN, RXEN set,
+  CLKMOD set), `U2BRG` (35 on the FRC, 868 on PLL2), `U2STAT` (`TXBE` set when idle).
+  A `U2BRG` of 0 or `RPOR28` of 0 means the init did not run or did not take.
 - **Nothing at all, LED blinks normally.** Press Enter — the prompt is only sent once
-  at start-up and after each command. If still nothing: the PPS mapping (`_RP113R`,
-  `_U1RXR`) or `TRISH0`. Read `U1STATbits.TXBE`: 1 means the transmitter is idle and
+  at start-up and after each command. If still nothing: the PPS mapping (`_RP114R`,
+  `_U2RXR`) or `TRISH1`. Read `U2STATbits.TXBE`: 1 means the transmitter is idle and
   the bytes went somewhere.
 - **Garbage.** Baud rate. The UART clock is the 100 MHz standard-speed peripheral clock
-  and `U1BRG = 868` in fractional mode gives 115 207 baud — only if PLL2 really drives
+  and `U2BRG = 868` in fractional mode gives 115 207 baud — only if PLL2 really drives
   CLKGEN1 at 200 MHz. A wrong CPU clock shows up here first (§1.2).
 - **Commands echo but nothing happens.** The receive interrupt is not running: check
-  `IEC3bits.U1RXIE`, `IPC12bits.U1RXIP` (must be 1 … 7) and that `_U1RXInterrupt` is in
-  the vector table (IRQ 98).
+  `IEC3bits.U2RXIE`, `IPC12bits.U2RXIP` (must be 1 … 7) and that `_U2RXInterrupt` is in
+  the vector table (IRQ 102).
 - **`proc_missed` rises while you type.** Expected during a long reply — see the
   README, "The console".
 
@@ -340,7 +340,7 @@ This order matters because each step leaves exactly one new thing that can be wr
 
 Please do, and bring this with you — it turns guesswork into a diagnosis.
 
-**The short version: the terminal log from power-up.** Open the PKOB4's COM port at
+**The short version: the terminal log from power-up.** Open the MCP2221A's COM port at
 115200 8N1 with logging on (Tera Term: *File → Log*; PuTTY: *Session → Logging*),
 then press the board's reset button or re-plug it. The firmware reports every start-up
 step, the self-test result, a `[stat]` line with all counters every 5 s, and on a

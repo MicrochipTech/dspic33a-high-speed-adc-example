@@ -839,9 +839,9 @@ void regs_dump(void)
     console_kv_hex("IFS2", IFS2);
     console_kv_hex("IPC9", IPC9);
     console_kv_hex("INTCON1", INTCON1);
-    console_kv_hex("U1CON", U1CON);
-    console_kv_hex("U1STAT", U1STAT);
-    console_kv_hex("U1BRG", U1BRG);
+    console_kv_hex("U2CON", U2CON);
+    console_kv_hex("U2STAT", U2STAT);
+    console_kv_hex("U2BRG", U2BRG);
     console_puts("[regs] counters\r\n");
     console_kv("blocks_done", blocks_done);
     console_kv("dma_overrun", dma_overrun);

@@ -80,7 +80,7 @@ of use — so every setting can be checked against the primary source.
 - **2026-09-22, third revision** — moved to the **EV74H48A** with the dsPIC33AK512MPS512
   DIM (the board of Microchip's own 40 MSPS example): ADC3 on the mikroBUS A analog pin,
   LED0 on RC8, pin table below. A **command console** (`cli.c`, on the parser from
-  [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser)) on the PKOB4 USB-UART
+  [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser)) on the MCP2221A USB-UART
   channel: `status`, `start`/`stop`, `samc`, `input`, `selftest`, `stats`, `dump`,
   `clear`, `led`, `reset`. The console runs in the UART receive interrupt below the DMA
   interrupt. The ADC core is now a compile-time choice (`ADC_INSTANCE`), so the
@@ -110,8 +110,8 @@ project). A signal source is optional — the self-test does not need one. A ter
 program (Tera Term, PuTTY, MPLAB Data Visualizer's terminal) is optional too — the LED
 and the debugger tell you the same things.
 
-1. Plug the board in. The PKOB4 debugger enumerates, and a second COM port appears for
-   the console (user guide DS70005562D 2.1.2).
+1. Plug the board in. The PKOB4 debugger enumerates for programming, and the
+   MCP2221A's COM port appears for the console (user guide DS70005562D 2.1.1).
 2. Open `adc_dma_40msps.X`, press **Build**, then **Program** (or **Debug**).
 3. The project's tool is the board's **PKOB4** (`pkob4hybrid`). Check it once in the
    Dashboard or under *Project Properties → Conn.*: if it says *Simulator*, the code
@@ -121,8 +121,8 @@ and the debugger tell you the same things.
    self-test on the internal reference has passed, the ADC, the DMA and the interrupt
    are running at 40 MSPS. What the other patterns mean is under "First run on
    hardware".
-5. Open the PKOB4's COM port at 115200 8N1, press Enter, type `status`. The reply is
-   the counter table; `help` lists the rest. See "The console" below.
+5. Open the MCP2221A's COM port at 115200 8N1, press Enter, type `status`. The reply
+   is the counter table; `help` lists the rest. See "The console" below.
 
 Verified on 2026-09-22 with:
 
@@ -153,9 +153,9 @@ board user guide DS70005562D:
 | Internal reference ADxAN6 | — | — | inside the ADC | 15/16·VDD, used by the self-test on every core |
 | **LED0** | RC8 | P28 | leftmost of the eight green LEDs | driven high to light. LED1…7 are RC9…RC15 |
 | S1, S2, S3 | RF3, RF0, RB2 | P45, P43, P41 | push buttons | active low, pull-up on the board; not used by this example |
-| **Console UART1** | TX RH0 (RP113), RX RD10 (RP59) | P102, P100 | **PKOB4 USB-UART channel** — second COM port on the debugger's USB | 115200 8N1 |
-| Second UART | TX RH1 (RP114), RX RD1 (RP50) | P98, P96 | MCP2221A USB-UART channel, another COM port | not used; Microchip's example streams to Data Visualizer here |
-| Debugger | — | — | PKOB4 via the USB connector J24 | programming, debugging, and the console's COM port on one cable |
+| **Console UART2** | TX RH1 (RP114), RX RD1 (RP50) | P98, P96 | **MCP2221A USB-UART channel** — its own COM port | 115200 8N1, the channel Microchip's example streams to Data Visualizer on |
+| Second UART | TX RH0 (RP113), RX RD10 (RP59) | P102, P100 | PKOB4 USB-UART channel, another COM port | not used by this console |
+| Debugger | — | — | PKOB4 via the USB connector J24 | programming and debugging; the console's COM port is on the same USB cable, via the MCP2221A |
 | GND | — | — | mikroBUS GND pins, test points | signal ground for the generator |
 
 AD1AN0 of this device sits on RA2, which the board routes to a capacitive touch pad
@@ -426,9 +426,9 @@ the cause of the next overrun.
 
 ## The console
 
-Open the PKOB4's COM port (115200 8N1). At start-up the firmware prints a banner with
-the build time stamp, then the `> ` prompt; if you connect later, press Enter and the
-prompt answers:
+Open the MCP2221A's COM port (115200 8N1). At start-up the firmware prints a banner
+with the build time stamp, then the `> ` prompt; if you connect later, press Enter and
+the prompt answers:
 
 ```
 adc_dma_40msps - ADC at 40 MSPS into RAM via DMA
@@ -495,7 +495,7 @@ answers most of `docs/TROUBLESHOOTING.md` Part 4 without a debugger.
 
 Two things about it are worth knowing:
 
-- **The console is its own thread.** Received bytes are handled in the UART1 receive
+- **The console is its own thread.** Received bytes are handled in the UART2 receive
   interrupt at priority 1; a command runs there, output included. The DMA interrupt
   (priority 4) preempts it, so the measurement never waits for the console. `main()`
   does: during a long `dump` it processes no buffer halves, and `proc_missed` says so.
@@ -703,7 +703,7 @@ the value up in the ATDF (`<value-group name="FICD_NOBTSWP">`) and write the num
 | `main.c` | start-up sequence and the main loop — the order of the inits, and why |
 | `adc_dma_40msps.c` | clock, ADC, DMA, ISR, self-test, LED — commented with datasheet references |
 | `adc_dma_40msps.h` | what the console may read and control; the compile-time choices (`ADC_INSTANCE`, `ADC_PINSEL`, `ADC_SAMC`) |
-| `cli.c` | the console: UART1 on the PKOB4 channel, the receive interrupt, the commands |
+| `cli.c` | the console: UART2 on the MCP2221A channel, the receive interrupt, the commands |
 | `cmd_parser.c`, `cmd_parser.h` | the command parser, unchanged from [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser) (Apache 2.0) |
 | `adc_dma_40msps.X/` | MPLAB X project — build, program and debug from here |
 | `docs/TROUBLESHOOTING.md` | **what to do when it does not work** — including where we doubt our own code |

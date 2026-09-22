@@ -7,14 +7,14 @@
  * transport and the commands; the parser itself knows no hardware.
  *
  * Transport on the EV74H48A
- *   UART1 on the PKOB4 USB-UART channel: U1TX -> RH0 (RP113, DIM pin
- *   P102 "UART_PKoB_TX"), U1RX <- RD10 (RP59, DIM pin P100
- *   "UART_PKoB_RX"), 115200 8N1. The channel shares the USB cable with
- *   the debugger and shows up on the PC as a COM port (user guide
- *   DS70005562D 2.1.2). The PPS code is the one Microchip's own example
- *   uses on this board (U1TX = 19, Table "Output Selection for
- *   Remappable Pins", p613). The board's other USB-UART channel (the
- *   MCP2221A) is not used by this console.
+ *   UART2 on the MCP2221A USB-UART channel: U2TX -> RH1 (RP114, DIM pin
+ *   P98 "UART_USB_TX"), U2RX <- RD1 (RP50, DIM pin P96
+ *   "UART_USB_RX"), 115200 8N1. The MCP2221A implements standard USB CDC
+ *   and shows up on the PC as its own COM port (user guide DS70005562D
+ *   2.1.1). The PPS code is the one Microchip's own example uses on
+ *   this board (U2TX = 21, Table "Output Selection for Remappable
+ *   Pins", p613). The board's other USB-UART channel (the PKOB4's) is
+ *   not used by this console.
  *
  * Two phases
  *   console_early_init() runs before the clocks are touched, on the
@@ -25,7 +25,7 @@
  *   the banner and enables the receive interrupt.
  *
  * The parser as its own thread
- *   Received bytes are handled in the UART1 receive interrupt, which
+ *   Received bytes are handled in the UART2 receive interrupt, which
  *   runs at priority 1. A command executes inside that interrupt,
  *   including its output; the DMA interrupt (priority 4) preempts it, so
  *   the measurement keeps running while a long reply drains. main() is
@@ -64,7 +64,7 @@
 #include "cmd_parser.h"
 
 /* ------------------------------------------------------------------ *
- * UART1 transport
+ * UART2 transport
  * ------------------------------------------------------------------ */
 
 /* Baud rate generator, fractional mode (CLKMOD = 1): BRG = F_clk / baud,
@@ -78,32 +78,32 @@
 
 #define UART_RX_PRIORITY  1u      /* below the DMA interrupt (4)        */
 
-static void uart1_setup(uint32_t brg)
+static void uart2_setup(uint32_t brg)
 {
-    U1CON = 0u;                       /* off while reconfiguring        */
-    U1CONbits.CLKMOD = 1u;            /* fractional baud generator      */
-    U1CONbits.CLKSEL = 0u;            /* standard speed peripheral clock*/
-    U1CONbits.MODE   = 0u;            /* 8-bit, no parity               */
-    U1CONbits.STP    = 0u;            /* one stop bit                   */
-    U1BRG = brg;
-    U1STAT = 0u;                      /* RXWM = 0: IRQ on one byte      */
-    U1CONbits.ON   = 1u;
-    U1CONbits.TXEN = 1u;
-    U1CONbits.RXEN = 1u;
+    U2CON = 0u;                       /* off while reconfiguring        */
+    U2CONbits.CLKMOD = 1u;            /* fractional baud generator      */
+    U2CONbits.CLKSEL = 0u;            /* standard speed peripheral clock*/
+    U2CONbits.MODE   = 0u;            /* 8-bit, no parity               */
+    U2CONbits.STP    = 0u;            /* one stop bit                   */
+    U2BRG = brg;
+    U2STAT = 0u;                      /* RXWM = 0: IRQ on one byte      */
+    U2CONbits.ON   = 1u;
+    U2CONbits.TXEN = 1u;
+    U2CONbits.RXEN = 1u;
 }
 
 void console_early_init(void)
 {
-    /* Pins: RH0 = U1TX (output), RD10 = U1RX (input). Neither port has an
+    /* Pins: RH1 = U2TX (output), RD1 = U2RX (input). Neither port has an
      * analog function. Peripheral pin select needs IOLOCK cleared. */
-    TRISHbits.TRISH0 = 0u;
-    TRISDbits.TRISD10 = 1u;
+    TRISHbits.TRISH1 = 0u;
+    TRISDbits.TRISD1 = 1u;
     RPCONbits.IOLOCK = 0u;
-    _U1RXR  = 59u;                    /* RP59  -> U1RX                  */
-    _RP113R = 19u;                    /* RP113 <- U1TX                  */
+    _U2RXR  = 50u;                    /* RP50  -> U2RX                  */
+    _RP114R = 21u;                    /* RP114 <- U2TX                  */
     RPCONbits.IOLOCK = 1u;
 
-    uart1_setup(UART_BRG_FRC);
+    uart2_setup(UART_BRG_FRC);
     console_puts("\r\n[boot] uart up on FRC, 115200 8N1\r\n");
 }
 
@@ -113,14 +113,14 @@ void console_early_init(void)
 void console_puts(const char *s)
 {
     while (*s) {
-        while (U1STATbits.TXBF) { }
-        U1TXB = (uint8_t)*s++;
+        while (U2STATbits.TXBF) { }
+        U2TXB = (uint8_t)*s++;
     }
 }
 
 static void console_drain(void)
 {
-    while (!U1STATbits.TXMTIF) { }    /* shift register empty too       */
+    while (!U2STATbits.TXMTIF) { }    /* shift register empty too       */
 }
 
 /* Make the baud generator match whatever clock the CPU is on right now.
@@ -129,9 +129,9 @@ static void console_drain(void)
 void console_sync_baud(void)
 {
     const uint32_t want = (CLK1CONbits.COSC == 0x6u) ? UART_BRG_PLL : UART_BRG_FRC;
-    if (U1BRG != want) {
+    if (U2BRG != want) {
         console_drain();
-        uart1_setup(want);
+        uart2_setup(want);
     }
 }
 
@@ -141,8 +141,8 @@ void console_sync_baud(void)
 static size_t console_write(const char *data, size_t len)
 {
     size_t n = 0;
-    while ((n < len) && !U1STATbits.TXBF) {
-        U1TXB = (uint8_t)data[n++];
+    while ((n < len) && !U2STATbits.TXBF) {
+        U2TXB = (uint8_t)data[n++];
     }
     return n;
 }
@@ -154,8 +154,8 @@ static size_t console_write(const char *data, size_t len)
  * reply are dropped. */
 static void console_yield(void)
 {
-    while (!U1STATbits.RXBE) {
-        if ((uint8_t)U1RXB == 0x03u) {
+    while (!U2STATbits.RXBE) {
+        if ((uint8_t)U2RXB == 0x03u) {
             cmd_parser_abort();
         }
     }
@@ -163,12 +163,12 @@ static void console_yield(void)
 
 /* The parser thread: every received byte goes to the line editor, and
  * a completed line is dispatched right here, in interrupt context. */
-void __attribute__((interrupt, no_auto_psv)) _U1RXInterrupt(void)
+void __attribute__((interrupt, no_auto_psv)) _U2RXInterrupt(void)
 {
-    while (!U1STATbits.RXBE) {
-        cmd_parser_feed_char((char)U1RXB);
+    while (!U2STATbits.RXBE) {
+        cmd_parser_feed_char((char)U2RXB);
     }
-    IFS3bits.U1RXIF = 0u;
+    IFS3bits.U2RXIF = 0u;
 }
 
 /* ------------------------------------------------------------------ *
@@ -456,7 +456,7 @@ void cli_init(void)
     /* The clocks have changed under the baud generator: re-set it for
      * the 100 MHz peripheral clock, after the last FRC-timed byte is out. */
     console_drain();
-    uart1_setup(UART_BRG_PLL);
+    uart2_setup(UART_BRG_PLL);
     console_puts("[boot] uart reclocked to PLL2, 115200 8N1\r\n");
 
     cmd_parser_init(console_write);
@@ -485,12 +485,12 @@ void cli_init(void)
                  "type 'help' for the commands\r\n"
                  "please log this terminal from power-up and send it back\r\n");
 
-    /* Receive interrupt: IRQ 98, IEC3/IFS3 bit 2, priority in IPC12.
+    /* Receive interrupt: IRQ 102, IEC3/IFS3 bit 6, priority in IPC12.
      * Enabled last, so that nothing typed early runs a command before
      * the measurement is set up. */
-    IPC12bits.U1RXIP = UART_RX_PRIORITY;
-    IFS3bits.U1RXIF  = 0u;
-    IEC3bits.U1RXIE  = 1u;
+    IPC12bits.U2RXIP = UART_RX_PRIORITY;
+    IFS3bits.U2RXIF  = 0u;
+    IEC3bits.U2RXIE  = 1u;
 
     cmd_parser_prompt();                     /* sync point for a reader */
 }
