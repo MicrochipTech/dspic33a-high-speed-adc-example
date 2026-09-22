@@ -1,19 +1,24 @@
 %%{init: {'theme':'neutral', 'flowchart':{'curve':'basis','nodeSpacing':30,'rankSpacing':40,'htmlLabels':true}}}%%
 flowchart LR
 
-    FRC["FRC<br/>8 MHz"] --> PLL1["PLL1<br/>N=1 · M=80 · /2<br/>FVCO 640 MHz"] --> OUT(["PLL1 out<br/><b>320 MHz</b>"])
-    OUT --> G6["<b>CLKGEN6</b> ÷1<br/><b>320 MHz</b><br/>ADC input clock<br/><i>Table 16-1, p1223</i>"]
-    OUT --> G1["<b>CLKGEN1</b> ÷1.6<br/><b>200 MHz</b><br/>system clock<br/><i>§12.4.9, p795</i>"]
+    FRC["FRC<br/>8 MHz"] --> PLL1["<b>PLL1</b><br/>N1=1 · M=200<br/>POSTDIV1=5<br/>FVCO 1600 MHz"]
+    FRC --> PLL2["<b>PLL2</b><br/>N1=1 · M=125<br/>POSTDIV1=5<br/>FVCO 1000 MHz"]
+    PLL1 --> O1(["<b>320 MHz</b>"])
+    PLL2 --> O2(["<b>200 MHz</b>"])
+    O1 --> G6["<b>CLKGEN6</b><br/>CLK6DIV = 0<br/>ADC input clock<br/><i>Table 16-1, p1223</i>"]
+    O2 --> G1["<b>CLKGEN1</b><br/>CLK1DIV = 0<br/>system clock<br/><i>§12.4.9, p795</i>"]
     G6 --> ADC(["to ADC1<br/>TAD = 4/F_IN = 12.5 ns<br/>→ 40 MSPS"])
     G1 --> CPU(["to CPU, DMA<br/>MCCP, CLC, CRC, DMT"])
+    SEQ["⚠ <b>switching order, p778</b><br/>PLLSWEN → FOUTSWEN<br/>→ NOSC → OSWEN<br/>skip one and the old<br/>dividers stay in place"]
+    SEQ -.-> PLL1
+    SEQ -.-> PLL2
 
     classDef clk  fill:#e8f0fe,stroke:#4285f4
     classDef adc  fill:#e6f4ea,stroke:#34a853
-    classDef dma  fill:#fef7e0,stroke:#f9ab00
     classDef cpu  fill:#fce8e6,stroke:#ea4335
     classDef warn fill:#fff3f2,stroke:#d93025,stroke-width:2px
-    classDef buf  fill:#ffffff,stroke:#5f6368
 
-    class FRC,PLL1,OUT,G1,G6 clk
+    class FRC,PLL1,PLL2,O1,O2,G1,G6 clk
     class ADC adc
     class CPU cpu
+    class SEQ warn

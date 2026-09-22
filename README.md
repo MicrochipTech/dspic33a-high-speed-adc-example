@@ -7,6 +7,29 @@ measure whether it really keeps up**.
 Bare metal, no MCC. Every register write in the source cites the datasheet table or
 page it comes from, so nothing has to be taken on trust.
 
+## Existing examples we looked at first
+
+Before writing anything we searched Microchip's own example organisation
+[`microchip-pic-avr-examples`](https://github.com/orgs/microchip-pic-avr-examples/repositories?q=dspic33a)
+for something that already did this. These are the ones we evaluated:
+
+| Repository | What it does | What we took from it |
+|---|---|---|
+| [dspic33ak-curiosity-adc-40msps](https://github.com/microchip-pic-avr-examples/dspic33ak-curiosity-adc-40msps) | **40 MSPS ADC on dsPIC33AK128MC106 and dsPIC33AK512MPS512** — MCC-generated, runs on a Curiosity board. Reads conversions in software; **no DMA**. | Studied in detail. **Our clock setup follows its divider values and switching sequence**, because that code has been on silicon and ours has not. |
+| [dspic33a-dac-dma-sinewave](https://github.com/microchip-pic-avr-examples/dspic33a-dac-dma-sinewave) | DAC fed by DMA to emit a 100 Hz sine without CPU intervention. | Checked for DMA setup patterns. Different direction (memory → peripheral) and a far lower rate, so nothing carried over. |
+| [dspic33a-curiosity-dma-spi-eeprom-demo](https://github.com/microchip-pic-avr-examples/dspic33a-curiosity-dma-spi-eeprom-demo) | SPI transfers driven by DMA. | Same: DMA, but not from an ADC and not at rate. |
+| [dspic33a-code-examples](https://github.com/microchip-pic-avr-examples/dspic33a-code-examples) | Collection of smaller dsPIC33A examples. | Scanned for an ADC-plus-DMA combination; there is none. |
+| [dspic33ak512mps506-dppim-demo](https://github.com/microchip-pic-avr-examples/dspic33ak512mps506-dppim-demo) | PWM and ADC on the dsPIC33AK512MPS506. | PWM-triggered conversion, not continuous sampling into memory. |
+
+**The gap this project fills: ADC and DMA together, at full rate, with counters.**
+The official 40 MSPS example proves the ADC reaches 40 MSPS. It does not answer how
+much of that actually arrives in RAM, because it does not use the DMA — and on this
+device all eight DMA channels share a single data bus (DS70005591D §13.4.4, p825),
+with no throughput figure given anywhere.
+
+**If you only need the ADC and can read conversions in software, use the official
+example instead of this one.** It has run on hardware.
+
 ## Read this first
 
 **This code has never run on hardware.** It compiles and links cleanly with the real
@@ -48,9 +71,9 @@ MPLAB X project references it; nothing is duplicated.
 model for dsPIC33A covers PPS, ports, pull-ups, TMR1/TMR2, UART1-3, the watchdog and
 context switching. It does *not* model the clock generators, the PLLs, the ADC or the
 DMA, which are the four things this example is about. In the simulator the code
-therefore stops at the first wait loop: `PLL1CONbits.OSWEN` gets written but nothing
-ever clears it, because there is no PLL to switch. `AD1CONbits.ADRDY` would behave the
-same way.
+therefore stops at the first wait loop in `clock_init()` — `PLL1CONbits.PLLSWEN` gets
+written but nothing ever clears it, because there is no PLL to perform the switch.
+`AD1CONbits.ADRDY` would behave the same way.
 
 Skipping those loops under conditional compilation would not help: the ADC would not
 convert, the DMA would not transfer and the ISR would never fire, so the run would
@@ -142,7 +165,14 @@ sure of our own code**, so you do not spend time on the parts that are solid.
 
 The part that differs from many other devices: **the fast peripherals do not hang off
 the system clock.** There are two dedicated PLLs and fourteen clock generators, so
-320 MHz at the ADC alongside a 200 MHz CPU is no contradiction.
+320 MHz at the ADC alongside a 200 MHz CPU is no contradiction. This example uses both
+PLLs — PLL1 at 320 MHz for the ADC, PLL2 at 200 MHz for the system — so neither clock
+needs a fractional divider.
+
+**The switching order matters and is easy to get wrong.** Page 778 requires `PLLSWEN`
+(apply input and feedback dividers), then `FOUTSWEN` (apply output dividers), then
+`NOSC`, then `OSWEN`. Setting only the last two does not produce an error — it silently
+leaves the old dividers in place and the part runs at the wrong speed.
 
 Which generator feeds what is not stated in one place:
 
@@ -160,9 +190,9 @@ A useful cross-check: the datasheet measures its own current consumption at exac
 this operating point — *"Input frequency 320 MHz, ADC clock 80 MHz, TAD 12.5 ns"*
 (DC120/DC121, page 2008). So this is the intended setting, not brinkmanship.
 
-`CLKxDIV` has a 9-bit fractional divider `FRACDIV` next to the integer `INTDIV`, which
-is why the factor 1.6 for 200 MHz is expressible at all: `INTDIV = 1`,
-`FRACDIV = 0.6 × 512 = 307`.
+`CLKxDIV` also has a 9-bit fractional divider `FRACDIV` next to the integer `INTDIV`,
+so non-integer ratios are possible — but this example does not need one: both clock
+generators take their PLL output straight through, `CLK1DIV = CLK6DIV = 0`.
 
 ### 2. ADC — one core, one channel, free running
 

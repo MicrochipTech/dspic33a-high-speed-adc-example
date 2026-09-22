@@ -12,8 +12,8 @@
  *   silicon - see README.md.
  *
  * Clocking
- *   POSC/FRC -> PLL1 -> CLKGEN1 = 200 MHz system clock
- *                    -> CLKGEN6 = 320 MHz ADC input clock
+ *   FRC 8 MHz -> PLL1 -> CLKGEN6 = 320 MHz ADC input clock
+ *             -> PLL2 -> CLKGEN1 = 200 MHz system clock
  *   TAD = 4 / 320 MHz = 12.5 ns, throughput 40 MSPS (DS70005591D, AD50/AD51).
  *   CLKGEN6 is the ADC clock source per DS70005591D Table 16-1.
  *
@@ -108,60 +108,107 @@ static volatile uint16_t *active_buf = buf_a;
 /* ------------------------------------------------------------------ *
  * Clock setup
  *
- * PLL1: 8 MHz FRC -> FVCO -> PLL1 output. The divider fields are
- * PLLPRE (input divider N), PLLFBDIV (multiplier M) and POSTDIV1/2
- * (output dividers), all in PLL1DIV. The datasheet's own current-
- * consumption tables use M = 40, N = 1, N2 = 1 for FVCO = 640 MHz and a
- * 320 MHz output (DS70005591D DC111, p2008) - the same operating point
- * needed here, which is a useful cross-check that it is a sane setting.
+ * Two PLLs, because the two rates this example needs are both exact
+ * multiples of the 8 MHz FRC and neither needs a fractional divider:
  *
- * The PFD input must stay in 5.0 - 800 MHz (DS70005591D p777).
+ *   PLL1 -> 320 MHz -> CLKGEN6 -> ADC   (TAD = 4/320 MHz = 12.5 ns)
+ *   PLL2 -> 200 MHz -> CLKGEN1 -> CPU, DMA and the standard peripherals
+ *
+ * THE SWITCHING ORDER IS NOT OPTIONAL. DS70005591D page 778 spells it
+ * out, and skipping a step does not fail loudly - it leaves the old
+ * divider values in place and the part runs at the wrong speed:
+ *
+ *   a) set PLLSWEN  -> allows the input and feedback dividers to update
+ *   c) set FOUTSWEN -> allows the output dividers to update
+ *   d) select the source in NOSC
+ *   e) set OSWEN    -> perform the switch
+ *
+ * Each of those bits clears itself when its step has completed, so each
+ * one is followed by a wait.
+ *
+ * Also from page 778: "The output dividers POSTDIV1 and POSTDIV2 should
+ * not be changed while the PLL is operating", and POSTDIV1 must be >=
+ * POSTDIV2.
+ *
+ * The divider values below are the ones Microchip's own MCC-generated
+ * example uses for this part, which is the reason to prefer them over an
+ * equally valid arithmetic alternative - they have run on hardware:
+ *   https://github.com/microchip-pic-avr-examples/dspic33ak-curiosity-adc-40msps
+ *
+ *   PLL1DIV = 0x0100C829 : N1=1, M=200, POSTDIV1=5, POSTDIV2=1
+ *                          8 MHz -> FVCO 1600 MHz -> 320 MHz
+ *   PLL2DIV = 0x01007D29 : N1=1, M=125, POSTDIV1=5, POSTDIV2=1
+ *                          8 MHz -> FVCO 1000 MHz -> 200 MHz
+ *
+ * Constraints checked against Table 40-23 and page 777: F_PFD >= 5 MHz,
+ * F_VCO 500...1600 MHz, M in 16...320, POSTDIV1 >= POSTDIV2.
  * ------------------------------------------------------------------ */
+
+/* NOSC values, from the ATDF value-group CLK1_CON__COSC. */
+#define NOSC_FRC        0x1u
+#define NOSC_PLL1_OUT   0x5u
+#define NOSC_PLL2_OUT   0x6u
+
 static void clock_init(void)
 {
-    /* Make sure the FRC is running and PLL1 is enabled. */
-    OSCCTRLbits.FRCEN = 1;
-    while (!OSCCTRLbits.FRCRDY) { }
+    /* If the system clock is currently running off a PLL, park it on the
+     * FRC first. Changing PLL settings underneath a running CPU clock can
+     * overclock the core - this matters on a debugger restart, where the
+     * part is not freshly reset. (The MCC example does the same.) */
+    if ((CLK1CONbits.COSC >= NOSC_PLL1_OUT) && (CLK1CONbits.COSC <= 0x8u)) {
+        CLK1CONbits.NOSC  = NOSC_FRC;
+        CLK1CONbits.OSWEN = 1u;
+        while (CLK1CONbits.OSWEN) { }
+    }
 
-    /* PLL1: 8 MHz / 1 = 8 MHz PFD input, x 80 = 640 MHz FVCO,
-     * POSTDIV1 = 2 -> 320 MHz PLL1 output. */
-    PLL1DIVbits.PLLPRE   = 1u;    /* N  = 1                      */
-    PLL1DIVbits.PLLFBDIV = 80u;   /* M  = 80  -> FVCO = 640 MHz   */
-    PLL1DIVbits.POSTDIV1 = 2u;    /* /2       -> 320 MHz          */
-    PLL1DIVbits.POSTDIV2 = 1u;
+    /* ---- PLL1: 320 MHz for the ADC ---- */
+    PLL1CON = 0x8100u;          /* ON = 1, NOSC = FRC                   */
+    PLL1DIV = 0x0100C829u;      /* N1=1, M=200, POSTDIV1=5, POSTDIV2=1  */
 
-    PLL1CONbits.NOSC = 0x1u;      /* PLL input = FRC oscillator
-                                   * (value 0x1 per ATDF CLK1_CON__COSC) */
-    OSCCTRLbits.PLL1EN = 1;
-    PLL1CONbits.ON     = 1;
-    PLL1CONbits.OSWEN  = 1;       /* request the switch            */
+    PLL1CONbits.PLLSWEN  = 1u;  /* (a) apply input and feedback dividers */
+    while (PLL1CONbits.PLLSWEN) { }
+    PLL1CONbits.FOUTSWEN = 1u;  /* (c) apply output dividers             */
+    while (PLL1CONbits.FOUTSWEN) { }
+    PLL1CONbits.OSWEN    = 1u;  /* (e) switch                            */
     while (PLL1CONbits.OSWEN) { }
     while (!OSCCTRLbits.PLL1RDY) { }
 
-    /* CLKGEN1 = system clock (DS70005591D 12.4.9, p795).
-     * PLL1 output 320 MHz / 1.6 = 200 MHz.
-     * CLKxDIV holds INTDIV plus a 9-bit FRACDIV, so 1.6 is expressible:
-     * INTDIV = 1, FRACDIV = 0.6 x 512 = 307. */
-    CLK1DIVbits.INTDIV  = 1u;
-    CLK1DIVbits.FRACDIV = 307u;
-    CLK1CONbits.NOSC    = 0x5u;   /* PLL1 Out output (ATDF: 0x5)   */
-    CLK1CONbits.ON      = 1;
-    CLK1CONbits.DIVSWEN = 1;
-    CLK1CONbits.OSWEN   = 1;
-    while (CLK1CONbits.OSWEN) { }
-    while (!CLK1CONbits.CLKRDY) { }
+    VCO1DIV = 0x10000u;         /* VCO divider output, unused here       */
+    PLL1CONbits.DIVSWEN = 1u;
+    while (PLL1CONbits.DIVSWEN) { }
 
-    /* CLKGEN6 = ADC clock source (DS70005591D Table 16-1, p1223).
-     * PLL1 output 320 MHz straight through: TAD = 4/320 MHz = 12.5 ns.
-     * 320 MHz is the specified maximum (Table 40-24, p2016). */
-    CLK6DIVbits.INTDIV  = 1u;
-    CLK6DIVbits.FRACDIV = 0u;
-    CLK6CONbits.NOSC    = 0x5u;   /* PLL1 Out output               */
-    CLK6CONbits.ON      = 1;
-    CLK6CONbits.DIVSWEN = 1;
-    CLK6CONbits.OSWEN   = 1;
+    /* ---- PLL2: 200 MHz for the system clock ---- */
+    PLL2CON = 0x8100u;
+    PLL2DIV = 0x01007D29u;      /* N1=1, M=125, POSTDIV1=5, POSTDIV2=1  */
+
+    PLL2CONbits.PLLSWEN  = 1u;
+    while (PLL2CONbits.PLLSWEN) { }
+    PLL2CONbits.FOUTSWEN = 1u;
+    while (PLL2CONbits.FOUTSWEN) { }
+    PLL2CONbits.OSWEN    = 1u;
+    while (PLL2CONbits.OSWEN) { }
+    while (!OSCCTRLbits.PLL2RDY) { }
+
+    VCO2DIV = 0x10000u;
+    PLL2CONbits.DIVSWEN = 1u;
+    while (PLL2CONbits.DIVSWEN) { }
+
+    /* ---- CLKGEN1 = system clock, from PLL2, no divider ----
+     * DS70005591D 12.4.9, p795: "Clock Generator 1 is the clock source
+     * for the system clock (sys_clk) and peripheral clock." */
+    CLK1CON = 0x129600u;        /* NOSC = PLL2 out, ON, backup BFRC, FSCM */
+    CLK1DIV = 0u;               /* 200 MHz straight through               */
+    CLK1CONbits.OSWEN = 1u;
+    while (CLK1CONbits.OSWEN) { }
+
+    /* ---- CLKGEN6 = ADC clock, from PLL1, no divider ----
+     * DS70005591D Table 16-1, p1223 names CLKGEN6 as the ADC clock
+     * source, range 32...320 MHz. 320 MHz is the maximum (Table 40-24,
+     * p2016) and gives TAD = 12.5 ns, hence 40 MSPS (AD50/AD51). */
+    CLK6CON = 0x29500u;         /* NOSC = PLL1 out, ON                   */
+    CLK6DIV = 0u;               /* 320 MHz straight through              */
+    CLK6CONbits.OSWEN = 1u;
     while (CLK6CONbits.OSWEN) { }
-    while (!CLK6CONbits.CLKRDY) { }
 }
 
 /* ------------------------------------------------------------------ *

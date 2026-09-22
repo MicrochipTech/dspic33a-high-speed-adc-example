@@ -34,57 +34,58 @@ the same number.
 Try `FRAC = 1` as a cross-check: that switches to fractional (left-aligned) format. If
 the numbers change in a way that makes sense, the alignment theory is confirmed.
 
-### 1.2 The PLL setup (second highest risk)
+### 1.2 The PLL setup
 
-The three PLL dividers are the part with the most ways to be subtly wrong, and the
-datasheet itself is inconsistent about the field names: page 777 calls the input
-divider `PLLRPE[5:0]` in the block diagram and `PLLPRE[3:0]` in the text one paragraph
-later. The header uses `PLLPRE`, which is what the code uses.
+This used to be our biggest worry. It is no longer, because we found Microchip's own
+MCC-generated example for this exact part and aligned the code with it:
 
-What the code sets, and the constraints each value has to satisfy (all from page 777
-and Table 40-23):
+**https://github.com/microchip-pic-avr-examples/dspic33ak-curiosity-adc-40msps**
 
-| Field | Code | Constraint | Our value |
-|---|---|---|---|
-| `PLLPRE` (N1) | 1 | F_PFD ≥ 5 MHz | 8 MHz / 1 = 8 MHz ✔ |
-| `PLLFBDIV` (M) | 80 | 16 … 320 | 80 ✔ |
-| F_VCO | — | **500 … 1600 MHz** | 8 × 80 = 640 MHz ✔ |
-| `POSTDIV1` (N2) | 2 | **must be ≥ POSTDIV2** | 2 ≥ 1 ✔ |
-| `POSTDIV2` (N3) | 1 | ≤ POSTDIV1 | 1 ✔ |
-| F_PLLOUT | — | ADC input 32 … 320 MHz | 640 / 2 = 320 MHz ✔ |
+That example runs at 40 MSPS on a Curiosity board and covers both dsPIC33AK128MC106
+and dsPIC33AK512MPS512. It has no DMA — which is why this project exists — but its
+clock setup has been on hardware, and ours now uses the same divider values and, more
+importantly, the same switching sequence.
 
-The encoding is confirmed from the ATDF: `POSTDIV = n` means divide by n (value group
-`PLL_DIV__POSTDIV1`, "2x divide" for 0x2), so /2 really is /2.
+**The switching sequence is the part that bites.** DS70005591D page 778:
 
-**If the code hangs in `clock_init()`** — see §2.1 for which wait loop and what it
-means.
+> a) Enable PLL Input and Feedback Divider update by setting the **PLLSWEN** bit […]
+> c) Enable the PLL Output Divider update by setting the **FOUTSWEN** bit […]
+> d) Select the clock source by setting the **NOSC[3:0]** bits […]
+> e) Enable clock switching by setting the **OSWEN** bit […]
 
-### 1.3 The 1.6 divider for the system clock
+An earlier version of this code set only NOSC and OSWEN. That does not fail loudly —
+it leaves the previous divider values in place, so the part comes up at the wrong
+frequency and every rate derived from it is wrong. If you see a plausible-looking
+sample rate that is off by some factor, this class of mistake is why.
 
-`CLK1DIV` gets `INTDIV = 1` and `FRACDIV = 307` to divide 320 MHz by 1.6 for the
-200 MHz system clock. `FRACDIV` is 9 bits, so we read it as a fraction of 512:
-0.6 × 512 = 307.2 → 307.
+Current values, cross-checked against Table 40-23 and page 777:
 
-**This is an interpretation, not a quoted formula.** If the actual divider is 1.6
-the CPU runs at 200 MHz; if we got the fraction scaling wrong, the CPU runs at some
-other rate. That would **not** break the ADC or the DMA — those hang off CLKGEN6 — but
-it would make any timing measured by CPU cycles wrong.
+| | PLL1 (ADC) | PLL2 (system) |
+|---|---|---|
+| `PLLxDIV` | `0x0100C829` | `0x01007D29` |
+| N1 (`PLLPRE`) | 1 → F_PFD 8 MHz ✔ ≥ 5 MHz | 1 → 8 MHz ✔ |
+| M (`PLLFBDIV`) | 200 ✔ in 16…320 | 125 ✔ |
+| F_VCO | 1600 MHz ✔ in 500…1600 | 1000 MHz ✔ |
+| `POSTDIV1` / `POSTDIV2` | 5 / 1 ✔ POSTDIV1 ≥ POSTDIV2 | 5 / 1 ✔ |
+| Output | **320 MHz** → CLKGEN6 → ADC | **200 MHz** → CLKGEN1 → CPU |
 
-**How to check:** toggle a GPIO pin in a known loop and measure it with a scope, or
-configure REFO and measure. If you have no scope: set up TMR1 with a known prescaler
-and compare against a stopwatch over a long interval.
+Using two PLLs means neither clock needs a fractional divider — `CLK1DIV` and
+`CLK6DIV` are both 0. An earlier version divided one 320 MHz PLL by 1.6 using the
+9-bit `FRACDIV` field, which worked arithmetically but rested on our reading of how
+that field scales. That uncertainty is gone.
 
-**Simplest workaround if suspect:** use `INTDIV = 2, FRACDIV = 0` for a clean 160 MHz
-CPU. Slower, but unambiguous — the ADC still runs at 40 MSPS.
+The code also parks the system clock on the FRC before touching the PLLs, because
+changing PLL settings underneath a running CPU clock can overclock the core. This
+matters on a debugger restart, where the part is not freshly reset.
 
-### 1.4 Interrupt priority is left at default
+### 1.3 Interrupt priority is left at default
 
 The code enables the DMA0 interrupt but never sets its priority. Whatever the reset
 default is, it applies. At 39 000 interrupts per second that is usually fine because
 nothing competes — but if you add UART or CAN later, this is where jitter and
 `late_service` counts will come from.
 
-### 1.5 Things we consider solid
+### 1.4 Things we consider solid
 
 So you do not hunt here first. Each was read from a primary source and cross-checked:
 
@@ -131,11 +132,18 @@ line** you are on — each one tells you something different:
 
 | Stuck at | Meaning | Where to look |
 |---|---|---|
-| `while (!OSCCTRLbits.FRCRDY)` | the internal 8 MHz oscillator never reports ready | should be impossible on real silicon; suspect the debugger halted you elsewhere |
-| `while (PLL1CONbits.OSWEN)` | the PLL switch request was never accepted | divider values out of range — check §1.2. Also read `OSCCTRLbits.PLL1RDY` and the `CLKFAIL` register |
-| `while (!OSCCTRLbits.PLL1RDY)` | the PLL does not lock | F_VCO outside 500–1600 MHz, or F_PFD below 5 MHz |
-| `while (CLK1CONbits.OSWEN)` | clock generator 1 will not switch | `NOSC = 0x5` (PLL1 out) — is PLL1 actually running and locked? |
+| `while (PLL1CONbits.PLLSWEN)` | the input/feedback divider update was not accepted | `PLL1DIV`: M outside 16…320, or F_PFD below 5 MHz |
+| `while (PLL1CONbits.FOUTSWEN)` | the output divider update was not accepted | `POSTDIV1` must be ≥ `POSTDIV2`, and page 778 says the output dividers must not change while the PLL is running |
+| `while (PLL1CONbits.OSWEN)` | the PLL will not switch to its source | `NOSC` in `PLL1CON` — is the FRC running? |
+| `while (!OSCCTRLbits.PLL1RDY)` | PLL1 does not lock | F_VCO outside 500…1600 MHz. Read back `PLL1DIV` — if it is not the value you wrote, a `…SWEN` step was skipped |
+| the same in `PLL2…` | as above, for the system clock | same checks on `PLL2DIV` |
+| `while (CLK1CONbits.OSWEN)` | clock generator 1 will not switch | `NOSC = 0x6` (PLL2 out) — is PLL2 locked? |
+| `while (CLK6CONbits.OSWEN)` | clock generator 6 will not switch | `NOSC = 0x5` (PLL1 out) — is PLL1 locked? |
 | `while (!AD1CONbits.ADRDY)` | the ADC core never comes up | is CLKGEN6 running? Read `CLK6CONbits.CLKRDY` |
+
+**Read back `PLL1DIV` and `PLL2DIV` while halted.** If they do not contain what the
+code wrote, the divider update never took effect — that is the failure mode §1.2
+describes, and it is silent.
 
 **In the simulator all of these hang** — it models no PLL and no ADC. That is expected,
 see the README. Use a hardware debugger.
@@ -228,8 +236,8 @@ Please do, and bring this with you — it turns guesswork into a diagnosis:
 
 - **Which step above got you stuck**, and at which source line
 - **Register dump while halted:** `AD1CON`, `AD1CH0CON1`, `AD1CH0DATA`, `DMACON`,
-  `DMA0CH`, `DMA0SEL`, `DMA0STAT`, `DMA0CNT`, `PLL1CON`, `PLL1DIV`, `CLK1CON`,
-  `CLK1DIV`, `CLK6CON`, `OSCCTRL`, `IEC2`, `IFS2`
+  `DMA0CH`, `DMA0SEL`, `DMA0STAT`, `DMA0CNT`, `PLL1CON`, `PLL1DIV`, `PLL2CON`,
+  `PLL2DIV`, `CLK1CON`, `CLK1DIV`, `CLK6CON`, `CLK6DIV`, `OSCCTRL`, `IEC2`, `IFS2`
 - **The counters:** `blocks_done`, `dma_overrun`, `late_service`, `dma_bus_err`,
   `dma_addr_err`, `last_sample`
 - **The first 32 values** from the buffer that was complete
