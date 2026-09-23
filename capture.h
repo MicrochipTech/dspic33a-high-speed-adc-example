@@ -44,6 +44,13 @@ void capture_start(void);
  * the pacing and period they had. capture_powered() says which state. */
 void capture_shutdown(void);
 bool capture_powered(void);
+
+/* Switch to another ADC core (1..5) with input pinsel and sample time
+ * samc: stream stopped, core down, table row switched, adc_init(), DMA
+ * re-armed on that core's trigger and result register, pacing back to
+ * the repeat timer, clock divider back to 1. Leaves the core powered and
+ * idle. False for a bad core number. */
+bool capture_select_core(uint8_t core, uint8_t pinsel, uint8_t samc);
 /* Let the current burst finish and do not restart it. */
 void capture_stop(void);
 bool capture_running(void);

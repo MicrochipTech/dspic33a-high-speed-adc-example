@@ -15,6 +15,7 @@
 #include "adc.h"
 #include "dma.h"
 #include "capture.h"
+#include "dac.h"
 #include "led.h"
 #include "console.h"
 
@@ -316,6 +317,7 @@ void regs_dump(void)
     adc_regs_dump();
     dma0_regs_dump();
     capture_regs_dump();
+    dac_regs_dump();
     console_regs_dump();
     console_puts("[regs] cpu\r\n");
     console_kv_hex("INTCON1", INTCON1);

@@ -67,6 +67,9 @@
 #include "timebase.h"
 #include "clock.h"
 #include "capture.h"
+#include "adc.h"
+#include "dac.h"
+#include "dactest.h"
 #include "led.h"
 #include "diag.h"
 #include "console.h"
@@ -372,7 +375,7 @@ static void put_line(const char *s)
 /* One status line, blocking, for the periodic trace from main(). */
 void console_status_line(void)
 {
-    char line[240];                       /* 226 used with every field at max */
+    char line[256];                       /* 236 used with every field at max */
     char *p = copy_str(line, "[stat] blocks=");
     p = u32_to_str(p, blocks_done);
     p = copy_str(p, " overrun=");  p = u32_to_str(p, dma_overrun);
@@ -391,7 +394,8 @@ void console_status_line(void)
      * the DMA trigger and stays masked (IEC6 = 0), so this flag being 1
      * while the DMA runs says the event is visible to the CPU - the
      * precondition for the vector-201 trap TROUBLESHOOTING 2.0b describes. */
-    p = copy_str(p, " ad3if=");    p = u32_to_str(p, (uint32_t)IFS6bits.AD3CH0IF);
+    p = copy_str(p, " core=");     p = u32_to_str(p, adc_core());
+    p = copy_str(p, " adif=");     p = u32_to_str(p, adc_ch0_flag() ? 1u : 0u);
     /* Receive diagnostics, see rx_count above. */
     p = copy_str(p, " rx=");       p = u32_to_str(p, rx_count);
     p = copy_str(p, " last=");     p = u32_to_hex(p, rx_last);
@@ -501,6 +505,50 @@ static void cmd_input_fn(int argc, char **argv)
     put_kv("input", v);
 }
 CMD_DEFINE(input, "input", cmd_input_fn, "input <0..15> - analog input (PINSEL)");
+
+static void cmd_core_fn(int argc, char **argv)
+{
+    uint32_t core, pinsel = ADC_PINSEL;
+    if ((argc < 2) || (argc > 3) || !arg_u32(argv[1], 1u, 5u, &core) ||
+        ((argc == 3) && !arg_u32(argv[2], 0u, 15u, &pinsel))) {
+        usage("core <1..5> [pinsel]  (switch the ADC core; 5 3 = DAC2's pin RA8)");
+        return;
+    }
+    if (!capture_select_core((uint8_t)core, (uint8_t)pinsel, capture_samc())) { cmd_parser_fail(); return; }
+    put_kv("core", core);
+    put_kv("input", pinsel);
+}
+CMD_DEFINE(core, "core", cmd_core_fn, "core <1..5> [pinsel] - switch the ADC core");
+
+static void cmd_dac_fn(int argc, char **argv)
+{
+    if ((argc == 2) && (argv[1][0] == 'o') && (argv[1][1] == 'f')) {
+        dac2_off();
+        put_line("dac: off");
+        return;
+    }
+    uint32_t slp = 8u;
+    if ((argc < 2) || (argc > 3) || (argv[1][0] != 'o') || (argv[1][1] != 'n') ||
+        ((argc == 3) && !arg_u32(argv[2], 1u, 255u, &slp))) {
+        usage("dac <on [slpdat]|off>  (DAC2 triangle 0x100..0xF00 on RA8; slpdat = counts per DAC clock, 8 = 22 kHz)");
+        return;
+    }
+    if (!dac2_triangle_start(0x100u, 0xF00u, (uint16_t)slp)) { put_line("dac: CLKGEN7 did not come up"); cmd_parser_fail(); return; }
+    put_kv("dac slpdat", slp);
+    put_kv("dac period ns", dac2_period_ns());
+}
+CMD_DEFINE(dac, "dac", cmd_dac_fn, "dac <on [slpdat]|off> - DAC2 triangle on RA8");
+
+static void cmd_dactest_fn(int argc, char **argv)
+{
+    uint32_t halves = 64u;
+    if ((argc > 2) || ((argc == 2) && !arg_u32(argv[1], 1u, 10000u, &halves))) {
+        usage("dactest [halves]  (capture and judge the DAC2 triangle, default 64 halves)");
+        return;
+    }
+    if (dactest_run(halves) != 0u) { cmd_parser_fail(); }
+}
+CMD_DEFINE(dactest, "dactest", cmd_dactest_fn, "dactest [halves] - judge the DAC2 triangle through the chain");
 
 static void cmd_selftest_fn(int argc, char **argv)
 {
@@ -859,6 +907,9 @@ void cli_init(void)
     (void)cmd_register(&cmd_sweep);
     (void)cmd_register(&cmd_period);
     (void)cmd_register(&cmd_pacing);
+    (void)cmd_register(&cmd_core);
+    (void)cmd_register(&cmd_dac);
+    (void)cmd_register(&cmd_dactest);
     (void)cmd_register(&cmd_reset);
 
     /* Banner, once at start-up. A human sees what is talking and which

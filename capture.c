@@ -215,7 +215,7 @@ void capture_init(void)
     /* The buffer object itself and its size - not a constant that has to
      * agree with it. The ADC's burst length (adc_init, SAMPLES_PER_BUF)
      * must equal the block, which the check below pins down. */
-    dma0_init(DMA_TRIG_ADC_CH0, &ADCREG(CH0RES), dma_buffer.data, sizeof dma_buffer.data);
+    dma0_init(adc_dma_trigger(), adc_dma_source(), dma_buffer.data, sizeof dma_buffer.data);
 }
 _Static_assert(sizeof dma_buffer.data == SAMPLES_PER_BUF * sizeof(uint16_t),
                "ADC burst length and DMA buffer size must be the same thing");
@@ -355,6 +355,30 @@ void capture_shutdown(void)
 bool capture_powered(void)
 {
     return powered;
+}
+
+bool capture_select_core(uint8_t core, uint8_t pinsel, uint8_t samc)
+{
+    if ((core < 1u) || (core > 5u)) { return false; }
+    (void)quiesce();
+    sccp1_stop();
+    if (powered) { adc_deinit(); }
+    else         { (void)clock_adc_on(); }   /* the new core needs its clock */
+    if (clock_adc_div() != 100u) { (void)clock_adc_set_div(100u); }
+    (void)adc_select(core);
+    adc_init(pinsel, samc, ADC_RPTCNT);      /* core on, ADRDY, or fail(5) */
+    capture_init();                          /* DMA on this core's trigger */
+    pacing_cur     = ADC_TRG2_REPEAT;
+    pacing_pending = false;
+    period_pending = false;
+    switch_pending = false;
+    pinsel_next    = pinsel;
+    samc_next      = samc;
+    sccp_ticks     = ADC_SCCP_TICKS;
+    powered        = true;
+    burst_active   = false;
+    counters_clear();
+    return true;
 }
 
 void capture_stop(void)

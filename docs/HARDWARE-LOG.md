@@ -315,3 +315,29 @@ console, with a `[stat]` line every 10 s. That separates the two open questions 
 run 6: if `rx` counts now, the console was starved by the overrun interrupts; if it
 still stays 0 with nothing converting, the bytes never reach RD1. `start` brings
 clock and core back (`clock_adc_on()`, `adc_reinit()`) at the rate the sweep chose.
+
+## 2026-09-24 - two phases at boot, ADC core switch at run time, DAC2 as the signal source (no board run yet)
+
+Wanted by the user: the existing tests run and log their results (phase 1, ADC 3 on the
+mikroBUS input), then a second phase repeats every test with DAC2 driving ADC 5, and the
+ping-pong halves are checked for the DAC signal. Built:
+
+- `adc.c` selects the core at run time: a table row per core (registers, interrupt
+  word and CH0 bit, DMA trigger code), `ADCREG()/ADCBITS()` go through `adc_cur`.
+  `capture_select_core()` stops, takes the core down, switches, re-runs `adc_init()`,
+  re-arms the DMA on the new trigger/result register. `core` command.
+- `dac.c`: DAC2 Triangle Wave mode (Example 18-3), CLKGEN7 from PLL1 (320 MHz), 0x100 ..
+  0xF00, SLPDAT 8 = 44.8 us period = 22.3 kHz (Equation 18-4). DACOUT2 = RA8 = AD5AN3 =
+  DIM P44 = capacitive touch pad 2 on the EV74H48A - the loop closes on the pin, no wire.
+  `dac` command.
+- `dactest.c`: copies each completed half (2 KB) right after completion, judges min/max
+  (150 LSb), reversals vs. period at the measured rate (10 %), jumps > 4 steps + 64.
+  `dactest` command; phase 2 runs 64 halves.
+- Phase 2 ends with `[DONE]` naming both phases and the DAC verdict; everything off
+  afterwards (ADC, CLKGEN6, DAC2, CLKGEN7).
+- `cmd_parser.h`: `CMD_PARSER_MAX_COMMANDS` 16 -> 24 (the one deliberate edit of the
+  vendored parser, see CLAUDE.md).
+
+Open until the board says: whether DACCTRL1/DAC2 come up on CLKGEN7 at 320 MHz (the
+datasheet's design point is 400 MHz), whether the touch pad's network loads the DAC
+buffer, and whether ADC 5 reads the pin the DAC drives (AD5AN3 shares the pad).

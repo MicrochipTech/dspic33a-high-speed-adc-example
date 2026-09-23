@@ -254,6 +254,38 @@ bool clock_adc_on(void)
 #endif
 }
 
+/* ------------------------------------------------------------------ *
+ * CLKGEN7 for the DAC (clock.h). Same recipe as CLKGEN6 at boot: source
+ * PLL1 Fout, no divider, switch, wait. Table 18-1 (p1385) names Clock
+ * Generator 7 as the DAC clock.
+ * ------------------------------------------------------------------ */
+bool clock_dac_on(void)
+{
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+    return true;
+#else
+    CLK7CON = 0x29500u;             /* NOSC = PLL1 out, ON, backup BFRC  */
+    CLK7DIV = 0u;
+    CLK7CONbits.OSWEN = 1u;
+    uint32_t n = DIVSW_WAIT_LIMIT;
+    while (CLK7CONbits.OSWEN && (--n != 0u)) { }
+    if (n == 0u) { return false; }
+    n = DIVSW_WAIT_LIMIT;
+    while (!CLK7CONbits.CLKRDY && (--n != 0u)) { }
+    return n != 0u;
+#endif
+}
+
+void clock_dac_off(void)
+{
+    CLK7CONbits.ON = 0u;
+}
+
+uint32_t clock_dac_hz(void)
+{
+    return ADC_CLK_HZ;              /* PLL1 Fout, undivided              */
+}
+
 uint32_t clock_adc_div(void)
 {
     /* Back from the register, in hundredths: 2 * (INTDIV + FRACDIV/512)
@@ -280,6 +312,7 @@ void clock_regs_dump(void)
     console_kv_hex("CLK1DIV", CLK1DIV);
     console_kv_hex("CLK6CON", CLK6CON);
     console_kv_hex("CLK6DIV", CLK6DIV);
+    console_kv_hex("CLK7CON", CLK7CON);     /* DAC clock                 */
     console_kv_hex("IEC0", IEC0);           /* CLKFAIL enable, bit 9     */
     console_kv_hex("IFS0", IFS0);           /* CLKFAIL flag,   bit 9     */
 }

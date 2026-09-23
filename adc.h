@@ -9,31 +9,42 @@
 #include "board.h"
 
 /* ------------------------------------------------------------------ *
- * ADC core selection
- *
+ * ADC core selection - at run time
  * The five ADC cores have identical register sets, only the prefix
- * differs (AD1..., AD5...). ADCREG(x) expands to the register of the core
- * selected by ADC_INSTANCE in board.h, e.g. ADCREG(CH0CON1bits).
+ * differs (AD1..., AD5...). adc_cur points at the table row of the
+ * active core: ADCREG(x) is that core's register x as a 32-bit word,
+ * ADCBITS(x) the same register through the AD3...BITS bit-field type
+ * (identical layout on every core). ADC_INSTANCE in board.h is the core
+ * the boot starts on; adc_select() switches, with the core down.
  * The DMA trigger code follows from the ATDF value-group DMA_SEL__CHSEL:
- * "ADCn Done CH0" = 0x2F, 0x35, 0x3B, 0x41, 0x48 for n = 1..5.
+ * "ADCn Done CH0" = 0x2F, 0x35, 0x3B, 0x41, 0x48 for n = 1..5. The CH0
+ * interrupt of core n is IRQ 157/179/201/221/241: word IRQ/32, bit
+ * IRQ%32 = IEC4.29, IEC5.19, IEC6.9, IEC6.29, IEC7.17 (device header,
+ * _IECx_ADnCH0IE_POSITION).
  * ------------------------------------------------------------------ */
-#define ADC_CAT_(a, b, c)  a##b##c
-#define ADC_CAT(a, b, c)   ADC_CAT_(a, b, c)
-#define ADCREG(suffix)     ADC_CAT(AD, ADC_INSTANCE, suffix)
+typedef struct {
+    uint8_t  core;
+    volatile uint32_t *CON, *STAT, *SWTRG, *CH0CON1, *CH0CNT, *CH0RES, *CH0DATA;
+    volatile uint32_t *IEC, *IFS;     /* the words holding this core's IRQs */
+    uint32_t ch0_mask;                /* CH0 IRQ bit in those words        */
+    uint8_t  dma_trigger;             /* DMA_SEL CHSEL "ADCn Done CH0"     */
+} adc_core_t;
+extern const adc_core_t *adc_cur;
+#define ADCREG(r)   (*adc_cur->r)
+#define ADCBITS(r)  (*(volatile AD3##r##BITS *)adc_cur->r)
 
-#if   ADC_INSTANCE == 1
-#define DMA_TRIG_ADC_CH0   0x2Fu
-#elif ADC_INSTANCE == 2
-#define DMA_TRIG_ADC_CH0   0x35u
-#elif ADC_INSTANCE == 3
-#define DMA_TRIG_ADC_CH0   0x3Bu
-#elif ADC_INSTANCE == 4
-#define DMA_TRIG_ADC_CH0   0x41u
-#elif ADC_INSTANCE == 5
-#define DMA_TRIG_ADC_CH0   0x48u
-#else
+#if (ADC_INSTANCE < 1) || (ADC_INSTANCE > 5)
 #error "ADC_INSTANCE must be 1..5"
 #endif
+
+/* Switch the active core (1..5). Only with the core down (adc_deinit)
+ * and the DMA idle; the caller re-runs adc_init() and re-arms the DMA
+ * (capture_select_core() does all of it). False for a bad number. */
+bool     adc_select(uint8_t core);
+uint8_t  adc_core(void);
+uint8_t  adc_dma_trigger(void);              /* DMA_SEL code of the active core */
+const volatile void *adc_dma_source(void);   /* &ADxCH0RES of the active core   */
+bool     adc_ch0_flag(void);                 /* its CH0 interrupt flag          */
 
 /* ADC core ADC_INSTANCE, channel 0, Integration mode, CNT = SAMPLES_PER_BUF,
  * conversions inside a burst paced by the ADC's repeat timer with period

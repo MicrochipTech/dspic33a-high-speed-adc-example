@@ -32,7 +32,7 @@ if /i "%1"=="sim" (
   set EXTRA=-D__MPLAB_DEBUGGER_SIMULATOR=1 -g
   set OUT=..\build\%TARGET%_sim
 )
-set SOURCES=..\main.c ..\config_bits.c ..\clock.c ..\adc.c %DMA% ..\capture.c ..\led.c ..\diag.c ..\timebase.c ..\sccp.c ..\cli.c ..\cmd_parser.c
+set SOURCES=..\main.c ..\config_bits.c ..\clock.c ..\adc.c %DMA% ..\capture.c ..\led.c ..\diag.c ..\timebase.c ..\sccp.c ..\dac.c ..\dactest.c ..\cli.c ..\cmd_parser.c
 
 if not exist ..\build mkdir ..\build
 

@@ -483,6 +483,9 @@ The console is the [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser) mod
 | `regs` | the clock, ADC, DMA, interrupt and UART registers as hex, plus the counters — the dump `docs/TROUBLESHOOTING.md` Part 4 asks for |
 | `start`, `stop` | start the burst stream / let the current buffer finish and stop |
 | `samc <0..31>` | sample time in TAD steps: (2·SAMC + 0.5) TAD — the aperture, not the rate. Applied between two bursts |
+| `core <1..5> [pinsel]` | switch the ADC core at run time (stream stopped, core down, DMA re-armed on the new core's trigger): `core 5 3` = AD5AN3 = RA8, the pin DAC2 drives; `core 3 5` = back to mikroBUS A AN |
+| `dac <on [slpdat]\|off>` | DAC2 triangle 0x100…0xF00 on RA8; `slpdat` = counts per DAC clock (8 = 22 kHz at 320 MHz) |
+| `dactest [halves]` | capture and judge the DAC2 triangle through the chain on the active core (see phase 2 below) |
 | `pacing <65\|64\|3\|34\|2>` | **what paces the conversions:** 65 = one conversion per SCCP1 trigger, no burst (Single Conversion mode, period in ticks of 10 ns, 2…65535 — the mechanism of Microchip's own 40 MSPS example), 64 = the ADC clock divider (period = divide ratio 1, 2, 4, 6, 8, 10 of the 320 MHz clock; back-to-back at the divided clock), 3 = the ADC's repeat timer inside the burst (period in TAD = 12.5 ns, 2…63), 34 = SCCP1 as the burst's second trigger (ticks of 10 ns), 2 = back-to-back at 320 MHz (no rate control). At boot `ADC_PACING` in `board.h` decides; the default AUTO runs the rate test on all of them in that order and prints a `[pacing]` verdict per source, then uses the first paced one that passed. 3 and 34 did not pace on the board (runs 5 and 6); 65 and 64 are untested there |
 | `period <n>` | **the sample rate:** the period in the active pacing's unit. SCCP1 trigger (65 and 34): rate = 100000 / n kSPS (4 = 25 MSPS, 5 = 20 MSPS, 20 = 5 MSPS, 80 = 1.25 MSPS); clock divider: rate = 40000 / n kSPS (1 = 40 MSPS, 2 = 20, 4 = 10, 6 = 6.7, 8 = 5, 10 = 4); repeat timer: rate = 80000 / n kSPS (2 = 40 MSPS, 4 = 20 MSPS, 63 = 1.27 MSPS). Applied between two bursts, or at once for 65 |
 | `input <0..15>` | PINSEL of the ADC core; 6 is the internal 15/16·VDD reference. Applied between two bursts |
@@ -552,7 +555,19 @@ please log this terminal from power-up and send it back
 [half] n=0 min=1988 max=2105 mean=2046 pp=117
 ```
 
-**After the last test the ADC core and its clock generator are switched off** (`pwr=0`):
+**The boot runs the tests twice.** Phase 1 on the boot core (ADC 3, mikroBUS A AN):
+register snapshot, self-test, pacing trial, sweep, `[PHASE 1 DONE]` with the chosen rate.
+Phase 2 switches to ADC core 5 on AD5AN3 = RA8, the pin DAC2's output buffer drives, and
+starts DAC2 in Triangle Wave mode (0x100…0xF00, 22 kHz): no wire, the loop closes on the
+pin. It repeats every test on that core and then runs `dactest`: 64 halves are copied
+out of the ping-pong buffer as they complete and judged against the DAC settings —
+minimum and maximum at DACLOW/DACDAT (±150 LSb), slope reversals against the triangle
+period at the measured rate (±10 %), and no jump larger than four expected steps (a
+lost sample). `[dactest] PASS` means the DAC triangle arrived intact through ADC, DMA
+and the ping-pong buffer, with real data instead of a flat reference.
+
+**After the last test the ADC core, its clock generator, DAC2 and its clock generator
+are switched off** (`pwr=0`):
 nothing converts, no DMA event, no interrupt from lost samples, so the console is
 guaranteed to get the CPU - the interrupt storm of a rate with overruns cannot reach it.
 While idle a `[stat]` line comes every 10 s (`rx` shows typed bytes arriving). `start`
@@ -873,6 +888,8 @@ simulator run takes about 2.5 minutes for the 100 halves.
 | `led.c`, `led.h` | LED0 |
 | `diag.c`, `diag.h` | stop codes (`fail()`), trap and unhandled-interrupt handler, boot-stage record, reset cause, register dump |
 | `timebase.c`, `timebase.h` | Timer1 as a 12.5 MHz stopwatch — the independent clock the delivered sample rate is measured against (rate test at boot, `sweep`). It does **not** pace the ADC |
+| `dac.c`, `dac.h` | DAC2 in Triangle Wave mode on its pin DACOUT2 = RA8 (CLKGEN7 as its clock): the known signal for phase 2 of the boot tests and the `dac` command |
+| `dactest.c`, `dactest.h` | copies each completed half out of the ping-pong buffer and judges it against the DAC settings: min/max, slope reversals against the triangle period, jumps (lost samples). `[dactest]` lines, PASS/FAIL |
 | `sccp.c`, `sccp.h` | SCCP1 in timer mode as the ADC's trigger: its period rollover on the auxiliary output (`AUXOUT = 01`, Table 26-10) is the "SCCP1 trigger" (code 34) — as `TRG1SRC` for one conversion per trigger (pacing 65) or as `TRG2SRC` inside a burst (34) |
 | `cli.c`, `console.h` | the console: UART2 on the MCP2221A channel, the receive interrupt, the commands |
 | `cmd_parser.c`, `cmd_parser.h` | the command parser, unchanged from [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser) (Apache 2.0) |

@@ -39,6 +39,14 @@ bool     clock_adc_on(void);
 uint32_t clock_adc_div(void);
 uint32_t clock_adc_hz(void);
 
+/* CLKGEN7 = DAC clock, from PLL1 (320 MHz; the datasheet's "400 MHz
+ * typical" is the design point, the range is not specified). On with
+ * OSWEN and CLKRDY awaited, bounded; off. clock_dac_hz() is what it runs
+ * at, for the triangle-wave period. */
+bool     clock_dac_on(void);
+void     clock_dac_off(void);
+uint32_t clock_dac_hz(void);
+
 /* The clock registers as "name: 0x........" lines (part of regs_dump()). */
 void clock_regs_dump(void);
 

@@ -24,6 +24,8 @@ before changing anything; the register writes in the code cite the datasheet
 | `led.c/.h` | LED0 | – |
 | `timebase.c/.h` | Timer1 as a stopwatch (12.5 MHz) for measuring the delivered sample rate; not involved in producing it | – |
 | `sccp.c/.h` | SCCP1 as a timer whose period rollover (AUXOUT = 01) is the ADC's "SCCP1 trigger", code 34: TRG1SRC for pacing 65, TRG2SRC for 34 | – |
+| `dac.c/.h` | DAC2 Triangle Wave mode on DACOUT2 = RA8, CLKGEN7 as its clock; the known signal for phase 2 | – |
+| `dactest.c/.h` | judges captured halves against the DAC settings (min/max, reversals vs period, jumps) | – |
 | `diag.c/.h` | `fail()` codes, trap handler, boot record in persistent RAM, `RCON` report, `regs_dump()` | every module's `*_regs_dump()` |
 | `cli.c`, `console.h` | UART2, the commands, the `sweep` | clock, capture, led, diag |
 | `sim.h` | the hooks the simulator build needs; all empty on silicon | – |
@@ -93,7 +95,10 @@ interrupt aborts with E0110). It proves the ping-pong buffer logic and nothing e
   replies through the parser's sink. A line longer than a buffer is a stack overrun:
   size buffers from the longest possible line and say so in the comment.
 - Commit messages: what changed, why, what was verified. No attribution trailers.
-- Do not edit `cmd_parser.c/.h`.
+- Do not edit `cmd_parser.c/.h` - with one deliberate exception: `CMD_PARSER_MAX_COMMANDS`
+  is 24 instead of upstream's 16 (24.09.2026, the 17th..19th commands `core`, `dac`,
+  `dactest`; 32 bytes of RAM). When updating the parser from github.com/zabooh/cmd_parser,
+  re-apply that one line.
 
 ## Open questions (as of 23.09.2026)
 
