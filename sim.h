@@ -21,6 +21,14 @@
 
 #ifdef __MPLAB_DEBUGGER_SIMULATOR
 
+/* Say so, as early as the console works: this log is not from hardware.
+ * The [clk] and [adc] lines that follow report register writes whose
+ * waits were skipped, and every sample is synthetic. */
+void sim_banner(void);
+#define SIM_BANNER()          sim_banner()
+/* One line for the console's banner, so a log read from there says it too. */
+#define SIM_BANNER_NOTE       "*** SIMULATOR BUILD: no hardware, ADC and DMA are software stand-ins, samples are a synthetic sine ***\r\n"
+
 /* Deliver one buffer half (1 MHz sine, or 3840 flat on the self-test
  * input) if a burst is running. Called wherever the code would
  * otherwise wait for the DMA. */
@@ -40,6 +48,8 @@ bool sim_check_running(void);
 
 #else
 
+#define SIM_BANNER()          do { } while (0)
+#define SIM_BANNER_NOTE       ""
 #define SIM_DMA_TICK()        do { } while (0)
 #define SIM_CHECK_HALF(b, n)  do { (void)(b); (void)(n); } while (0)
 #define SIM_CHECK_RUNNING()   false

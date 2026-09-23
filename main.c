@@ -68,6 +68,7 @@ int main(void)
     console_early_init();
     boot_mark(2u);
     console_puts("[boot] adc_dma_40msps " __DATE__ " " __TIME__ "\r\n");
+    SIM_BANNER();                     /* simulator build: say so first   */
 
     /* Did the previous run end in a trap? boot_stage/trap_* live in
      * persistent RAM, so say so now - an unhandled trap ends in "reset"

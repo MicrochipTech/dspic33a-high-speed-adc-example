@@ -70,6 +70,25 @@ static uint32_t           sim_half_len = 0;     /* count / 2              */
 static bool               sim_enabled  = false; /* CHEN of the real one   */
 
 /* ------------------------------------------------------------------ *
+ * The first thing a simulator log must say
+ * ------------------------------------------------------------------ */
+void sim_banner(void)
+{
+    console_puts("[simtest] *** SIMULATOR BUILD - this log is not from hardware ***\r\n"
+                 "[simtest] Purpose: check that the program's buffer logic is right -\r\n"
+                 "[simtest] that the two halves of the ping-pong buffer are filled,\r\n"
+                 "[simtest] handed over and processed in the right order, without a\r\n"
+                 "[simtest] half being skipped, served twice or overwritten early.\r\n"
+                 "[simtest] ADC and DMA are replaced by a software stand-in (sim_dma.c):\r\n"
+                 "[simtest] no conversion, no DMA transfer, no interrupt. Every sample is\r\n"
+                 "[simtest] synthetic: a 1 MHz sine on the measurement input, a flat 3840\r\n"
+                 "[simtest] on the self-test input. The [clk]/[adc] lines below report\r\n"
+                 "[simtest] register writes whose waits were skipped, not a running PLL\r\n"
+                 "[simtest] or ADC. Nothing here says anything about sample rate, DMA\r\n"
+                 "[simtest] bandwidth or the hardware. README: In the MPLAB X simulator\r\n");
+}
+
+/* ------------------------------------------------------------------ *
  * dma.h, simulated
  * ------------------------------------------------------------------ */
 void dma0_init(uint32_t trigger, const volatile void *src,

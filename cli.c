@@ -66,6 +66,7 @@
 #include "led.h"
 #include "diag.h"
 #include "console.h"
+#include "sim.h"
 #include "cmd_parser.h"
 
 /* ------------------------------------------------------------------ *
@@ -582,6 +583,7 @@ void cli_init(void)
      * follows the first prompt. */
     console_puts("\r\n"
                  "adc_dma_40msps - ADC at 40 MSPS into RAM via DMA\r\n"
+                 SIM_BANNER_NOTE           /* empty on silicon            */
                  "board: EV74H48A, dsPIC33AK512MPS512 GP DIM\r\n"
                  "build: " __DATE__ " " __TIME__ "\r\n"
                  "type 'help' for the commands\r\n"
