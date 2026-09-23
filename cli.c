@@ -41,7 +41,8 @@
  *   regs                       dump of the clock, ADC, DMA and UART registers
  *   start | stop               burst stream on/off
  *   samc <0..31>               sample time, (2*SAMC + 0.5) TAD
- *   period <2..63>             sample period in TAD (ADC repeat timer), 2 = 40 MSPS
+ *   period <n>                 sample period in the active pacing's unit (TAD or 10 ns ticks)
+ *   pacing <3|32|2>            ADC repeat timer | SCCP1 timer | back-to-back
  *   input <0..15>              PINSEL of the ADC core (6 = internal ref)
  *   selftest                   sample the internal reference, judge it
  *   stats                      min/max/mean of the completed half
@@ -382,7 +383,8 @@ void console_status_line(void)
     p = copy_str(p, " last=");     p = u32_to_str(p, last_sample);
     p = copy_str(p, " input=");    p = u32_to_str(p, capture_pinsel());
     p = copy_str(p, " samc=");     p = u32_to_str(p, capture_samc());
-    p = copy_str(p, " rpt=");      p = u32_to_str(p, capture_period());
+    p = copy_str(p, " pace=");     p = u32_to_str(p, capture_pacing());
+    p = copy_str(p, " per=");      p = u32_to_str(p, capture_period());
     p = copy_str(p, " run=");      p = u32_to_str(p, capture_running() ? 1u : 0u);
     /* Does the ADC's channel-done event reach the CPU side at all? It is
      * the DMA trigger and stays masked (IEC6 = 0), so this flag being 1
@@ -443,7 +445,8 @@ static void cmd_status_fn(int argc, char **argv)
     put_kv("bus_err", dma_bus_err);
     put_kv("input", capture_pinsel());
     put_kv("samc", capture_samc());
-    put_kv("rptcnt", capture_period());
+    put_kv("pacing", capture_pacing());
+    put_kv("period", capture_period());
     put_kv("last", last_sample);
     put_kv("selftest_mean", selftest_mean);
     put_kv("fail_code", fail_code);
@@ -624,13 +627,13 @@ enum sweep_load { SWEEP_IDLE = 0, SWEEP_PROCESS = 1, SWEEP_SFR = 2 };
 /* Run `halves` halves at `samc` with the CPU under `load` meanwhile.
  * *ticks receives the Timer1 ticks the halves took. Returns false if
  * the stream stopped or never delivered. */
-static bool sweep_point(uint8_t rptcnt, uint32_t halves, enum sweep_load load, uint32_t *ticks)
+static bool sweep_point(uint32_t period, uint32_t halves, enum sweep_load load, uint32_t *ticks)
 {
     uint32_t n = SWEEP_WAIT_LIMIT;
     capture_stop();
     while (capture_burst_active() && (--n != 0u)) { SIM_DMA_TICK(); }
     if (n == 0u) { return false; }
-    (void)capture_set_period(rptcnt);                  /* idle: applied now */
+    if (period != 0u) { (void)capture_set_period(period); }   /* idle: applied now */
     counters_clear();
     const uint32_t target = blocks_done + halves;
     const uint32_t t0 = timebase_ticks();
@@ -647,13 +650,13 @@ static bool sweep_point(uint8_t rptcnt, uint32_t halves, enum sweep_load load, u
     return true;
 }
 
-static void sweep_row(uint8_t rptcnt, uint32_t halves)
+static void sweep_row(uint32_t period, uint32_t halves)
 {
     uint32_t ov[3], ticks[3] = { 0, 0, 0 };
     bool     ok[3];
     uint32_t late = 0, missed = 0;
     for (int l = 0; l < 3; l++) {
-        ok[l] = sweep_point(rptcnt, halves, (enum sweep_load)l, &ticks[l]);
+        ok[l] = sweep_point(period, halves, (enum sweep_load)l, &ticks[l]);
         ov[l] = dma_overrun;
         if (l == SWEEP_PROCESS) { late = late_service; missed = proc_missed; }
     }
@@ -662,9 +665,9 @@ static void sweep_row(uint8_t rptcnt, uint32_t halves)
     /* Longest line: 150 characters plus NUL; every number is at most
      * 10 digits, "STOPPED" is shorter. */
     char line[176];
-    char *p = copy_str(line, "rptcnt ");      p = u32_to_str(p, rptcnt);
+    char *p = copy_str(line, "period ");      p = u32_to_str(p, period);
     p = copy_str(p, " (reg ");                p = u32_to_str(p, capture_period());
-    p = copy_str(p, ")  ksps nominal ");      p = u32_to_str(p, 80000u / (uint32_t)rptcnt);   /* 320 MHz / 4 / RPTCNT */
+    p = copy_str(p, ")  ksps nominal ");      p = u32_to_str(p, capture_nominal_ksps(period));
     p = copy_str(p, " measured ");            p = u32_to_str(p, meas_ksps);
     p = copy_str(p, "  overrun idle/process/sfr ");
     for (int l = 0; l < 3; l++) {
@@ -684,27 +687,30 @@ static void sweep_row(uint8_t rptcnt, uint32_t halves)
  * the automatic run is there to investigate. */
 void console_sweep(uint32_t halves)
 {
-    /* Repeat-timer periods in TAD (12.5 ns): 1.27, 2.5, 5, 10, 20, 26.7, 40 MSPS nominal. */
-    static const uint8_t periods[] = { 63u, 32u, 16u, 8u, 4u, 3u, 2u };
-    const uint8_t keep_period = capture_period();
-    const bool    was_running = capture_running();
+    uint32_t count = 0;
+    const uint32_t *periods    = capture_sweep_periods(&count);   /* slowest first */
+    const uint32_t keep_period = capture_period();
+    const bool     was_running = capture_running();
 
     console_kv("[sweep] halves per point", halves);
-    console_puts("[sweep] idle = CPU polls RAM only, process = main-loop processing, sfr = CPU polls an SFR\r\n"
+    console_puts("[sweep] pacing: ");
+    console_puts(capture_pacing_name());
+    console_puts("\r\n"
+                 "[sweep] idle = CPU polls RAM only, process = main-loop processing, sfr = CPU polls an SFR\r\n"
                  "[sweep] overrun must be 0 for a usable rate; late/missed are from the process run\r\n"
-                 "[sweep] rptcnt = ADC repeat-timer period in TAD (12.5 ns), nominal = 80000/rptcnt ksps,\r\n"
-                 "[sweep] measured = samples per second seen by the DMA (Timer1), reg = RPTCNT read back\r\n");
+                 "[sweep] nominal = the rate the period should give, measured = samples per second the DMA\r\n"
+                 "[sweep] delivered (Timer1), reg = the period read back from the hardware\r\n");
 
     /* Time base check: 100 ms of CPU time (200 MHz) must be 1 250 000
      * ticks. Anything else and the measured rates are off by the same
      * factor - and the assumption about the timer's clock is wrong. */
     console_kv("[sweep] timer check, ticks per 100 ms (expect 1250000)", timebase_check());
-    for (uint32_t i = 0; i < sizeof periods / sizeof periods[0]; i++) {
+    for (uint32_t i = 0; i < count; i++) {
         console_puts("[sweep] ");
         sweep_row(periods[i], halves);
     }
 
-    (void)capture_set_period(keep_period);
+    if (keep_period != 0u) { (void)capture_set_period(keep_period); }
     counters_clear();
     if (was_running) { capture_start(); }
     console_puts("[sweep] done: counters cleared, previous period and run state restored\r\n");
@@ -724,15 +730,32 @@ CMD_DEFINE(sweep, "sweep", cmd_sweep_fn, "sweep [halves] - overrun vs sample rat
 static void cmd_period_fn(int argc, char **argv)
 {
     uint32_t v;
-    if ((argc != 2) || !arg_u32(argv[1], 2u, 63u, &v)) {
-        usage("period <2..63>  (ADC repeat-timer period in TAD of 12.5 ns: 2 = 40 MSPS, 63 = 1.27 MSPS)");
+    if ((argc != 2) || !arg_u32(argv[1], 2u, 65535u, &v)) {
+        usage("period <n>  (sample period in the active pacing's unit: repeat timer 2..63 TAD, SCCP1 2..65535 x 10 ns)");
         return;
     }
-    (void)capture_set_period((uint8_t)v);
-    put_kv("rptcnt", v);
-    put_kv("ksps nominal", 80000u / v);
+    if (!capture_set_period(v)) {
+        put_line("period: out of range for the active pacing, or back-to-back (no period)");
+        cmd_parser_fail();
+        return;
+    }
+    put_kv("period", v);
+    put_kv("ksps nominal", capture_nominal_ksps(v));
 }
-CMD_DEFINE(period, "period", cmd_period_fn, "period <2..63> - sample period in TAD (rate = 80000/n ksps)");
+CMD_DEFINE(period, "period", cmd_period_fn, "period <n> - sample period in the active pacing's unit");
+
+static void cmd_pacing_fn(int argc, char **argv)
+{
+    uint32_t v;
+    if ((argc != 2) || !arg_u32(argv[1], 0u, 63u, &v) || !capture_set_pacing((uint8_t)v)) {
+        usage("pacing <3|32|2>  (3 = ADC repeat timer, 32 = SCCP1 timer, 2 = back-to-back)");
+        return;
+    }
+    put_kv("pacing", v);
+    put_line(capture_pacing_name());
+    put_kv("period", capture_period());
+}
+CMD_DEFINE(pacing, "pacing", cmd_pacing_fn, "pacing <3|32|2> - what triggers the conversions");
 
 static void cmd_reset_fn(int argc, char **argv)
 {
@@ -774,6 +797,7 @@ void cli_init(void)
     (void)cmd_register(&cmd_led);
     (void)cmd_register(&cmd_sweep);
     (void)cmd_register(&cmd_period);
+    (void)cmd_register(&cmd_pacing);
     (void)cmd_register(&cmd_reset);
 
     /* Banner, once at start-up. A human sees what is talking and which

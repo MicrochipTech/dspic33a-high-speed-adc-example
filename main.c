@@ -104,10 +104,12 @@ int main(void)
     }
     boot_mark(8u);
 
-    /* Does the delivered rate follow the repeat-timer period? Two short
-     * runs against Timer1; blink code 12 if not. */
+    /* Which trigger paces the conversions, and does the delivered rate
+     * follow its period? ADC_PACING in board.h: AUTO tries every
+     * candidate with the rate test and prints each verdict; a fixed one
+     * is tested once and stops the boot with code 12 if it fails. */
     {
-        const uint32_t rc = capture_ratetest();
+        const uint32_t rc = capture_autopace();
         if (rc != 0u) {
             fail(rc);
         }

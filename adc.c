@@ -78,7 +78,7 @@ void adc_init(uint8_t pinsel, uint8_t samc, uint8_t rptcnt)
     ADCREG(CH0CON1bits).IRQSEL  = 0u;          /* event per conversion  */
     ADCREG(CH0CON1bits).EIEN    = 0u;          /* no early IRQ with DMA */
     ADCREG(CH0CON1bits).TRG1SRC = 0x01u;       /* software trigger      */
-    ADCREG(CH0CON1bits).TRG2SRC = ADC_TRG2SRC; /* 3 repeat timer, 2 b2b */
+    ADCREG(CH0CON1bits).TRG2SRC = ADC_TRG2_REPEAT; /* capture.c may change it */
 
     /* Conversions per burst. One burst fills the whole DMA buffer, so
      * the DMA DONE interrupt is also the moment to start the next one.
@@ -120,6 +120,13 @@ void adc_set_period(uint8_t rptcnt)
 }
 
 uint8_t adc_period(void) { return (uint8_t)ADCREG(CONbits).RPTCNT; }
+
+void adc_set_trg2(uint8_t trg2src)
+{
+    ADCREG(CH0CON1bits).TRG2SRC = trg2src;
+}
+
+uint8_t adc_trg2(void) { return (uint8_t)ADCREG(CH0CON1bits).TRG2SRC; }
 
 uint8_t adc_pinsel(void) { return (uint8_t)ADCREG(CH0CON1bits).PINSEL; }
 uint8_t adc_samc(void)   { return (uint8_t)ADCREG(CH0CON1bits).SAMC; }

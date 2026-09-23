@@ -44,6 +44,7 @@
 #include "diag.h"
 #include "sim.h"
 #include "timebase.h"
+#include "sccp.h"
 
 /* Self-test input and window. ADxAN6 is the internal 15/16 * VDD
  * reference on every core and package (Table 16-2, p1224), which the
@@ -134,8 +135,22 @@ static volatile bool    burst_active = false;
 static volatile bool    switch_pending = false;
 static volatile uint8_t pinsel_next    = ADC_PINSEL;
 static volatile uint8_t samc_next      = ADC_SAMC;
-static volatile bool    period_pending = false;
-static volatile uint8_t period_next    = ADC_RPTCNT;
+static volatile bool     period_pending = false;
+static volatile uint32_t period_next    = ADC_RPTCNT;
+static volatile bool     pacing_pending = false;
+static volatile uint8_t  pacing_next    = ADC_TRG2_REPEAT;
+static uint32_t          sccp_ticks     = ADC_SCCP_TICKS;   /* SCCP1 period */
+
+/* Write the period for the active source; the caller guarantees the
+ * channel is idle (or that this is the DONE moment). */
+static void apply_period(uint32_t period)
+{
+    switch (adc_trg2()) {
+    case ADC_TRG2_REPEAT: adc_set_period((uint8_t)period); break;
+    case ADC_TRG2_SCCP1:  sccp_ticks = period; sccp1_start(period); break;
+    default:              break;                 /* B2B: nothing to set */
+    }
+}
 
 static uint32_t         seen_blocks    = 0;
 
@@ -239,8 +254,12 @@ void dma0_event(uint32_t st)
             adc_set_input(pinsel_next, samc_next);
             switch_pending = false;
         }
+        if (pacing_pending) {
+            adc_set_trg2(pacing_next);
+            pacing_pending = false;
+        }
         if (period_pending) {
-            adc_set_period(period_next);
+            apply_period(period_next);
             period_pending = false;
         }
         if (run_enabled) {
@@ -296,21 +315,90 @@ bool capture_set_input(uint8_t pinsel, uint8_t samc)
 uint8_t capture_pinsel(void) { return adc_pinsel(); }
 uint8_t capture_samc(void)   { return adc_samc(); }
 
-bool capture_set_period(uint8_t rptcnt)
+/* ------------------------------------------------------------------ *
+ * Pacing (capture.h): which trigger sets the rate, and its period
+ * ------------------------------------------------------------------ */
+static const uint32_t sweep_repeat[] = { 63u, 32u, 16u, 8u, 4u, 3u, 2u };  /* 1.27..40 MSPS */
+static const uint32_t sweep_sccp[]   = { 80u, 40u, 20u, 10u, 8u, 5u, 4u }; /* 1.25..25 MSPS */
+static const uint32_t sweep_b2b[]    = { 0u };                             /* one row       */
+
+bool capture_set_pacing(uint8_t trg2src)
 {
-    if ((rptcnt < 2u) || (rptcnt > 63u)) {
-        return false;
+    uint32_t period;
+    switch (trg2src) {
+    case ADC_TRG2_REPEAT: period = ADC_RPTCNT;     break;
+    case ADC_TRG2_SCCP1:  period = ADC_SCCP_TICKS; break;
+    case ADC_TRG2_B2B:    period = 0u;             break;
+    default:              return false;
     }
-    period_next    = rptcnt;
+    if (trg2src != ADC_TRG2_SCCP1) { sccp1_stop(); }
+    pacing_next    = trg2src;
+    pacing_pending = true;
+    period_next    = period;
     period_pending = true;
     if (!burst_active) {
-        adc_set_period(rptcnt);
+        adc_set_trg2(trg2src);
+        apply_period(period);
+        pacing_pending = period_pending = false;
+    }
+    return true;
+}
+
+uint8_t capture_pacing(void) { return adc_trg2(); }
+
+const char *capture_pacing_name(void)
+{
+    switch (adc_trg2()) {
+    case ADC_TRG2_REPEAT: return "ADC repeat timer (period in TAD = 12.5 ns)";
+    case ADC_TRG2_SCCP1:  return "SCCP1 timer (period in ticks of 10 ns)";
+    case ADC_TRG2_B2B:    return "back-to-back (no rate control)";
+    default:              return "unknown TRG2SRC";
+    }
+}
+
+bool capture_set_period(uint32_t period)
+{
+    switch (adc_trg2()) {
+    case ADC_TRG2_REPEAT: if ((period < 2u) || (period > 63u))    { return false; } break;
+    case ADC_TRG2_SCCP1:  if ((period < 2u) || (period > 65535u)) { return false; } break;
+    default:              return false;
+    }
+    period_next    = period;
+    period_pending = true;
+    if (!burst_active) {
+        apply_period(period);
         period_pending = false;
     }
     return true;
 }
 
-uint8_t capture_period(void) { return adc_period(); }
+uint32_t capture_period(void)
+{
+    switch (adc_trg2()) {
+    case ADC_TRG2_REPEAT: return adc_period();
+    case ADC_TRG2_SCCP1:  return sccp_ticks;
+    default:              return 0u;
+    }
+}
+
+uint32_t capture_nominal_ksps(uint32_t period)
+{
+    if (period == 0u) { return 0u; }
+    switch (adc_trg2()) {
+    case ADC_TRG2_REPEAT: return 80000u / period;              /* 320 MHz / 4 / n */
+    case ADC_TRG2_SCCP1:  return SCCP_TICK_HZ / 1000u / period; /* 100 MHz / n     */
+    default:              return 0u;
+    }
+}
+
+const uint32_t *capture_sweep_periods(uint32_t *count)
+{
+    switch (adc_trg2()) {
+    case ADC_TRG2_REPEAT: *count = sizeof sweep_repeat / sizeof sweep_repeat[0]; return sweep_repeat;
+    case ADC_TRG2_SCCP1:  *count = sizeof sweep_sccp / sizeof sweep_sccp[0];     return sweep_sccp;
+    default:              *count = 1u;                                          return sweep_b2b;
+    }
+}
 
 const volatile uint16_t *capture_completed_half(void)
 {
@@ -436,29 +524,33 @@ uint32_t capture_selftest(uint32_t *mean)
 }
 
 /* ------------------------------------------------------------------ *
- * Rate self-test
+ * Rate self-test and the choice of pacing
  *
- * The ADC's repeat timer is what sets the sample rate; Timer1
- * (timebase.c) is only the stopwatch that checks it. Run RATETEST_HALVES
- * halves at RPTCNT 16 and at RPTCNT 4, count ticks, compare the delivered
- * rate with the nominal 80000 / RPTCNT kSPS. Then the ratio of the two:
- * the failure seen on the board was a rate that did not move when the
- * period changed, and that is caught even if the nominal figure itself
- * were off by a constant factor (RPTCNT vs RPTCNT + 1 cycles, or a wrong
- * TAD). The burst restart from the DMA interrupt costs a little per
- * 2048 samples, which the 10 % tolerance covers.
+ * Timer1 (timebase.c) is only the stopwatch; the pacing source is what
+ * produces the rate. For the active source: RATETEST_HALVES halves at
+ * a slow period and at one four times shorter, ticks counted, delivered
+ * rate compared with the nominal one (10 %) and the two with each other
+ * (3..5x). The second check is the one that catches "the rate does not
+ * move", which is what the board showed with back-to-back and SAMC.
+ * The burst restart from the DMA interrupt costs a little per 2048
+ * samples; the tolerance covers it.
+ *
+ * capture_autopace() runs this for every candidate when ADC_PACING is
+ * AUTO and prints one verdict per source, so the log shows what each
+ * one delivered - not only which one won.
  * ------------------------------------------------------------------ */
 #define RATETEST_HALVES   200u
 #define RATETEST_TOL_PCT  10u
 
-#if !defined(__MPLAB_DEBUGGER_SIMULATOR) && (ADC_TRG2SRC == 3u)
-static uint32_t rate_measure(uint8_t rptcnt, uint32_t *ksps)
+#ifndef __MPLAB_DEBUGGER_SIMULATOR
+/* Delivered rate at `period` (0 = leave the period alone, for B2B). */
+static uint32_t rate_measure(uint32_t period, uint32_t *ksps)
 {
     uint32_t n = WAIT_LIMIT;
     capture_stop();
     while (burst_active && (--n != 0u)) { SIM_DMA_TICK(); }
     if (n == 0u) { return 6u; }
-    (void)capture_set_period(rptcnt);            /* idle: applied now   */
+    if (period != 0u) { (void)capture_set_period(period); }  /* idle: now */
     counters_clear();
     const uint32_t target = blocks_done + RATETEST_HALVES;
     const uint32_t t0     = timebase_ticks();
@@ -477,47 +569,101 @@ uint32_t capture_ratetest(void)
 #ifdef __MPLAB_DEBUGGER_SIMULATOR
     console_puts("[ratetest] skipped: the simulator has no ADC clock to measure\r\n");
     return 0u;
-#elif ADC_TRG2SRC != 3u
-    console_puts("[ratetest] skipped: ADC_TRG2SRC is not the repeat timer, the rate is not set by RPTCNT\r\n");
-    return 0u;
 #else
-    static const uint8_t rpt[2] = { 16u, 4u };   /* 5 and 20 MSPS nominal */
-    const uint8_t keep        = capture_period();
-    const bool    was_running = capture_running();
-    uint32_t      ksps[2]     = { 0u, 0u };
-    uint32_t      rc          = 0u;
+    const uint8_t  pacing      = adc_trg2();
+    const uint32_t keep        = capture_period();
+    const bool     was_running = capture_running();
+    uint32_t       ksps[2]     = { 0u, 0u };
+    uint32_t       rc          = 0u;
+    uint32_t       periods[2]  = { 0u, 0u };
 
-    timebase_init();
-    console_kv("[ratetest] time base check, ticks per 100 ms (expect 1250000)", timebase_check());
+    console_puts("[ratetest] pacing: ");
+    console_puts(capture_pacing_name());
+    console_puts("\r\n");
+
+    switch (pacing) {
+    case ADC_TRG2_REPEAT: periods[0] = 16u; periods[1] = 4u; break;  /* 5 / 20 MSPS */
+    case ADC_TRG2_SCCP1:  periods[0] = 20u; periods[1] = 5u; break;  /* 5 / 20 MSPS */
+    default:
+        /* Back-to-back: nothing to judge against, just say what it delivers. */
+        rc = rate_measure(0u, &ksps[0]);
+        if (rc == 0u) {
+            console_kv("[ratetest]   measured ksps (no period to compare with)", ksps[0]);
+        } else {
+            console_puts("[ratetest]   no data\r\n");
+        }
+        goto restore;
+    }
 
     for (uint32_t i = 0; (i < 2u) && (rc == 0u); i++) {
-        rc = rate_measure(rpt[i], &ksps[i]);
+        rc = rate_measure(periods[i], &ksps[i]);
         if (rc == 0u) {
-            const uint32_t nominal = 80000u / rpt[i];
+            const uint32_t nominal = capture_nominal_ksps(periods[i]);
             const uint32_t diff    = (ksps[i] > nominal) ? ksps[i] - nominal : nominal - ksps[i];
-            console_kv("[ratetest] rptcnt", rpt[i]);
-            console_kv("[ratetest]   nominal ksps", nominal);
-            console_kv("[ratetest]   measured ksps", ksps[i]);
+            console_kv("[ratetest]   period", periods[i]);
+            console_kv("[ratetest]     nominal ksps", nominal);
+            console_kv("[ratetest]     measured ksps", ksps[i]);
             if (diff > nominal * RATETEST_TOL_PCT / 100u) {
-                console_puts("[ratetest]   outside the 10 % window\r\n");
+                console_puts("[ratetest]     outside the 10 % window\r\n");
                 rc = 12u;
             }
+        } else {
+            console_kv("[ratetest]   no data at period", periods[i]);
         }
     }
     if (rc == 0u) {
-        /* RPTCNT 16 -> 4 must make the rate four times higher (3..5x). */
+        /* The short period must deliver four times the rate (3..5x). */
         if ((ksps[1] < 3u * ksps[0]) || (ksps[1] > 5u * ksps[0])) {
-            console_puts("[ratetest] the rate does not follow the period\r\n");
+            console_puts("[ratetest]   the rate does not follow the period\r\n");
             rc = 12u;
         }
     }
 
-    (void)capture_set_period(keep);
+restore:
+    if (keep != 0u) { (void)capture_set_period(keep); }
     counters_clear();
     if (was_running) { capture_start(); }
-    console_puts((rc == 0u) ? "[ratetest] passed: the rate follows RPTCNT\r\n"
-                            : "[ratetest] FAILED\r\n");
+    console_puts((rc == 0u) ? "[ratetest]   PASS\r\n" : "[ratetest]   FAIL\r\n");
     return rc;
+#endif
+}
+
+uint32_t capture_autopace(void)
+{
+    console_kv("[pacing] time base check, ticks per 100 ms (expect 1250000)", timebase_check());
+#if ADC_PACING != 0u
+    (void)capture_set_pacing((uint8_t)ADC_PACING);
+    console_puts("[pacing] fixed by ADC_PACING: ");
+    console_puts(capture_pacing_name());
+    console_puts("\r\n");
+    return capture_ratetest();
+#else
+    static const uint8_t candidates[3] = { ADC_TRG2_REPEAT, ADC_TRG2_SCCP1, ADC_TRG2_B2B };
+    uint32_t result[3];
+    uint8_t  chosen = ADC_TRG2_B2B;
+    bool     have   = false;
+
+    for (uint32_t i = 0; i < 3u; i++) {
+        (void)capture_set_pacing(candidates[i]);
+        result[i] = capture_ratetest();
+        if ((result[i] == 0u) && !have && (candidates[i] != ADC_TRG2_B2B)) {
+            chosen = candidates[i];
+            have   = true;
+        }
+    }
+    (void)capture_set_pacing(chosen);
+
+    console_puts("[pacing] summary: repeat timer ");
+    console_puts((result[0] == 0u) ? "PASS" : "FAIL");
+    console_puts(", SCCP1 timer ");
+    console_puts((result[1] == 0u) ? "PASS" : "FAIL");
+    console_puts(", back-to-back ");
+    console_puts((result[2] == 0u) ? "runs" : "no data");
+    console_puts("\r\n[pacing] using: ");
+    console_puts(capture_pacing_name());
+    console_puts(have ? "\r\n"
+                      : " - NO PACED SOURCE PASSED, the rate is not under control\r\n");
+    return 0u;
 #endif
 }
 

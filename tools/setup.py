@@ -25,7 +25,7 @@ from pathlib import Path
 MCU = "33AK512MPS512"
 PACK_NAME = "dsPIC33AK-MP_DFP"
 SOURCES = ["main.c", "config_bits.c", "clock.c", "adc.c", "dma.c", "capture.c", "led.c", "diag.c",
-           "timebase.c", "cli.c", "cmd_parser.c"]   # one level up, next to the .X project (hardware build)
+           "timebase.c", "sccp.c", "cli.c", "cmd_parser.c"]   # one level up, next to the .X project (hardware build)
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent              # repo root: holds the single .c file

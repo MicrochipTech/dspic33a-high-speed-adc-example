@@ -238,7 +238,7 @@ The stop codes:
 | 9 | a CPU trap or an interrupt with no handler | the `[TRAP]` block on the console — it names the vector, the boot stage and the `INTCON*` cause bits. `docs/TROUBLESHOOTING.md` §2.0b |
 | 10 | the fail-safe clock monitor moved the CPU to the backup FRC | the `[CLKF]` lines: `OSCCTRL`, `PLL2CON`, `CLK1CON` |
 | 11 | something wrote past the end of the sample buffer | the `[guard]` lines: which of the 16 guard words behind `buf` changed and what it holds. A 12-bit value there means the DMA ran past the buffer |
-| 12 | the delivered sample rate does not follow the repeat-timer period | the `[ratetest]` lines: nominal and measured kSPS at RPTCNT 16 and 4, measured against Timer1. Off by more than 10 %, or the two not four times apart, means the ADC is not being paced by its repeat timer (`TRG2SRC`, `RPTCNT`) — or the time base check above them is not 1 250 000 |
+| 12 | the delivered sample rate does not follow the period of a pacing source fixed by `ADC_PACING` | the `[ratetest]` lines: nominal and measured kSPS at two periods four times apart, measured against Timer1. Off by more than 10 %, or the two not four times apart, means that source does not pace the ADC — or the time base check above them is not 1 250 000. With `ADC_PACING` AUTO (default) a failing source is not fatal: the `[pacing] summary` line says which passed and which one is in use |
 
 **What the self-test proves.** Before the external pin is used, the code runs the
 identical clock, ADC, DMA and interrupt chain on the ADC's internal 15/16·VDD reference
@@ -483,7 +483,8 @@ The console is the [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser) mod
 | `regs` | the clock, ADC, DMA, interrupt and UART registers as hex, plus the counters — the dump `docs/TROUBLESHOOTING.md` Part 4 asks for |
 | `start`, `stop` | start the burst stream / let the current buffer finish and stop |
 | `samc <0..31>` | sample time in TAD steps: (2·SAMC + 0.5) TAD — the aperture, not the rate. Applied between two bursts |
-| `period <2..63>` | **the sample rate:** period of the ADC repeat timer in TAD (12.5 ns), rate = 80000 / n kSPS: 2 = 40 MSPS, 4 = 20 MSPS, 8 = 10 MSPS, 63 = 1.27 MSPS. Applied between two bursts |
+| `pacing <3\|32\|2>` | **what triggers the conversions:** 3 = the ADC's repeat timer (period in TAD = 12.5 ns, 2…63), 32 = SCCP1 timer (period in ticks of 10 ns, 2…65535), 2 = back-to-back (no rate control). At boot `ADC_PACING` in `board.h` decides; the default AUTO runs the rate test on all three and prints a `[pacing]` verdict per source, then uses the first paced one that passed |
+| `period <n>` | **the sample rate:** the period in the active pacing's unit. Repeat timer: rate = 80000 / n kSPS (2 = 40 MSPS, 4 = 20 MSPS, 63 = 1.27 MSPS); SCCP1: rate = 100000 / n kSPS (4 = 25 MSPS, 5 = 20 MSPS, 80 = 1.25 MSPS). Applied between two bursts |
 | `input <0..15>` | PINSEL of the ADC core; 6 is the internal 15/16·VDD reference. Applied between two bursts |
 | `selftest` | samples the internal reference, prints the mean, NAK if it is outside 3648 … 4032 |
 | `stats` | min, max, mean and peak-to-peak of the completed half |
@@ -808,7 +809,8 @@ simulator run takes about 2.5 minutes for the 100 halves.
 | `capture.c`, `capture.h` | the measurement: wires ADC and DMA together, handles the DMA events with every error counter and the burst restart, start/stop/input, self-test, per-half processing — what the console may read and control |
 | `led.c`, `led.h` | LED0 |
 | `diag.c`, `diag.h` | stop codes (`fail()`), trap and unhandled-interrupt handler, boot-stage record, reset cause, register dump |
-| `timebase.c`, `timebase.h` | Timer1 as a 12.5 MHz stopwatch — the independent clock the delivered sample rate is measured against (rate test at boot, `sweep`). It does **not** pace the ADC; the ADC's own repeat timer does that |
+| `timebase.c`, `timebase.h` | Timer1 as a 12.5 MHz stopwatch — the independent clock the delivered sample rate is measured against (rate test at boot, `sweep`). It does **not** pace the ADC |
+| `sccp.c`, `sccp.h` | SCCP1 in timer mode as the second pacing source: its period match triggers the ADC (`TRG2SRC = 32`, datasheet Example 16-8) |
 | `cli.c`, `console.h` | the console: UART2 on the MCP2221A channel, the receive interrupt, the commands |
 | `cmd_parser.c`, `cmd_parser.h` | the command parser, unchanged from [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser) (Apache 2.0) |
 | `adc_dma_40msps.X/` | MPLAB X project — build, program and debug from here |

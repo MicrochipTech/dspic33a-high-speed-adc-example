@@ -23,6 +23,7 @@ before changing anything; the register writes in the code cite the datasheet
 | `capture.c/.h` | the measurement: the DMA buffer (private, with guard words), `dma0_event()`, counters, start/stop/input, self-test, per-half processing | adc, dma, led, console, diag |
 | `led.c/.h` | LED0 | – |
 | `timebase.c/.h` | Timer1 as a stopwatch (12.5 MHz) for measuring the delivered sample rate; not involved in producing it | – |
+| `sccp.c/.h` | SCCP1 as a timer whose period match triggers the ADC (pacing source 32) | – |
 | `diag.c/.h` | `fail()` codes, trap handler, boot record in persistent RAM, `RCON` report, `regs_dump()` | every module's `*_regs_dump()` |
 | `cli.c`, `console.h` | UART2, the commands, the `sweep` | clock, capture, led, diag |
 | `sim.h` | the hooks the simulator build needs; all empty on silicon | – |
@@ -86,12 +87,13 @@ interrupt aborts with E0110). It proves the ping-pong buffer logic and nothing e
    trigger, after the sweep showed the delivered rate did not follow `SAMC`. Whether
    the hardware counts `RPTCNT` or `RPTCNT + 1` TAD per period, and whether 40 MSPS
    (`RPTCNT = 2`) is reached at all, is what the measured column of the next sweep
-   settles. Rates below 1.27 MSPS need a divided ADC clock (`CLK6DIV`) or a CCP timer
-   as trigger (`TRG2SRC = 32` = CCP1, Example 16-8 p1334). The repeat-timer pairing
-   with Integration mode rests on the datasheet text alone: `ADC_TRG2SRC 2` in
-   `board.h` falls back to back-to-back without further changes, and the CCP trigger
-   (Example 16-8 shows it with Integration mode) is plan B if the board rejects the
-   repeat timer.
+   settles. The pacing is chosen at boot (`ADC_PACING` in `board.h`, default AUTO):
+   the rate test runs on the repeat timer, on SCCP1 as trigger (`TRG2SRC = 32`,
+   Example 16-8 p1334, `sccp.c`) and on back-to-back, prints a verdict per source and
+   uses the first paced one that passed. `pacing`/`period` change it at run time. The
+   question the whole project answers: the highest rate at which the sweep's `process`
+   column shows `overrun 0` and `missed 0` - continuous sampling into a ping-pong
+   buffer with the CPU working on the other half.
 2. At 40 MSPS about 4 % of the samples are lost as OVERRUN, independent of what the
    CPU does, and every overrun raises the DMA interrupt (~1.6 million per second),
    which starves the main loop and the console. Whether the DMA bus or something

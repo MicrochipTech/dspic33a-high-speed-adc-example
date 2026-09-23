@@ -51,11 +51,23 @@ bool    capture_set_input(uint8_t pinsel, uint8_t samc);
 uint8_t capture_pinsel(void);
 uint8_t capture_samc(void);
 
-/* Sample period: the ADC repeat timer's RPTCNT in TAD (2..63; 12.5 ns
- * per TAD, so 2 = 40 MSPS, 63 = 1.27 MSPS). Applied like an input change,
- * between two bursts; false for out-of-range arguments. */
-bool    capture_set_period(uint8_t rptcnt);
-uint8_t capture_period(void);
+/* ---- Pacing: what sets the sample rate ----
+ * ADC_TRG2_REPEAT: the ADC's repeat timer, period in TAD (12.5 ns), 2..63.
+ * ADC_TRG2_SCCP1:  SCCP1 timer, period in ticks of 10 ns, 2..65535.
+ * ADC_TRG2_B2B:    back-to-back, no period, as fast as the converter goes.
+ * capture_set_pacing() switches source and default period between two
+ * bursts; capture_set_period() sets the period in the active source's
+ * unit, applied between two bursts; false for out-of-range or for B2B.
+ * capture_nominal_ksps() is the rate the active source should deliver at
+ * a period; 0 for B2B. capture_sweep_periods() is the list the sweep
+ * steps for the active source (slowest first). */
+bool     capture_set_pacing(uint8_t trg2src);
+uint8_t  capture_pacing(void);
+const char *capture_pacing_name(void);
+bool     capture_set_period(uint32_t period);
+uint32_t capture_period(void);
+uint32_t capture_nominal_ksps(uint32_t period);
+const uint32_t *capture_sweep_periods(uint32_t *count);
 
 /* Sample the ADC's internal 15/16 * VDD reference (ANx6) for a few halves
  * and compare the mean against the expected window. Blocking, bounded.
@@ -65,15 +77,21 @@ uint8_t capture_period(void);
  * previous input afterwards. */
 uint32_t capture_selftest(uint32_t *mean);
 
-/* Rate self-test: run a few hundred halves at two repeat-timer periods
- * (16 and 4 TAD) and judge the delivered sample rate, measured against
- * Timer1, against the nominal one - and against each other, because
- * the failure seen on the board was a rate that did not change at all.
+/* Rate self-test for the active pacing: a few hundred halves at two
+ * periods a factor 4 apart, the delivered rate measured against Timer1
+ * and judged against the nominal one (10 %) and against each other
+ * (3..5x) - the failure seen on the board was a rate that did not move.
  * Blocking, bounded, prints its numbers. Returns 0, or 6/8 from the
- * waits, or 12 if a rate is off by more than 10 % or the two do not
- * differ by the expected factor. Restores the previous period. Skipped
- * in the simulator build. */
+ * waits, or 12. Restores the previous period. For B2B it only measures
+ * and prints (nothing to judge, returns 0). Skipped in the simulator. */
 uint32_t capture_ratetest(void);
+
+/* Choose the pacing at boot per ADC_PACING (board.h). AUTO: run the rate
+ * test on every candidate - repeat timer, SCCP1, back-to-back - print
+ * each result, then take the first that passed, back-to-back if none.
+ * A fixed source is tested once and the boot stops with its code if it
+ * fails. Returns 0 or that code. */
+uint32_t capture_autopace(void);
 
 /* Process the completed half if a new one arrived; returns true if it did.
  * Called from the main loop and from the console's yield hook, so that

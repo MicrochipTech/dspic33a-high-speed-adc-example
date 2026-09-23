@@ -21,8 +21,8 @@ OBJDUMP  = $(XC_DSC)/bin/xc-dsc-objdump.exe
 BIN2HEX  = $(XC_DSC)/bin/xc-dsc-bin2hex.exe
 
 TARGET   = adc_dma_40msps
-SRC      = ../main.c ../config_bits.c ../clock.c ../adc.c ../dma.c ../capture.c ../led.c ../diag.c ../timebase.c ../cli.c ../cmd_parser.c
-HDR      = ../board.h ../clock.h ../adc.h ../dma.h ../capture.h ../led.h ../diag.h ../console.h ../sim.h ../timebase.h ../cmd_parser.h
+SRC      = ../main.c ../config_bits.c ../clock.c ../adc.c ../dma.c ../capture.c ../led.c ../diag.c ../timebase.c ../sccp.c ../cli.c ../cmd_parser.c
+HDR      = ../board.h ../clock.h ../adc.h ../dma.h ../capture.h ../led.h ../diag.h ../console.h ../sim.h ../timebase.h ../sccp.h ../cmd_parser.h
 SRC_SIM  = $(subst ../dma.c,../sim_dma.c,$(SRC))
 OUTDIR   = ../build
 

@@ -29,22 +29,25 @@
 #define ADC_RPTCNT        2u
 #endif
 
-/* What re-triggers the conversions inside a burst (TRG2SRC, DS70005591D
- * Table 16-4 p1227):
- *   3  the ADC's repeat timer, period ADC_RPTCNT TAD - deterministic rate,
- *      the rate test at boot proves it (fail 12 if not); the default.
- *   2  back-to-back, as fast as the converter goes - what Microchip's
- *      40 MSPS example uses; the rate then ignores ADC_RPTCNT and the
- *      board showed it ignoring SAMC too (docs/HARDWARE-LOG.md run 4).
- *      The rate test is skipped, the sweep's nominal column is
- *      meaningless.
- * The fallback exists because the repeat-timer pairing with Integration
- * mode rests on the datasheet text alone; if the board says otherwise,
- * flip this rather than dig. Plan B after that: a CCP timer as trigger,
- * TRG2SRC = 32, which datasheet Example 16-8 (p1334) shows with
- * Integration mode. */
-#ifndef ADC_TRG2SRC
-#define ADC_TRG2SRC       3u
+/* What paces the conversions inside a burst (TRG2SRC, DS70005591D Table
+ * 16-4 p1227). Three candidates, and the boot can try them in turn:
+ *   3   the ADC's repeat timer, period ADC_RPTCNT TAD (12.5 ns)
+ *   32  SCCP1 timer period match, period ADC_SCCP_TICKS x 10 ns - what
+ *       datasheet Example 16-8 shows with Integration mode
+ *   2   back-to-back, as fast as the converter goes - no rate control;
+ *       what Microchip's 40 MSPS example uses
+ *   0   AUTO: try 3, then 32, each with the rate test; the first that
+ *       delivers the rate its period says wins; if neither does, 2.
+ *       The log says which ("[pacing] ..."). The default, because the
+ *       repeat-timer pairing rests on the datasheet text alone and the
+ *       board has the last word.
+ * A fixed value skips the trial; the rate test then stops the boot with
+ * fail 12 if that source does not deliver. */
+#ifndef ADC_PACING
+#define ADC_PACING        0u
+#endif
+#ifndef ADC_SCCP_TICKS
+#define ADC_SCCP_TICKS    5u      /* 5 x 10 ns = 20 MSPS                      */
 #endif
 
 /* Boot chatter: with 1 every start-up step reports its registers on the

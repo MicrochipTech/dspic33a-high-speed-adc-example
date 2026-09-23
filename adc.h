@@ -53,6 +53,14 @@ uint8_t adc_samc(void);
 void    adc_set_period(uint8_t rptcnt);
 uint8_t adc_period(void);
 
+/* What re-triggers the conversions inside a burst: TRG2SRC, DS70005591D
+ * Table 16-4 (p1227). Same rule: between bursts, through capture.c. */
+#define ADC_TRG2_B2B      2u        /* back-to-back: as fast as it goes  */
+#define ADC_TRG2_REPEAT   3u        /* the ADC's repeat timer, RPTCNT    */
+#define ADC_TRG2_SCCP1    32u       /* SCCP1 timer period match          */
+void    adc_set_trg2(uint8_t trg2src);
+uint8_t adc_trg2(void);
+
 /* The core's registers as "name: 0x........" lines (part of regs_dump()). */
 void adc_regs_dump(void);
 
