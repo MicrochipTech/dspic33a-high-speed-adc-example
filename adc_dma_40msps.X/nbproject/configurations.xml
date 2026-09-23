@@ -225,7 +225,7 @@
         <property key="memories.programmemory.ranges" value="800000-81ffff"/>
         <property key="oscillator.auxfrequency" value="120"/>
         <property key="oscillator.auxfrequencyunit" value="Mega"/>
-        <property key="oscillator.frequency" value="1"/>
+        <property key="oscillator.frequency" value="8"/>
         <property key="oscillator.frequencyunit" value="Mega"/>
         <property key="oscillator.rcfrequency" value="250"/>
         <property key="oscillator.rcfrequencyunit" value="Kilo"/>
@@ -279,7 +279,7 @@
         <property key="uart1io.uartioenabled" value="false"/>
         <property key="uart2io.output" value="window"/>
         <property key="uart2io.outputfile" value=""/>
-        <property key="uart2io.uartioenabled" value="false"/>
+        <property key="uart2io.uartioenabled" value="true"/>
         <property key="uart3io.output" value="window"/>
         <property key="uart3io.outputfile" value=""/>
         <property key="uart3io.uartioenabled" value="false"/>
@@ -920,7 +920,7 @@
         <property key="lastid" value=""/>
         <property key="oscillator.auxfrequency" value="120"/>
         <property key="oscillator.auxfrequencyunit" value="Mega"/>
-        <property key="oscillator.frequency" value="1"/>
+        <property key="oscillator.frequency" value="8"/>
         <property key="oscillator.frequencyunit" value="Mega"/>
         <property key="oscillator.rcfrequency" value="250"/>
         <property key="oscillator.rcfrequencyunit" value="Kilo"/>
@@ -957,7 +957,7 @@
         <property key="uart1io.uartioenabled" value="false"/>
         <property key="uart2io.output" value="window"/>
         <property key="uart2io.outputfile" value=""/>
-        <property key="uart2io.uartioenabled" value="false"/>
+        <property key="uart2io.uartioenabled" value="true"/>
         <property key="uart3io.output" value="window"/>
         <property key="uart3io.outputfile" value=""/>
         <property key="uart3io.uartioenabled" value="false"/>
@@ -1512,7 +1512,7 @@
         <property key="memories.programmemory.ranges" value="800000-81ffff"/>
         <property key="oscillator.auxfrequency" value="120"/>
         <property key="oscillator.auxfrequencyunit" value="Mega"/>
-        <property key="oscillator.frequency" value="1"/>
+        <property key="oscillator.frequency" value="8"/>
         <property key="oscillator.frequencyunit" value="Mega"/>
         <property key="oscillator.rcfrequency" value="250"/>
         <property key="oscillator.rcfrequencyunit" value="Kilo"/>
@@ -1566,7 +1566,7 @@
         <property key="uart1io.uartioenabled" value="false"/>
         <property key="uart2io.output" value="window"/>
         <property key="uart2io.outputfile" value=""/>
-        <property key="uart2io.uartioenabled" value="false"/>
+        <property key="uart2io.uartioenabled" value="true"/>
         <property key="uart3io.output" value="window"/>
         <property key="uart3io.outputfile" value=""/>
         <property key="uart3io.uartioenabled" value="false"/>
