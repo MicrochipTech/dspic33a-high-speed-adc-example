@@ -7,4 +7,4 @@ for /f "delims=" %%D in ('dir /b /ad /o-n "C:\Program Files\Microchip\MPLABX\v*"
     if not defined MK if exist "C:\Program Files\Microchip\MPLABX\%%D\gnuBins\GnuWin32\bin\make.exe" set "MK=C:\Program Files\Microchip\MPLABX\%%D\gnuBins\GnuWin32\bin\make.exe"
 )
 if not exist nbproject\Makefile-impl.mk call "%GEN%" .
-"%MK%" -f Makefile CONF=default build
+"%MK%" -f Makefile CONF=EV74H48A_Curiosity_Platform_MPS512 build

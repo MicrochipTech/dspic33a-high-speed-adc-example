@@ -46,7 +46,7 @@
   </logicalFolder>
   <projectmakefile>Makefile</projectmakefile>
   <confs>
-    <conf name="default" type="2">
+    <conf name="EV74H48A_Curiosity_Platform_MPS512" type="2">
       <toolsSet>
         <developmentServer>localhost</developmentServer>
         <targetDevice>dsPIC33AK512MPS512</targetDevice>
@@ -1998,7 +1998,7 @@
         <property key="warningmessagebreakoptions.warningmessages" value="holdstate"/>
       </Tool>
     </conf>
-    <conf name="nano" type="2">
+    <conf name="EV17P63A_Curiosity_Nano_MPS506" type="2">
       <toolsSet>
         <developmentServer>localhost</developmentServer>
         <targetDevice>dsPIC33AK512MPS506</targetDevice>

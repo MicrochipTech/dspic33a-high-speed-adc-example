@@ -11,7 +11,7 @@
             <sourceRootList/>
             <confList>
                 <confElem>
-                    <name>default</name>
+                    <name>EV74H48A_Curiosity_Platform_MPS512</name>
                     <type>2</type>
                 </confElem>
                 <confElem>
@@ -19,7 +19,7 @@
                     <type>2</type>
                 </confElem>
                 <confElem>
-                    <name>nano</name>
+                    <name>EV17P63A_Curiosity_Nano_MPS506</name>
                     <type>2</type>
                 </confElem>
             </confList>

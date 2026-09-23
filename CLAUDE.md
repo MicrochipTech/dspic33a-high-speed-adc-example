@@ -43,10 +43,13 @@ tools\build.bat        hardware  -> build\adc_dma_40msps.elf/.hex   (must be -Wa
 tools\build.bat sim    simulator -> build\adc_dma_40msps_sim.elf    (same)
 ```
 
-MPLAB X project: configurations `default` (EV74H48A, PKOB4, `dma.c`), `nano`
-(EV17P63A Curiosity Nano: device dsPIC33AK512MPS506, `nEdbgTool`, `BOARD=2`) and `sim`
-(Simulator, `sim_dma.c`, `__MPLAB_DEBUGGER_SIMULATOR=1`). Command line:
-`tools\build.bat`, `tools\build.bat nano`, `tools\build.bat sim`. `tools\_test_mplabx.bat` builds `default`
+MPLAB X project: configurations `EV74H48A_Curiosity_Platform_MPS512` (the Curiosity
+Platform board, PKOB4, `dma.c`), `EV17P63A_Curiosity_Nano_MPS506` (the Curiosity Nano:
+device dsPIC33AK512MPS506, `nEdbgTool`, `BOARD=2`) and `sim` (Simulator, `sim_dma.c`,
+`__MPLAB_DEBUGGER_SIMULATOR=1`); hardware configurations are named after the evaluation
+kit, order number first, so that the name in the IDE says what gets programmed. Command
+line: `tools\build.bat`, `tools\build.bat nano`, `tools\build.bat sim`. `tools\_test_mplabx.bat` builds
+the Curiosity Platform configuration
 from the command line through MPLAB X's own makefile generator. Two pitfalls: the
 generator rewrites `languageToolchainVersion` in `nbproject/configurations.xml` to
 whatever compiler it finds first - restore that one line, never `git checkout` the

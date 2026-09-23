@@ -130,7 +130,7 @@ change it at run time; the sweep steps the list of the active source (SCCP1: 80,
 
 CLAAS will order the dsPIC33AK512MPS506 Curiosity Nano (EV17P63A) from 1 October, not
 the EV74H48A the measurements run on. Branch `nano-board` adds it without touching
-master: `board.h` carries two profiles (`BOARD`), the MPLAB X configuration `nano` and
+master: `board.h` carries two profiles (`BOARD`), the MPLAB X configuration `EV17P63A_Curiosity_Nano_MPS506` and
 `build.bat nano` select the second one (device MPS506, `nEdbgTool`, `BOARD=2`). Facts
 from the Nano user guide DS70005634: LED0 RD0 active low, SW0 RC3, AD1AN0 on RA2 (RP3),
 the debugger's CDC channel on RC10 = RP43 (target TX) and RC11 = RP44 (target RX); from

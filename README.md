@@ -128,7 +128,7 @@ of use — so every setting can be checked against the primary source.
 
 **You need:** an EV74H48A (dsPIC33 Curiosity Platform Development Board) with the
 dsPIC33AK512MPS512 GP DIM — or a dsPIC33AK512MPS506 Curiosity Nano (EV17P63A), then
-pick the MPLAB X configuration `nano` — a USB cable, MPLAB X with the XC-DSC compiler and the
+pick the MPLAB X configuration `EV17P63A_Curiosity_Nano_MPS506` — a USB cable, MPLAB X with the XC-DSC compiler and the
 dsPIC33AK-MP device pack (MPLAB X offers to download the pack when you open the
 project). A signal source is optional — the self-test does not need one. A terminal
 program (Tera Term, PuTTY, MPLAB Data Visualizer's terminal) is optional too — the LED
@@ -211,7 +211,7 @@ compiler and pack versions.
 
 The same code runs on the Curiosity Nano, which carries the 64-pin
 **dsPIC33AK512MPS506** (user guide DS70005634). Everything that differs is in
-`board.h` under `BOARD_EV17P63A`, and the MPLAB X configuration **`nano`** selects it
+`board.h` under `BOARD_EV17P63A`, and the MPLAB X configuration **`EV17P63A_Curiosity_Nano_MPS506`** selects it
 (device MPS506, the on-board debugger `nEdbgTool`, `BOARD=2`); on the command line it is
 `tools\build.bat nano` or `make -C tools nano`. The two devices share the ADC, the DMA,
 the clock tree and the RAM map; the only configuration word that differs is
