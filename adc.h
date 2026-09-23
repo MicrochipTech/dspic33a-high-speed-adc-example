@@ -34,9 +34,11 @@
 #error "ADC_INSTANCE must be 1..5"
 #endif
 
-/* ADC core ADC_INSTANCE, channel 0, Integration mode, CNT = SAMPLES_PER_BUF.
+/* ADC core ADC_INSTANCE, channel 0, Integration mode, CNT = SAMPLES_PER_BUF,
+ * conversions inside a burst paced by the ADC's repeat timer with period
+ * `rptcnt` TAD (TAD = 12.5 ns at 320 MHz: 2 = 40 MSPS, 63 = 1.27 MSPS).
  * Stops in fail(5) if the core never reports ready. */
-void adc_init(uint8_t pinsel, uint8_t samc);
+void adc_init(uint8_t pinsel, uint8_t samc, uint8_t rptcnt);
 
 /* Trigger one burst of SAMPLES_PER_BUF conversions. */
 void adc_start_burst(void);
@@ -46,6 +48,10 @@ void adc_start_burst(void);
 void    adc_set_input(uint8_t pinsel, uint8_t samc);
 uint8_t adc_pinsel(void);
 uint8_t adc_samc(void);
+
+/* Repeat-timer period (RPTCNT, 2..63 TAD). Same rule as adc_set_input(). */
+void    adc_set_period(uint8_t rptcnt);
+uint8_t adc_period(void);
 
 /* The core's registers as "name: 0x........" lines (part of regs_dump()). */
 void adc_regs_dump(void);

@@ -90,7 +90,7 @@ int main(void)
     cli_init();
     boot_mark(5u);
 
-    adc_init(ADC_PINSEL, ADC_SAMC);
+    adc_init(ADC_PINSEL, ADC_SAMC, ADC_RPTCNT);
     boot_mark(6u);
     capture_init();
     boot_mark(7u);

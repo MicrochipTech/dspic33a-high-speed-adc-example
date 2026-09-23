@@ -51,6 +51,12 @@ bool    capture_set_input(uint8_t pinsel, uint8_t samc);
 uint8_t capture_pinsel(void);
 uint8_t capture_samc(void);
 
+/* Sample period: the ADC repeat timer's RPTCNT in TAD (2..63; 12.5 ns
+ * per TAD, so 2 = 40 MSPS, 63 = 1.27 MSPS). Applied like an input change,
+ * between two bursts; false for out-of-range arguments. */
+bool    capture_set_period(uint8_t rptcnt);
+uint8_t capture_period(void);
+
 /* Sample the ADC's internal 15/16 * VDD reference (ANx6) for a few halves
  * and compare the mean against the expected window. Blocking, bounded.
  * Returns 0 on success, 6 if no data arrived, 7 if the mean is outside the

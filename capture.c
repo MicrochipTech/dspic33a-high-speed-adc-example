@@ -133,6 +133,8 @@ static volatile bool    burst_active = false;
 static volatile bool    switch_pending = false;
 static volatile uint8_t pinsel_next    = ADC_PINSEL;
 static volatile uint8_t samc_next      = ADC_SAMC;
+static volatile bool    period_pending = false;
+static volatile uint8_t period_next    = ADC_RPTCNT;
 
 static uint32_t         seen_blocks    = 0;
 
@@ -236,6 +238,10 @@ void dma0_event(uint32_t st)
             adc_set_input(pinsel_next, samc_next);
             switch_pending = false;
         }
+        if (period_pending) {
+            adc_set_period(period_next);
+            period_pending = false;
+        }
         if (run_enabled) {
             start_burst();            /* next SAMPLES_PER_BUF samples   */
         } else {
@@ -288,6 +294,22 @@ bool capture_set_input(uint8_t pinsel, uint8_t samc)
 
 uint8_t capture_pinsel(void) { return adc_pinsel(); }
 uint8_t capture_samc(void)   { return adc_samc(); }
+
+bool capture_set_period(uint8_t rptcnt)
+{
+    if ((rptcnt < 2u) || (rptcnt > 63u)) {
+        return false;
+    }
+    period_next    = rptcnt;
+    period_pending = true;
+    if (!burst_active) {
+        adc_set_period(rptcnt);
+        period_pending = false;
+    }
+    return true;
+}
+
+uint8_t capture_period(void) { return adc_period(); }
 
 const volatile uint16_t *capture_completed_half(void)
 {

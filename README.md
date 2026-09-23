@@ -45,7 +45,7 @@ To be precise about how much of this code rests on something that has run on sil
 | Part of this code | Origin | Has run on hardware? |
 |---|---|---|
 | Clock setup: PLL1/PLL2 divider values, CLKGEN1/CLKGEN6 settings, switching sequence | bit-identical to the MCC-generated `clock.c` of [dspic33ak-curiosity-adc-40msps](https://github.com/microchip-pic-avr-examples/dspic33ak-curiosity-adc-40msps) | yes, in that example |
-| ADC trigger scheme: Integration mode, software trigger starts a burst, back-to-back re-trigger continues it (`MODE = 2`, `TRG1SRC = 1`, `TRG2SRC = 2`, `AD3SWTRG`) | the same example and datasheet Example 16-6 (p1331) | yes — but that example reads one 800-sample burst from `AD3CH0RES` in an assembler loop, **without DMA and without restarting the burst** |
+| ADC trigger scheme: Integration mode, software trigger starts a burst, the ADC's repeat timer paces the conversions (`MODE = 2`, `TRG1SRC = 1`, `TRG2SRC = 3`, `RPTCNT`, `AD3SWTRG`) | datasheet Example 16-4 (p1330) for the repeat timer; the example below and Example 16-6 (p1331) for the burst | partly — Microchip's example uses back-to-back (`TRG2SRC = 2`) and reads one 800-sample burst from `AD3CH0RES` in an assembler loop, **without DMA and without restarting the burst**. This code ran back-to-back first too; the board showed the delivered rate did not follow `SAMC` then (`docs/HARDWARE-LOG.md`, run 4), hence the repeat timer |
 | DMA basics: `DMALOW`/`DMAHIGH` window, status flags cleared by writing 0, control register layout | MCC `dma.c` of [dspic33a-dac-dma-sinewave](https://github.com/microchip-pic-avr-examples/dspic33a-dac-dma-sinewave) and datasheet Examples 13-1 to 13-4 (p832 ff.) | yes — but memory-to-DAC in Repeated One-Shot mode, the opposite direction and a far lower rate |
 | **ADC burst → DMA in Repeated Continuous mode → one buffer with `HALF`/`DONE` interrupts → burst restarted from the `DONE` ISR** | **our own construction**, assembled from datasheet §13.4.8 (Example 13-4, p835), §13.6.1.2 (HALF interrupt, p848) and §16.4.5 (p1322) | **no.** There is no Microchip example for this combination. This is the part `docs/TROUBLESHOOTING.md` §1.1 flags as the remaining risk |
 | Self-test on the internal 15/16·VDD reference (ADxAN6) | the input and its sample time come from datasheet Example 16-3 (p1328), which uses it for gain calibration; the pass/fail logic is ours | the input yes, the check no |
@@ -263,7 +263,7 @@ the buffer that is a straight line. For a recognisable waveform use something in
 time of 0.5 TAD = 6.25 ns, and in that time your source has to charge the hold
 capacitor. A 50 Ω function generator manages; a high-impedance divider or a long cable
 does not, and you get values that are too small or smeared. If the picture looks wrong,
-**`ADC1_SAMC` at the top of the source is the first knob to turn** — raise it and see
+**`ADC_SAMC` at the top of the source is the first knob to turn** — raise it and see
 whether the amplitude comes up.
 
 ### Step 3 — look at the buffer
@@ -286,7 +286,7 @@ Which half to look at: `ready_half` says which one was completed last (0 = `buf[
 | LED code 7 | self-test mean off — read `selftest_mean`; far too low points at the sample time, way off at the clock |
 | LED code 8 | the DMA disabled itself on an address fault — `DMALOW`/`DMAHIGH` |
 | `dma_overrun` counting up | the shared DMA bus is not keeping up — see below, this is the interesting result |
-| values far too small or flat | source impedance, raise `ADC1_SAMC` |
+| values far too small or flat | source impedance, raise `ADC_SAMC` |
 | values look like a straight line | signal frequency too low for a 25.6 µs window |
 | values above 4095 | `DMA0SRC` points at the accumulator (`AD3CH0DATA`) instead of `AD3CH0RES` |
 | `late_service` or `proc_missed` counting up | the ISR or `main()` is not keeping up, reduce the processing or enlarge `SAMPLES_PER_HALF` |
@@ -336,7 +336,7 @@ this operating point — *"Input frequency 320 MHz, ADC clock 80 MHz, TAD 12.5 n
 so non-integer ratios are possible — but this example does not need one: both clock
 generators take their PLL output straight through, `CLK1DIV = CLK6DIV = 0`.
 
-### 2. ADC — one core, one channel, bursts of 2048 back-to-back conversions
+### 2. ADC — one core, one channel, bursts of 2048 conversions paced by the repeat timer
 
 ![ADC path](docs/02_adc_path.png)
 
@@ -350,7 +350,8 @@ generators take their PLL output straight through, `CLK1DIV = CLK6DIV = 0`.
 | `MODE` | 2 | **Integration**: a burst of `CNT` conversions (page 1267) |
 | `CNT` | 2048 | conversions per burst = one DMA buffer (`AD3CH0CNT`, page 1272) |
 | `TRG1SRC` | 0x01 | **software trigger** starts the burst (Table 16-3, page 1226) |
-| `TRG2SRC` | 0x02 | **back-to-back** re-trigger for every further conversion (Table 16-4, page 1227) |
+| `TRG2SRC` | 0x03 | **repeat timer** triggers every further conversion (Table 16-4, page 1227): *"clocked from the ADC analog core clock (TAD), and its period is set by RPTCNT[5:0]"* (§16.4.5, page 1322) |
+| `RPTCNT` | 2 | period of that timer in TAD = 12.5 ns → 40 MSPS nominal (`AD3CON[23:18]`, `ADC_RPTCNT`; `period <2..63>` at run time) |
 | `IRQSEL` | 0 | channel event **after each conversion**, when `AD3CH0RES` is ready (page 1266) |
 | `EIEN` | 0 | no early interrupt — note 4 on page 1265 forbids it with DMA |
 | `ACCNUM` | 0 | oversampling only, unused in this mode |
@@ -368,11 +369,19 @@ free-run forever. §16.4.5 (page 1322) is explicit:
   `CNT` conversions (max 65535) and stops.
 
 That is why this code works in bursts: a software trigger starts 2048 conversions, the
-ADC re-triggers itself for each of them, and the DMA `DONE` interrupt — which arrives
+ADC's repeat timer triggers each of them, and the DMA `DONE` interrupt — which arrives
 when the 2048th sample has landed in RAM — starts the next burst. The gap between
 bursts is the interrupt latency, once per 51.2 µs, so the measured rate will sit a
-little below 40 MSPS. Microchip's own 40 MSPS example uses the same triple (`MODE = 2`,
-`TRG1SRC` = software, `TRG2SRC` = back-to-back), as does datasheet Example 16-6.
+little below the nominal one.
+
+**Why the repeat timer and not back-to-back.** The first version used `TRG2SRC = 2`,
+back-to-back, like Microchip's own 40 MSPS example and datasheet Example 16-6. On the
+board the rate sweep then showed the same overrun and missed counts for every `SAMC`
+from 0 to 31 (`docs/HARDWARE-LOG.md`, run 4): the delivered rate did not follow the
+sample time, the ADC simply ran as fast as it could — and §16.4.5 says of back-to-back
+that *"the timing is affected (can be delayed) by priorities of other channels"*. The
+repeat timer (`TRG2SRC = 3`, Example 16-4 on page 1330) is the ADC's own time base: one
+trigger every `RPTCNT` TAD, deterministic, and the sweep measures it with Timer1.
 
 Two more consequences of Integration mode that are easy to miss:
 
@@ -456,14 +465,15 @@ The console is the [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser) mod
 | `status` | run state and every counter from "What to measure", plus input, sample time, self-test mean and stop code |
 | `regs` | the clock, ADC, DMA, interrupt and UART registers as hex, plus the counters — the dump `docs/TROUBLESHOOTING.md` Part 4 asks for |
 | `start`, `stop` | start the burst stream / let the current buffer finish and stop |
-| `samc <0..31>` | sample time in TAD steps: (2·SAMC + 0.5) TAD, i.e. 40 / (SAMC + 1) MSPS at 320 MHz. Applied between two bursts |
+| `samc <0..31>` | sample time in TAD steps: (2·SAMC + 0.5) TAD — the aperture, not the rate. Applied between two bursts |
+| `period <2..63>` | **the sample rate:** period of the ADC repeat timer in TAD (12.5 ns), rate = 80000 / n kSPS: 2 = 40 MSPS, 4 = 20 MSPS, 8 = 10 MSPS, 63 = 1.27 MSPS. Applied between two bursts |
 | `input <0..15>` | PINSEL of the ADC core; 6 is the internal 15/16·VDD reference. Applied between two bursts |
 | `selftest` | samples the internal reference, prints the mean, NAK if it is outside 3648 … 4032 |
 | `stats` | min, max, mean and peak-to-peak of the completed half |
 | `dump [count] [offset]` | samples of the completed half, eight per line; Ctrl+C aborts |
 | `clear` | zeroes the error counters |
 | `led on`, `led off`, `led auto` | LED0 by hand, or back to the heartbeat |
-| `sweep [halves]` | **the rate measurement, automated:** for SAMC 31, 15, 7, 3, 1, 0 (1.25 … 40 MSPS) runs `halves` buffer halves (default 2000 = 2 M samples) and prints one line per rate with the **measured** sample rate (Timer1) next to the nominal one, `SAMC` read back from the register, and `dma_overrun` measured three ways — CPU idle, CPU processing every half like the main loop, CPU polling an SFR in a tight loop — plus `late_service` and `proc_missed`. A rate is usable where overrun stays 0; the three columns say whether the DMA bus or the CPU is the limit. Takes a few seconds; restores the previous sample time and run state. With `AUTO_SWEEP 1` in `board.h` (the default) the same table is printed once automatically after the self-test, before the measurement starts — no typing needed |
+| `sweep [halves]` | **the rate measurement, automated:** for repeat-timer periods 63, 32, 16, 8, 4, 3, 2 TAD (1.27 … 40 MSPS nominal) runs `halves` buffer halves (default 2000 = 2 M samples) and prints one line per rate with the **measured** sample rate (Timer1) next to the nominal one, `SAMC` read back from the register, and `dma_overrun` measured three ways — CPU idle, CPU processing every half like the main loop, CPU polling an SFR in a tight loop — plus `late_service` and `proc_missed`. A rate is usable where overrun stays 0; the three columns say whether the DMA bus or the CPU is the limit. Takes a few seconds; restores the previous sample time and run state. With `AUTO_SWEEP 1` in `board.h` (the default) the same table is printed once automatically after the self-test, before the measurement starts — no typing needed |
 | `reset` | software reset |
 
 **The firmware also talks without being asked.** From reset on, every start-up step
@@ -528,9 +538,10 @@ page 1223).
 sample time plus 1.5 TAD; with the minimum sample time of 0.5 TAD that is 2 TAD, hence
 40 MSPS at 320 MHz (AD51). There are three knobs.
 
-**1. Sample time `SAMC` — back-to-back, the way this example runs.** Sample time is
-(2·SAMC + 0.5) TAD (page 1266), so the conversion period is (2·SAMC + 2) TAD. At
-320 MHz input clock:
+**1. Sample time `SAMC` with the back-to-back trigger — the way the first version of
+this example ran, and what the board did not confirm.** Sample time is (2·SAMC + 0.5)
+TAD (page 1266), so the conversion period should be (2·SAMC + 2) TAD. At 320 MHz input
+clock that would give:
 
 | `SAMC` | Rate |
 |---|---|
@@ -542,14 +553,17 @@ sample time plus 1.5 TAD; with the minimum sample time of 0.5 TAD that is 2 TAD,
 | 9 | 4 MSPS |
 | 31 | 1.25 MSPS |
 
-That is 40 / (SAMC + 1) MSPS. It is the only knob that changes a single value in the
-source (`ADC1_SAMC`), and it is at the same time the remedy for a source impedance that
-is too high for a 6.25 ns sample window.
+That is 40 / (SAMC + 1) MSPS on paper. On the board the delivered rate did not change
+with `SAMC` at all (`docs/HARDWARE-LOG.md`, run 4), so this example no longer relies on
+it. `SAMC` remains the remedy for a source impedance that is too high for a 6.25 ns
+sample window — it sets the aperture, the repeat timer sets the rate.
 
-**2. Repeat timer instead of back-to-back** (`TRG2SRC = 3`, period in `RPTCNT[5:0]` of
-`AD3CON`, page 1258). A trigger every k ADC clock cycles, k = 2 … 64, at the 80 MHz
-ADC clock: 80 / k MSPS, i.e. 40, 26.7, 20, 16, 13.3, 11.4, 10, 8.9, 8 … down to
-1.25 MSPS. A finer grid than `SAMC`, but **25 MSPS is not on it**.
+**2. Repeat timer — the way this example runs now** (`TRG2SRC = 3`, period in
+`RPTCNT[5:0]` of `AD3CON`, page 1258; `ADC_RPTCNT` in `board.h`, `period` on the
+console). A trigger every k TAD, k = 2 … 63, at TAD = 12.5 ns: 80 / k MSPS, i.e. 40,
+26.7, 20, 16, 13.3, 11.4, 10, 8.9, 8 … down to 1.27 MSPS. A finer grid than `SAMC`,
+but **25 MSPS is not on it**. Whether the hardware counts k or k + 1 cycles is what the
+measured column of the sweep table says.
 
 **3. The ADC input clock, CLKGEN6.** Rate = F_IN / 8 at `SAMC = 0`. With the 9-bit
 fractional divider in `CLK6DIV` almost any value between 4 MSPS (32 MHz) and 40 MSPS is

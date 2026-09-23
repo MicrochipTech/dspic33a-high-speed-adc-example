@@ -80,11 +80,13 @@ interrupt aborts with E0110). It proves the ping-pong buffer logic and nothing e
 
 ## Open questions (as of 23.09.2026)
 
-1. `SAMC` does not change the delivered rate - the sweep shows the same overrun and
-   missed counts at every nominal rate. Suspect: Integration mode with the
-   back-to-back trigger ignores the sample time. The sweep now measures the rate with
-   Timer1; if confirmed, control the rate through the ADC clock (`CLK6DIV`) or a timer
-   trigger instead.
+1. The rate is now set by the ADC's repeat timer (`TRG2SRC = 3`, period `RPTCNT` in
+   TAD, DS70005591D Table 16-4 p1227 and 16.4.5 p1322) instead of the back-to-back
+   trigger, after the sweep showed the delivered rate did not follow `SAMC`. Whether
+   the hardware counts `RPTCNT` or `RPTCNT + 1` TAD per period, and whether 40 MSPS
+   (`RPTCNT = 2`) is reached at all, is what the measured column of the next sweep
+   settles. Rates below 1.27 MSPS need a divided ADC clock (`CLK6DIV`) or a CCP timer
+   as trigger (`TRG2SRC = 32` = CCP1, Example 16-8 p1334).
 2. At 40 MSPS about 4 % of the samples are lost as OVERRUN, independent of what the
    CPU does, and every overrun raises the DMA interrupt (~1.6 million per second),
    which starves the main loop and the console. Whether the DMA bus or something

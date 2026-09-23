@@ -83,3 +83,26 @@ register.
 Next: the measured `ksps` column decides. If it is the same in every row, the rate has
 to be set through the ADC clock (`CLK6DIV`) or a timer trigger instead of `SAMC`; only
 then does the sweep become the curve the example exists for.
+
+## 2026-09-23, after run 4 - the trigger changed to the ADC repeat timer (no board run yet)
+
+Decision (before the measured column was even in): a deterministic sample rate needs a
+time base that is not the ADC finishing its previous conversion. Two facts from the
+datasheet (DS70005591D, read from the PDF): Table 16-4 (p1227) lists `TRG2SRC = 000011`
+as "Conversion repeat timer trigger defined by RPTCNT[5:0] (ADnCON[23:18])", and 16.4.5
+(p1322) says "This timer is clocked from the ADC analog core clock (TAD), and its period
+is set by RPTCNT[5:0]"; the same section says of back-to-back: "The timing is affected
+(can be delayed) by priorities of other channels". Example 16-4 (p1330) uses the repeat
+timer with `RPTCNT = 60`; Example 16-8 (p1334) uses CCP1 as trigger (`TRG2SRC = 32`).
+
+Also found: Microchip's own 40 MSPS example for this board (dspic33ak-curiosity-adc-
+40msps) does not use the DMA at all. It copies `AD3CH0RES` in a hand-timed assembly loop
+("200MHz CPU : 40MSPS = 5 instructions per sample") for 800 samples, with the
+back-to-back trigger. Five CPU cycles is the budget one sample has at 40 MSPS; that the
+DMA lost about 4 % at that rate is consistent with a transaction costing more.
+
+Changed: `TRG2SRC = 3`, `RPTCNT` from `ADC_RPTCNT` in board.h (default 2 = 40 MSPS
+nominal at TAD 12.5 ns), `period <2..63>` command, `rpt=` in the status line, the sweep
+now steps `RPTCNT` 63, 32, 16, 8, 4, 3, 2 (1.27 to 40 MSPS nominal, "nominal =
+80000/rptcnt ksps") and prints the measured rate next to it. Rates below 1.27 MSPS would
+need `CLK6DIV` or the CCP trigger; not built.

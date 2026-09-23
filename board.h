@@ -19,7 +19,14 @@
 #define ADC_PINSEL        5u
 #endif
 #ifndef ADC_SAMC
-#define ADC_SAMC          0u      /* 0.5 TAD, 40 MSPS at 320 MHz input clock */
+#define ADC_SAMC          0u      /* sample time 0.5 TAD                      */
+#endif
+/* Sample rate: the ADC's repeat timer triggers a conversion every
+ * ADC_RPTCNT TAD (TAD = 12.5 ns with the 320 MHz ADC clock). 2 = 40 MSPS,
+ * 4 = 20 MSPS, 8 = 10 MSPS, 63 = 1.27 MSPS. The measured rate is in the
+ * sweep table; "period <n>" changes it at run time. */
+#ifndef ADC_RPTCNT
+#define ADC_RPTCNT        2u
 #endif
 
 /* Run the rate sweep (the "sweep" console command) once automatically,
