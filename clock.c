@@ -205,13 +205,18 @@ void __attribute__((interrupt, no_auto_psv)) _CLKFInterrupt(void)
 #define ADC_CLK_HZ        320000000u
 #define DIVSW_WAIT_LIMIT  100000u     /* loop iterations, far above the switch */
 
-bool clock_adc_set_div(uint32_t ratio)
+bool clock_adc_set_div(uint32_t ratio_h)
 {
-    if ((ratio != 1u) && ((ratio < 2u) || (ratio > 10u) || (ratio % 2u != 0u))) {
+    if ((ratio_h < 100u) || (ratio_h > 1000u)) {
         return false;
     }
+    /* ratio/2 = INTDIV + FRACDIV/512, ratio in hundredths: INTDIV is the
+     * integer part of ratio_h/200, FRACDIV the rest scaled to 512. 100
+     * (ratio 1) is INTDIV 0, FRACDIV 0 = straight through. */
+    const uint32_t intdiv  = ratio_h / 200u;
+    const uint32_t fracdiv = ((ratio_h % 200u) * 512u + 100u) / 200u;
 #ifdef __MPLAB_DEBUGGER_SIMULATOR
-    (void)ratio;                       /* no clock tree to switch          */
+    (void)intdiv; (void)fracdiv;       /* no clock tree to switch          */
     return true;
 #else
     /* The full boot sequence of the generator, not a divider switch
@@ -219,8 +224,8 @@ bool clock_adc_set_div(uint32_t ratio)
      * on, divider switch confirmed, clock ready. Source (NOSC = PLL1)
      * and backup stay as clock_init() set them. */
     CLK6CONbits.ON      = 0u;
-    CLK6DIVbits.FRACDIV = 0u;
-    CLK6DIVbits.INTDIV  = (ratio == 1u) ? 0u : ratio / 2u;
+    CLK6DIVbits.FRACDIV = fracdiv;
+    CLK6DIVbits.INTDIV  = intdiv;
     CLK6CONbits.ON      = 1u;
     CLK6CONbits.DIVSWEN = 1u;
     uint32_t n = DIVSW_WAIT_LIMIT;
@@ -234,13 +239,16 @@ bool clock_adc_set_div(uint32_t ratio)
 
 uint32_t clock_adc_div(void)
 {
-    const uint32_t intdiv = CLK6DIVbits.INTDIV;
-    return (intdiv == 0u) ? 1u : 2u * intdiv;
+    /* Back from the register, in hundredths: 2 * (INTDIV + FRACDIV/512)
+     * * 100 = (INTDIV * 512 + FRACDIV) * 200 / 512. Both fields 0 =
+     * straight through = 100. */
+    const uint32_t raw = CLK6DIVbits.INTDIV * 512u + CLK6DIVbits.FRACDIV;
+    return (raw == 0u) ? 100u : (raw * 200u + 256u) / 512u;
 }
 
 uint32_t clock_adc_hz(void)
 {
-    return ADC_CLK_HZ / clock_adc_div();
+    return (uint32_t)(((uint64_t)ADC_CLK_HZ * 100u) / clock_adc_div());
 }
 
 void clock_regs_dump(void)

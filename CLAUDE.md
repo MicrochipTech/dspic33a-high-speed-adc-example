@@ -23,7 +23,7 @@ before changing anything; the register writes in the code cite the datasheet
 | `capture.c/.h` | the measurement: the DMA buffer (private, with guard words), `dma0_event()`, counters, start/stop/input, self-test, per-half processing | adc, dma, led, console, diag |
 | `led.c/.h` | LED0 | – |
 | `timebase.c/.h` | Timer1 as a stopwatch (12.5 MHz) for measuring the delivered sample rate; not involved in producing it | – |
-| `sccp.c/.h` | SCCP1 as a timer whose period match triggers the ADC (pacing source 32) | – |
+| `sccp.c/.h` | SCCP1 as a timer whose period rollover (AUXOUT = 01) is the ADC's "SCCP1 trigger", code 34: TRG1SRC for pacing 65, TRG2SRC for 34 | – |
 | `diag.c/.h` | `fail()` codes, trap handler, boot record in persistent RAM, `RCON` report, `regs_dump()` | every module's `*_regs_dump()` |
 | `cli.c`, `console.h` | UART2, the commands, the `sweep` | clock, capture, led, diag |
 | `sim.h` | the hooks the simulator build needs; all empty on silicon | – |
@@ -97,10 +97,15 @@ interrupt aborts with E0110). It proves the ping-pong buffer logic and nothing e
 
 ## Open questions (as of 23.09.2026)
 
-1. Neither the ADC's repeat timer (`TRG2SRC = 3`, `RPTCNT`) nor SCCP1 (`TRG2SRC =
-   32`) paces a burst in Integration mode on the board: the registers hold the
-   written values and the DMA still receives the back-to-back rate (HARDWARE-LOG runs
-   5 and 6, registers decoded). Since 23.09. evening the fourth candidate is the ADC
+1. The ADC's repeat timer (`TRG2SRC = 3`, `RPTCNT`) does not pace a burst in
+   Integration mode on the board: the register holds the written value and the DMA
+   still receives the back-to-back rate (HARDWARE-LOG runs 5 and 6, registers
+   decoded). The SCCP1-as-TRG2 result of those runs is void: code 32 is "PTG trigger
+   12" (SCCP1 is 34, Tables 16-3/16-4) and `AUXOUT` was 00, so SCCP1 emitted no
+   trigger at all; both fixed 23.09. evening. Since then the first candidate is
+   Microchip's own mechanism, one conversion per SCCP1 trigger in Single Conversion
+   mode (`ADC_PACE_SINGLE` = 65, `TRG1SRC = 34`, no burst, no restart), untested on
+   the board. Since 23.09. evening the fourth candidate is the ADC
    clock divider (`ADC_PACE_CLKDIV` = 64, `clock_adc_set_div()`, CLKGEN6 `INTDIV`,
    ratios 1/2/4/6/8/10 = 40 … 4 MSPS), tried after the two trigger sources in the
    AUTO pacing; the boot sweep then steps the divider and **takes the highest rate

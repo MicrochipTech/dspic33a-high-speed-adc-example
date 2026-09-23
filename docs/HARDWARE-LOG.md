@@ -272,3 +272,39 @@ channel interrupt and `DMA0CH` has enables only for HALF, DONE and MATCH - so th
 storm at 40 MSPS is avoided by not running there, not by masking it. If the console
 was starved by that storm, `rx` will count at the chosen rate; if it stays 0, the
 bytes never reach RD1.
+
+## 2026-09-23, evening - two defects in the SCCP1 candidate, and Microchip's mechanism added (no board run yet)
+
+Reading Microchip's example for this ADC (github.com/microchip-pic-avr-examples/
+dspic33ak-curiosity-adc-40msps, README only; the code comes through MCC): its "40 MSPS"
+are eight channels of one core at 5 MSPS each, every channel in **Single Sample mode
+with the SCCP1 trigger as first trigger** (MCC: "Single Sample", "SCCP1 Trigger
+Event"; SCCP1 in PWM mode on CLK12 = 160 MHz, PR 31 = 5 MHz), results read by a
+hand-timed assembly loop. CLK6 stays at 320 MHz. Timer pacing works on this silicon,
+but through TRG1 in Single Conversion mode, not through TRG2 inside an Integration
+burst.
+
+Checking our SCCP1 candidate against the datasheet then found two defects, so runs 5
+and 6 never tested SCCP1 at all:
+
+1. `ADC_TRG2_SCCP1` was 32. Tables 16-3 and 16-4 (p1226 f.) list `100010` = 34 as
+   "SCCP1 trigger"; 32 = `100000` is "PTG trigger 12". Fixed to 34.
+2. `CCP1CON2` was 0, i.e. `AUXOUT = 00` = "No signal output on aux_out" (Table 26-10,
+   p1818). The signal the ADC sees as "SCCP1 trigger" is that auxiliary output; in
+   timer mode `AUXOUT = 01` puts the period rollover on it. Fixed.
+
+Added: pacing source 65, `ADC_PACE_SINGLE` - Single Conversion mode, `TRG1SRC = 34`,
+one conversion per SCCP1 period, DMA per conversion, no burst, no `CNT`, no restart in
+the DONE interrupt; `capture_start()` starts the SCCP1, `capture_stop()` stops it.
+Period in ticks of 10 ns as for 34; rate test at 20 and 5 ticks (5 and 20 MSPS); sweep
+80/40/20/10/8/5/4 ticks.
+
+Also: the clock-divider source (64) now takes the ratio in hundredths and uses the
+fractional field (`FRACDIV`, 1/512 steps, Example 12-2's formula). Its sweep has two
+passes: the even ratios 10, 8, 6, 4, 2, 1 (4 ... 40 MSPS), then 9, 7, 5, 3, 2.5, 1.6,
+1.25 (4.4, 5.7, 8, 13.3, 16, 25, 32 MSPS). Ratios below 2 leave INTDIV at 0 with a
+fraction; whether that divides or bypasses is what those rows show. The fastest clean
+row of either pass wins. The AUTO order is now 65, 64, 3, 34, 2: Microchip's mechanism
+first, the divider second, the two burst triggers for the record, back-to-back as the
+reference. Verified in the simulator (boot cycles through all five, ping-pong PASS) and
+in all three builds; not on the board.

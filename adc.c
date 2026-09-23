@@ -131,6 +131,18 @@ uint8_t adc_trg2(void) { return (uint8_t)ADCREG(CH0CON1bits).TRG2SRC; }
 
 bool adc_ready(void) { return ADCREG(CONbits).ADRDY != 0u; }
 
+void adc_set_mode_burst(void)
+{
+    ADCREG(CH0CON1bits).MODE    = 2u;          /* Integration           */
+    ADCREG(CH0CON1bits).TRG1SRC = 0x01u;       /* software trigger      */
+}
+
+void adc_set_mode_single(uint8_t trg1src)
+{
+    ADCREG(CH0CON1bits).MODE    = 0u;          /* Single Conversion     */
+    ADCREG(CH0CON1bits).TRG1SRC = trg1src;     /* e.g. SCCP1 trigger    */
+}
+
 void adc_deinit(void)
 {
     ADCREG(CONbits).ON = 0;

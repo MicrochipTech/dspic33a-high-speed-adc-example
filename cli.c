@@ -727,10 +727,29 @@ void console_sweep(uint32_t halves, bool choose)
      * ticks. Anything else and the measured rates are off by the same
      * factor - and the assumption about the timer's clock is wrong. */
     console_kv("[sweep] timer check, ticks per 100 ms (expect 1250000)", timebase_check());
-    uint32_t best = 0u;                   /* last clean row = fastest   */
+    uint32_t best = 0u, best_ksps = 0u;   /* fastest clean row          */
     for (uint32_t i = 0; i < count; i++) {
         console_puts("[sweep] ");
-        if (sweep_row(periods[i], halves) && (periods[i] != 0u)) { best = periods[i]; }
+        if (sweep_row(periods[i], halves) && (periods[i] != 0u) &&
+            (capture_nominal_ksps(periods[i]) > best_ksps)) {
+            best = periods[i]; best_ksps = capture_nominal_ksps(periods[i]);
+        }
+    }
+    /* Second pass, if the source has one (clock divider: the fractional
+     * ratios, the rates the even ones cannot reach). */
+    {
+        uint32_t count2 = 0;
+        const uint32_t *periods2 = capture_sweep_periods2(&count2);
+        if (count2 != 0u) {
+            console_puts("[sweep] second pass: fractional divider ratios (period = ratio x 100)\r\n");
+            for (uint32_t i = 0; i < count2; i++) {
+                console_puts("[sweep] ");
+                if (sweep_row(periods2[i], halves) && (periods2[i] != 0u) &&
+                    (capture_nominal_ksps(periods2[i]) > best_ksps)) {
+                    best = periods2[i]; best_ksps = capture_nominal_ksps(periods2[i]);
+                }
+            }
+        }
     }
 
     /* The question the sweep answers: the highest rate at which the CPU
@@ -771,7 +790,7 @@ static void cmd_period_fn(int argc, char **argv)
 {
     uint32_t v;
     if ((argc != 2) || !arg_u32(argv[1], 2u, 65535u, &v)) {
-        usage("period <n>  (sample period in the active pacing's unit: repeat timer 2..63 TAD, SCCP1 2..65535 x 10 ns, clock divider 1|2|4|6|8|10)");
+        usage("period <n>  (sample period in the active pacing's unit: SCCP1 trigger 2..65535 x 10 ns, clock divider 100..1000 = ratio x 100, repeat timer 2..63 TAD)");
         return;
     }
     if (!capture_set_period(v)) {
@@ -787,15 +806,15 @@ CMD_DEFINE(period, "period", cmd_period_fn, "period <n> - sample period in the a
 static void cmd_pacing_fn(int argc, char **argv)
 {
     uint32_t v;
-    if ((argc != 2) || !arg_u32(argv[1], 0u, 64u, &v) || !capture_set_pacing((uint8_t)v)) {
-        usage("pacing <3|32|64|2>  (3 = ADC repeat timer, 32 = SCCP1 timer, 64 = ADC clock divider, 2 = back-to-back)");
+    if ((argc != 2) || !arg_u32(argv[1], 0u, 65u, &v) || !capture_set_pacing((uint8_t)v)) {
+        usage("pacing <65|64|3|34|2>  (65 = one conversion per SCCP1 trigger, 64 = ADC clock divider, 3 = ADC repeat timer, 34 = SCCP1 as burst trigger, 2 = back-to-back)");
         return;
     }
     put_kv("pacing", v);
     put_line(capture_pacing_name());
     put_kv("period", capture_period());
 }
-CMD_DEFINE(pacing, "pacing", cmd_pacing_fn, "pacing <3|32|64|2> - what paces the conversions");
+CMD_DEFINE(pacing, "pacing", cmd_pacing_fn, "pacing <65|64|3|34|2> - what paces the conversions");
 
 static void cmd_reset_fn(int argc, char **argv)
 {

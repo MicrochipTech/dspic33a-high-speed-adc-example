@@ -56,8 +56,11 @@ uint8_t capture_samc(void);
  * ADC_TRG2_SCCP1:  SCCP1 timer, period in ticks of 10 ns, 2..65535.
  * ADC_TRG2_B2B:    back-to-back, no period, as fast as the converter goes.
  * ADC_PACE_CLKDIV: back-to-back conversions, the rate set by the ADC clock
- *                  divider (clock.c); period = divide ratio 1, 2, 4, 6, 8,
- *                  10 of the 320 MHz clock (40 ... 4 MSPS).
+ *                  divider (clock.c); period = divide ratio of the 320 MHz
+ *                  clock in hundredths, 100..1000 (40 ... 4 MSPS).
+ * ADC_PACE_SINGLE: one conversion per SCCP1 trigger (Single Conversion
+ *                  mode, TRG1SRC = SCCP1), period in ticks of 10 ns; no
+ *                  burst, no restart. Microchip's 40 MSPS example's way.
  * capture_set_pacing() switches source and default period between two
  * bursts; capture_set_period() sets the period in the active source's
  * unit, applied between two bursts; false for out-of-range or for B2B.
@@ -71,6 +74,9 @@ bool     capture_set_period(uint32_t period);
 uint32_t capture_period(void);
 uint32_t capture_nominal_ksps(uint32_t period);
 const uint32_t *capture_sweep_periods(uint32_t *count);
+/* A second list for a second sweep pass, or NULL (count 0): for the clock
+ * divider the fractional ratios, after the even ones. */
+const uint32_t *capture_sweep_periods2(uint32_t *count);
 
 /* Sample the ADC's internal 15/16 * VDD reference (ANx6) for a few halves
  * and compare the mean against the expected window. Blocking, bounded.
@@ -90,9 +96,9 @@ uint32_t capture_selftest(uint32_t *mean);
 uint32_t capture_ratetest(void);
 
 /* Choose the pacing at boot per ADC_PACING (board.h). AUTO: run the rate
- * test on every candidate - repeat timer, SCCP1, ADC clock divider,
- * back-to-back - print each result, then take the first that passed,
- * back-to-back if none.
+ * test on every candidate - one conversion per SCCP1 trigger, ADC clock
+ * divider, repeat timer, SCCP1 as burst trigger, back-to-back - print
+ * each result, then take the first that passed, back-to-back if none.
  * A fixed source is tested once and the boot stops with its code if it
  * fails. Returns 0 or that code. */
 uint32_t capture_autopace(void);

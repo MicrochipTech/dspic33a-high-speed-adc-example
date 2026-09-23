@@ -58,10 +58,18 @@ uint8_t adc_period(void);
  * Table 16-4 (p1227). Same rule: between bursts, through capture.c. */
 #define ADC_TRG2_B2B      2u        /* back-to-back: as fast as it goes  */
 #define ADC_TRG2_REPEAT   3u        /* the ADC's repeat timer, RPTCNT    */
-#define ADC_TRG2_SCCP1    32u       /* SCCP1 timer period match          */
-/* Not a TRG2SRC value: pacing by the ADC clock divider (clock.c), with
- * TRG2SRC = back-to-back. capture.c owns the distinction. */
+#define ADC_TRG2_SCCP1    34u       /* SCCP1 trigger: 100010 in Tables 16-3
+                                     * AND 16-4 (p1226 f.). 32 = 100000 is
+                                     * "PTG trigger 12" - what runs 5 and 6
+                                     * on the board were really testing. */
+/* Not TRG2SRC values - pacing sources capture.c owns:
+ *   64  the ADC clock divider (clock.c), TRG2SRC = back-to-back
+ *   65  one conversion per SCCP1 trigger: Single Conversion mode with the
+ *       SCCP1 trigger as TRG1SRC - what Microchip's own 40 MSPS example
+ *       does (8 channels x 5 MSPS, MCC: "Single Sample", trigger source
+ *       "SCCP1 Trigger Event"). No burst, no CNT, no restart. */
 #define ADC_PACE_CLKDIV   64u
+#define ADC_PACE_SINGLE   65u
 void    adc_set_trg2(uint8_t trg2src);
 uint8_t adc_trg2(void);
 
@@ -75,6 +83,13 @@ uint8_t adc_trg2(void);
 void    adc_deinit(void);
 bool    adc_reinit(void);
 bool    adc_ready(void);
+
+/* Channel 0 operating mode. Burst: Integration mode, software trigger
+ * starts CNT conversions (the boot configuration). Single: one conversion
+ * per TRG1 trigger from the given source, TRG2 unused. Only while no
+ * burst is in flight and no trigger is running. */
+void    adc_set_mode_burst(void);
+void    adc_set_mode_single(uint8_t trg1src);
 
 /* The core's registers as "name: 0x........" lines (part of regs_dump()). */
 void adc_regs_dump(void);
