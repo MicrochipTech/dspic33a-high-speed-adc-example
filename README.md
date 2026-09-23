@@ -461,6 +461,7 @@ The console is the [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser) mod
 | `dump [count] [offset]` | samples of the completed half, eight per line; Ctrl+C aborts |
 | `clear` | zeroes the error counters |
 | `led on`, `led off`, `led auto` | LED0 by hand, or back to the heartbeat |
+| `sweep [halves]` | **the rate measurement, automated:** for SAMC 31, 15, 7, 3, 1, 0 (1.25 … 40 MSPS) runs `halves` buffer halves (default 2000 = 2 M samples) and prints one line per rate with `dma_overrun` measured three ways — CPU idle, CPU processing every half like the main loop, CPU polling an SFR in a tight loop — plus `late_service` and `proc_missed`. A rate is usable where overrun stays 0; the three columns say whether the DMA bus or the CPU is the limit. Takes a few seconds; restores the previous sample time and run state |
 | `reset` | software reset |
 
 **The firmware also talks without being asked.** From reset on, every start-up step

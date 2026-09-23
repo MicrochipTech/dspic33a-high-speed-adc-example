@@ -47,6 +47,7 @@
  *   dump [count] [offset]      samples of the completed half
  *   clear                      zero the error counters
  *   led on|off|auto            LED0
+ *   sweep [halves]             overrun vs sample rate, 1.25..40 MSPS, one table
  *   reset                      software reset
  *
  * Every command ends its output with a newline and calls
@@ -543,6 +544,110 @@ static void cmd_led_fn(int argc, char **argv)
 }
 CMD_DEFINE(led, "led", cmd_led_fn, "led on|off|auto - LED0");
 
+/* ------------------------------------------------------------------ *
+ * sweep - the rate measurement, automated
+ *
+ * For each sample time from SAMC 31 (1.25 MSPS) down to 0 (40 MSPS):
+ * stop the stream, wait for the burst to end, set the sample time,
+ * clear the counters, run `halves` buffer halves, read the counters.
+ * Three times per rate, with the CPU doing something different while
+ * the DMA runs, because the first board run could not tell whether the
+ * overruns come from the DMA bus itself or from the CPU competing for
+ * it (DS70005591D 13.4.4, one shared DMA data bus):
+ *
+ *   idle     the CPU polls blocks_done, a RAM variable, nothing else
+ *   process  the CPU runs capture_service(), i.e. process_buffer() on
+ *            every completed half - what the application would do
+ *   sfr      the CPU reads U2STAT in a tight loop - the worst case, a
+ *            CPU that hammers the peripheral bus (the console does this
+ *            while it prints)
+ *
+ * One line per rate. overrun must be 0 for a rate to be usable. The
+ * whole sweep runs inside the receive interrupt, like every command;
+ * the DMA interrupt preempts it, the main loop is starved meanwhile
+ * (counters are cleared afterwards, so that does not show up). The
+ * previous sample time and run state are restored at the end.
+ * ------------------------------------------------------------------ */
+#define SWEEP_HALVES_DEFAULT  2000u          /* 2 M samples per point   */
+#define SWEEP_WAIT_LIMIT      400000000u     /* loop iterations, ~10 s  */
+
+enum sweep_load { SWEEP_IDLE = 0, SWEEP_PROCESS = 1, SWEEP_SFR = 2 };
+
+/* Run `halves` halves at `samc` with the CPU under `load` meanwhile.
+ * Returns false if the stream stopped or never delivered. */
+static bool sweep_point(uint8_t samc, uint32_t halves, enum sweep_load load)
+{
+    uint32_t n = SWEEP_WAIT_LIMIT;
+    capture_stop();
+    while (capture_burst_active() && (--n != 0u)) { SIM_DMA_TICK(); }
+    if (n == 0u) { return false; }
+    (void)capture_set_input(capture_pinsel(), samc);   /* idle: applied now */
+    counters_clear();
+    const uint32_t target = blocks_done + halves;
+    capture_start();
+    n = SWEEP_WAIT_LIMIT;
+    while (blocks_done < target) {
+        SIM_DMA_TICK();
+        if (load == SWEEP_PROCESS)      { (void)capture_service(); }
+        else if (load == SWEEP_SFR)     { (void)U2STAT; }
+        if (--n == 0u) { capture_stop(); return false; }
+    }
+    capture_stop();
+    return true;
+}
+
+static void sweep_row(uint8_t samc, uint32_t halves)
+{
+    uint32_t ov[3];
+    bool     ok[3];
+    uint32_t late = 0, missed = 0;
+    for (int l = 0; l < 3; l++) {
+        ok[l] = sweep_point(samc, halves, (enum sweep_load)l);
+        ov[l] = dma_overrun;
+        if (l == SWEEP_PROCESS) { late = late_service; missed = proc_missed; }
+    }
+    /* Longest line: 116 characters plus NUL; every number is at most
+     * 10 digits, "STOPPED" is shorter. */
+    char line[128];
+    char *p = copy_str(line, "samc ");        p = u32_to_str(p, samc);
+    p = copy_str(p, "  ksps ");               p = u32_to_str(p, 40000u / ((uint32_t)samc + 1u));
+    p = copy_str(p, "  overrun idle/process/sfr ");
+    for (int l = 0; l < 3; l++) {
+        if (l) { *p++ = '/'; }
+        p = ok[l] ? u32_to_str(p, ov[l]) : copy_str(p, "STOPPED");
+    }
+    p = copy_str(p, "  late ");               p = u32_to_str(p, late);
+    p = copy_str(p, "  missed ");             p = u32_to_str(p, missed);
+    copy_str(p, "\r\n");
+    cmd_parser_write(line);
+}
+
+static void cmd_sweep_fn(int argc, char **argv)
+{
+    uint32_t halves = SWEEP_HALVES_DEFAULT;
+    if ((argc > 2) || ((argc == 2) && !arg_u32(argv[1], 10u, 100000u, &halves))) {
+        usage("sweep [halves per point 10..100000, default 2000]");
+        return;
+    }
+    static const uint8_t samcs[] = { 31u, 15u, 7u, 3u, 1u, 0u };
+    const uint8_t keep_samc   = capture_samc();
+    const bool    was_running = capture_running();
+
+    put_kv("sweep: halves per point", halves);
+    put_line("idle = CPU polls RAM only, process = main-loop processing, sfr = CPU polls an SFR");
+    put_line("overrun must be 0 for a usable rate; late/missed are from the process run");
+    for (uint32_t i = 0; i < sizeof samcs / sizeof samcs[0]; i++) {
+        sweep_row(samcs[i], halves);
+        if (cmd_parser_aborted()) { break; }
+    }
+
+    (void)capture_set_input(capture_pinsel(), keep_samc);
+    counters_clear();
+    if (was_running) { capture_start(); }
+    put_line("sweep done: counters cleared, previous samc and run state restored");
+}
+CMD_DEFINE(sweep, "sweep", cmd_sweep_fn, "sweep [halves] - overrun vs sample rate, 1.25..40 MSPS");
+
 static void cmd_reset_fn(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -581,6 +686,7 @@ void cli_init(void)
     (void)cmd_register(&cmd_dump);
     (void)cmd_register(&cmd_clear);
     (void)cmd_register(&cmd_led);
+    (void)cmd_register(&cmd_sweep);
     (void)cmd_register(&cmd_reset);
 
     /* Banner, once at start-up. A human sees what is talking and which
