@@ -478,7 +478,7 @@ The console is the [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser) mod
 | Command | Does |
 |---|---|
 | `help` | lists the commands |
-| `version` | build date, board, ADC core, default input |
+| `version` | build id (date, time, git revision), board and compile-time configuration: the `[build]` block from the boot |
 | `status` | run state and every counter from "What to measure", plus input, sample time, self-test mean and stop code |
 | `regs` | the clock, ADC, DMA, interrupt and UART registers as hex, plus the counters — the dump `docs/TROUBLESHOOTING.md` Part 4 asks for |
 | `start`, `stop` | start the burst stream / let the current buffer finish and stop |
@@ -501,36 +501,62 @@ like this on a good day:
 
 ```
 [boot] uart up on FRC, 115200 8N1
-[boot] adc_dma_40msps Sep 22 2026 15:02:11
-[clk] CLK1CON at entry: 0x00000101
-[clk] PLL1 locked, 320 MHz
-[clk] PLL2 locked, 200 MHz
-[boot] uart reclocked to PLL2, 115200 8N1
+[boot] adc_dma_40msps Sep 23 2026 16:02:11 git 3c58fe5 (master)
+[boot] RCON: 0x00000080
+[boot] reset cause: EXTR
+[build] adc_dma_40msps Sep 23 2026 16:02:11 git 3c58fe5 (master)
+[build] board: EV74H48A, dsPIC33AK512MPS512 GP DIM
+[build] adc core: 3
+[build] default input (pinsel): 5
+[build] default samc: 0
+[build] default rptcnt: 2
+[build] pacing (0 = auto): 0
+[build] sccp ticks: 5
+[build] samples per half: 1024
+[build] auto_sweep: 1
+[build] boot_verbose: 0
 
 adc_dma_40msps - ADC at 40 MSPS into RAM via DMA
 board: EV74H48A, dsPIC33AK512MPS512 GP DIM
-build: Sep 22 2026 15:02:11
+build: adc_dma_40msps Sep 23 2026 16:02:11 git 3c58fe5 (master)
 type 'help' for the commands
 please log this terminal from power-up and send it back
->
-[adc] core ready, Integration mode, CNT 2048
-[adc] pinsel: 5
-[adc] samc: 0
-[dma] channel 0 armed, IRQ on; address window = the buffer:
-[dma] DMALOW: 0x00004070
-[dma] DMAHIGH: 0x0000506F
+> [boot] register snapshot after init
+[regs] ...                      clock, ADC, DMA, capture and UART registers,
+[regs] uart                     the same dump the "regs" command prints
+...
 [boot] self-test on the internal reference
-[selftest] mean on internal 15/16 VDD (expect ~3840): 3851
+[selftest] mean on internal 15/16 VDD (expect ~3840): 3819
+[pacing] time base check, ticks per 100 ms (expect 1250000): 1250001
+[ratetest] pacing: ADC repeat timer (period in TAD = 12.5 ns)
+...
+[pacing] summary: repeat timer FAIL, SCCP1 timer FAIL, back-to-back runs
+[pacing] using: back-to-back (no rate control) - NO PACED SOURCE PASSED, the rate is not under control
+[boot] automatic rate sweep before the measurement (AUTO_SWEEP in board.h)
+[sweep] ...
 [boot] self-test passed, measurement running on the external input
-[stat] blocks=195312 overrun=0 late=0 missed=0 addr_err=0 bus_err=0 last=2047 input=5 samc=0 run=1
+[stat] blocks=195312 overrun=0 late=0 missed=0 addr_err=0 bus_err=0 last=2047 input=5 samc=0 pace=2 per=0 run=1 ad3if=0 rx=0 last=0x00 cr=0 lf=0
+[half] n=1 min=1990 max=2103 mean=2047 pp=113
 [stat] blocks=390624 overrun=0 ...
+[half] n=0 min=1988 max=2105 mean=2046 pp=117
 ```
 
-A `[stat]` line comes every 5 s for the first minute, then every minute. If a step
+A `[stat]` line comes every 5 s for the first minute, then every minute, each followed
+by a `[half]` line with min, max, mean and peak-to-peak of the last completed half - the
+same figures as the `stats` command, so the log says whether a signal is there. If a step
 fails, the log ends with `[FAIL] code n`, the reason in words, and the full register
 dump (`[regs] …`) — the same thing the `regs` command prints — and then LED0 blinks
 the code. **That log is what to send back** if the board is not on your desk: it
 answers most of `docs/TROUBLESHOOTING.md` Part 4 without a debugger.
+
+Everything the analysis needs is in that log by itself, nothing has to be typed: the
+build id with the git revision (a `+local changes` suffix means the tree had uncommitted
+edits; `unknown` means the build ran without git on the PATH), the board and every
+compile-time switch from `board.h` (`[build]`), the reset cause, the register snapshot
+after initialisation (`[regs]`, before anything runs), the self-test, the pacing verdicts,
+the sweep, and the signal statistics after every status line. The git revision comes from
+`tools/version.bat`, which the project's Makefile runs before every build, from the IDE
+and from the command line alike; it writes `version.h`, which is generated and not tracked.
 
 Two things about it are worth knowing:
 

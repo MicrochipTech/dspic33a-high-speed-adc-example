@@ -130,3 +130,75 @@ What the whole exercise is for, stated once: continuous sampling, ADC and DMA ru
 in the background into a ping-pong buffer, the CPU processing the half that is not
 being written. The sweep's `process` column is exactly that case, and the highest rate
 at which it shows `overrun 0` and `missed 0` is the answer for this device.
+
+## 2026-09-23, run 5 - master built 15:27 (pacing trial: repeat timer, SCCP1, back-to-back)
+
+The colleague's terminal, as pasted (the log is cut after the sweep header; whether a
+sweep row, `[stat]` lines or another boot followed is not known):
+
+```
+[boot] uart up on FRC, 115200 8N1
+[boot] adc_dma_40msps Sep 23 2026 15:27:16
+[boot] RCON: 0x00000080
+[boot] reset cause: EXTR
+
+adc_dma_40msps - ADC at 40 MSPS into RAM via DMA
+board: EV74H48A, dsPIC33AK512MPS512 GP DIM
+build: Sep 23 2026 15:27:17
+type 'help' for the commands
+please log this terminal from power-up and send it back
+> [boot] self-test on the internal reference
+[selftest] mean on internal 15/16 VDD (expect ~3840): 3819
+[pacing] time base check, ticks per 100 ms (expect 1250000): 1250001
+[ratetest] pacing: ADC repeat timer (period in TAD = 12.5 ns)
+[ratetest]   period: 16
+[ratetest]     nominal ksps: 5000
+[ratetest]     measured ksps: 36493
+[ratetest]     outside the 10 % window
+[ratetest]   FAIL
+[ratetest] pacing: SCCP1 timer (period in ticks of 10 ns)
+[ratetest]   period: 20
+[ratetest]     nominal ksps: 5000
+[ratetest]     measured ksps: 37898
+[ratetest]     outside the 10 % window
+[ratetest]   FAIL
+[ratetest] pacing: back-to-back (no rate control)
+[ratetest]   measured ksps (no period to compare with): 35284
+[ratetest]   PASS
+[pacing] summary: repeat timer FAIL, SCCP1 timer FAIL, back-to-back runs
+[pacing] using: back-to-back (no rate control) - NO PACED SOURCE PASSED, the rate is not under control
+[boot] automatic rate sweep before the measurement (AUTO_SWEEP in board.h)
+[sweep] halves per point: 2000
+[sweep] pacing: back-to-back (no rate control)
+[sweep] idle = CPU polls RAM only, process = main-loop processing, sfr = CPU polls an SFR
+[sweep] overrun must be 0 for a usable rate; late/missed are from the process run
+[sweep] nominal = the rate the period should give, measured = samples per second the DMA
+[sweep] delivered (Timer1), reg = the period read back from the hardware
+[sweep] timer check, ticks per 100 ms (expect 1250000): 1250001
+[sweep]
+```
+
+Reading: the time base is right (1 250 001 ticks per 100 ms, twice), so the measured
+rates are real. Neither paced source paces. With the repeat timer at RPTCNT 16 (nominal
+5 MSPS) the DMA received 36.5 MSPS, with SCCP1 at 20 ticks (nominal 5 MSPS) 37.9 MSPS,
+back-to-back 35.3 MSPS: three trigger sources, one rate, and it is the converter's own
+rate minus the burst-restart gap. Either the `TRG2SRC`/`RPTCNT` writes do not take
+(the register read-back, `reg` in a sweep row and `AD3CH0CON1` in the `regs` dump, would
+show that; neither is in this log), or in Integration mode the conversions inside a
+burst run back-to-back whatever `TRG2SRC` says and the repeat timer only matters for
+single conversions. The datasheet text (16.4.5) does not settle this; the board has.
+
+The log ends with `[sweep] ` and no row: the first (and, for back-to-back, only) sweep
+point did not print within whatever time the colleague waited. At 35 MSPS the three
+loads of 2000 halves take about 0.2 s; `sweep_point()` is bounded by
+`SWEEP_WAIT_LIMIT`, a trap would print `[TRAP]`, a `fail()` would print `[FAIL]`. So
+either the paste was taken while the row was still pending, or the CPU is starved the
+way run 4 described (every overrun raises the DMA interrupt, about 1.6 million per
+second at this rate). Open until the next, complete log.
+
+Changed for the next run, so that a log answers these questions by itself: the banner
+carries the git revision (`tools/version.bat` -> `version.h`, run before every build
+from the IDE and the command line), a `[build]` block prints board and every
+compile-time switch, a `[regs]` snapshot is printed after initialisation and before
+the self-test (`AD3CH0CON1` with `TRG2SRC` and `RPTCNT` included), and every `[stat]`
+line is followed by a `[half]` line with min/max/mean/pp of the last completed half.

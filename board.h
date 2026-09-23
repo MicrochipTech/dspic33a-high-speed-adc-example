@@ -91,4 +91,36 @@
 #define CONSOLE_TX_RPOR   _RP114R
 #define CONSOLE_TX_FN     21u             /* RP114 <- U2TX */
 
+
+/* Name of the board for the banner and the "version" command. */
+#define BOARD_NAME        "EV74H48A, dsPIC33AK512MPS512 GP DIM"
+
+/* Git revision of the working tree, written to version.h by
+ * tools/version.bat (MPLAB X pre-build step, build.bat) or version.sh
+ * (Makefile) before every build. A build that skipped the script says
+ * "unknown" - then the banner's date and time are all there is. */
+#ifdef __has_include
+# if __has_include("version.h")
+#  include "version.h"
+# endif
+#endif
+#ifndef GIT_REV
+#define GIT_REV           "unknown"
+#endif
+#ifndef GIT_BRANCH
+#define GIT_BRANCH        "unknown"
+#endif
+#ifndef GIT_DIRTY
+#define GIT_DIRTY         0
+#endif
+#if GIT_DIRTY
+#define GIT_DIRTY_TAG     "+local changes"
+#else
+#define GIT_DIRTY_TAG     ""
+#endif
+/* One line that identifies the firmware: what was built, when, from
+ * which commit. First line of every log. */
+#define BUILD_ID          "adc_dma_40msps " __DATE__ " " __TIME__ \
+                          " git " GIT_REV GIT_DIRTY_TAG " (" GIT_BRANCH ")"
+
 #endif /* BOARD_H */

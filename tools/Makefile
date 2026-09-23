@@ -32,19 +32,23 @@ OUTDIR   = ../build
 CFLAGS   = -mcpu=$(MCU) -mdfp="$(DFP)" -O1 -Wall -Wextra
 LDFLAGS  = -T"$(GLD)"
 
-.PHONY: all hex sim size clean
+.PHONY: all hex sim size clean version
 
 all: $(OUTDIR)/$(TARGET).elf
 
 $(OUTDIR):
 	mkdir -p $(OUTDIR)
 
-$(OUTDIR)/$(TARGET).elf: $(SRC) $(HDR) | $(OUTDIR)
+# Git revision for the banner -> ../version.h, rewritten only when it changes.
+version:
+	sh $(dir $(lastword $(MAKEFILE_LIST)))version.sh
+
+$(OUTDIR)/$(TARGET).elf: $(SRC) $(HDR) version | $(OUTDIR)
 	"$(CC)" $(CFLAGS) $(LDFLAGS) $(SRC) -o $@
 
 sim: $(OUTDIR)/$(TARGET)_sim.elf
 
-$(OUTDIR)/$(TARGET)_sim.elf: $(SRC_SIM) $(HDR) | $(OUTDIR)
+$(OUTDIR)/$(TARGET)_sim.elf: $(SRC_SIM) $(HDR) version | $(OUTDIR)
 	"$(CC)" $(CFLAGS) -D__MPLAB_DEBUGGER_SIMULATOR=1 -g $(LDFLAGS) $(SRC_SIM) -o $@
 
 hex: $(OUTDIR)/$(TARGET).elf

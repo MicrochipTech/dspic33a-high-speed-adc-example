@@ -43,6 +43,18 @@ tools\build.bat        hardware  -> build\adc_dma_40msps.elf/.hex   (must be -Wa
 tools\build.bat sim    simulator -> build\adc_dma_40msps_sim.elf    (same)
 ```
 
+`version.h` (git-ignored) carries the git revision for the banner. `tools/version.bat`
+writes it before every build: called by `build.bat`, by the `.build-pre` hook in
+`adc_dma_40msps.X/Makefile` (which the IDE runs, so the colleague's build gets it too)
+and, for `tools/Makefile`, by `tools/version.sh`. `board.h` includes it through
+`__has_include` and falls back to "unknown". Two pitfalls, both hit on 23.09.2026 with
+MPLAB X 6.35: do **not** put the step into `configurations.xml`
+(`makeCustomizationPreStep`) - the headless makefile generator then silently writes no
+`Makefile-*.mk` at all; and in the hook use exactly
+`cmd /c "$(subst /,\,$(CURDIR))\..\tools\version.bat"` - the IDE's make reports
+`SHELL=sh.exe` without having one, and neither a quoted relative path nor
+`cd ../tools &&` reached cmd intact (`'..' is not recognized`).
+
 MPLAB X project: configurations `EV74H48A_Curiosity_Platform_MPS512` (the board,
 PKOB4, `dma.c`) and `sim` (Simulator, `sim_dma.c`, `__MPLAB_DEBUGGER_SIMULATOR=1`);
 hardware configurations are named after the evaluation kit, order number first, so

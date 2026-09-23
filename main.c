@@ -67,9 +67,10 @@ int main(void)
     boot_mark(1u);
     console_early_init();
     boot_mark(2u);
-    console_puts("[boot] adc_dma_40msps " __DATE__ " " __TIME__ "\r\n");
+    console_puts("[boot] " BUILD_ID "\r\n");
     SIM_BANNER();                     /* simulator build: say so first   */
     diag_report_reset();              /* why are we booting? RCON        */
+    diag_report_build();              /* what runs: build, board, config */
 
     /* Did the previous run end in a trap? boot_stage/trap_* live in
      * persistent RAM, so say so now - an unhandled trap ends in "reset"
@@ -94,6 +95,12 @@ int main(void)
     boot_mark(6u);
     capture_init();
     boot_mark(7u);
+
+    /* Register snapshot after initialisation, before anything runs: the
+     * dump TROUBLESHOOTING.md Part 4 asks for, in every log, without
+     * anyone typing "regs". */
+    console_puts("[boot] register snapshot after init\r\n");
+    regs_dump();
 
     console_puts("[boot] self-test on the internal reference\r\n");
     {
@@ -143,6 +150,7 @@ int main(void)
                     next_status = blocks_done + STATUS_EVERY_HALVES;
                 } else {
                     console_status_line();
+                    console_half_stats();     /* is there a signal?  */
                     status_lines++;
                     next_status += (status_lines < STATUS_FAST_LINES)
                                    ? STATUS_EVERY_HALVES

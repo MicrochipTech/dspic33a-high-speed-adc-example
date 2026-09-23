@@ -126,6 +126,24 @@ static const struct { uint32_t mask; const char *name; } rcon_bits[] = {
     { _RCON_SLEEP_MASK,  "SLEEP"  },   /* woke from Sleep (not a reset)     */
 };
 
+void diag_report_build(void)
+{
+    console_puts("[build] " BUILD_ID "\r\n");
+    console_puts("[build] board: " BOARD_NAME "\r\n");
+    console_kv("[build] adc core", ADC_INSTANCE);
+    console_kv("[build] default input (pinsel)", ADC_PINSEL);
+    console_kv("[build] default samc", ADC_SAMC);
+    console_kv("[build] default rptcnt", ADC_RPTCNT);
+    console_kv("[build] pacing (0 = auto)", ADC_PACING);
+    console_kv("[build] sccp ticks", ADC_SCCP_TICKS);
+    console_kv("[build] samples per half", SAMPLES_PER_HALF);
+    console_kv("[build] auto_sweep", AUTO_SWEEP);
+    console_kv("[build] boot_verbose", BOOT_VERBOSE);
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+    console_puts("[build] simulator build (sim_dma.c, no ADC, no DMA)\r\n");
+#endif
+}
+
 void diag_report_reset(void)
 {
     const uint32_t rcon = RCON;

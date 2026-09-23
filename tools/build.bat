@@ -15,6 +15,9 @@ rem ---------------------------------------------------------------------
 
 setlocal
 
+rem Git revision for the banner -> ..ersion.h (writes "unknown" without git)
+call "%~dp0version.bat"
+
 set XC_DSC=C:\Program Files\Microchip\xc-dsc\v3.31
 set DFP=C:\Program Files\Microchip\MPLABX\v6.35\packs\Microchip\dsPIC33AK-MP_DFP\1.4.260\xc16
 

@@ -425,13 +425,9 @@ static void usage(const char *text)
 static void cmd_version_fn(int argc, char **argv)
 {
     (void)argc; (void)argv;
-    put_line("adc_dma_40msps " __DATE__ " " __TIME__);
-    put_line("board: EV74H48A, dsPIC33AK512MPS512 GP DIM");
-    put_kv("adc core", ADC_INSTANCE);
-    put_kv("default input", ADC_PINSEL);
-    put_kv("samples per half", SAMPLES_PER_HALF);
+    diag_report_build();          /* same block as at boot ([build] ...) */
 }
-CMD_DEFINE(version, "version", cmd_version_fn, "version - build, board, ADC core");
+CMD_DEFINE(version, "version", cmd_version_fn, "version - build id, git revision, board, configuration");
 
 static void cmd_status_fn(int argc, char **argv)
 {
@@ -518,21 +514,45 @@ static void cmd_selftest_fn(int argc, char **argv)
 }
 CMD_DEFINE(selftest, "selftest", cmd_selftest_fn, "selftest - sample the internal reference");
 
-static void cmd_stats_fn(int argc, char **argv)
+/* min/max/mean/pp of the completed half - shared by "stats" and the
+ * periodic [half] line. */
+static void half_stats(uint32_t *mn, uint32_t *mx, uint32_t *mean)
 {
     const volatile uint16_t *b = capture_completed_half();
-    uint32_t mn = 0xFFFFu, mx = 0u, acc = 0u;
-    (void)argc; (void)argv;
+    uint32_t lo = 0xFFFFu, hi = 0u, acc = 0u;
     for (uint32_t i = 0; i < SAMPLES_PER_HALF; i++) {
         const uint16_t v = b[i];
-        if (v < mn) { mn = v; }
-        if (v > mx) { mx = v; }
+        if (v < lo) { lo = v; }
+        if (v > hi) { hi = v; }
         acc += v;
     }
+    *mn = lo; *mx = hi; *mean = acc / SAMPLES_PER_HALF;
+}
+
+void console_half_stats(void)
+{
+    char line[96];
+    uint32_t mn, mx, mean;
+    half_stats(&mn, &mx, &mean);
+    char *p = copy_str(line, "[half] n=");
+    p = u32_to_str(p, ready_half);
+    p = copy_str(p, " min=");  p = u32_to_str(p, mn);
+    p = copy_str(p, " max=");  p = u32_to_str(p, mx);
+    p = copy_str(p, " mean="); p = u32_to_str(p, mean);
+    p = copy_str(p, " pp=");   p = u32_to_str(p, mx - mn);
+    copy_str(p, "\r\n");
+    console_puts(line);
+}
+
+static void cmd_stats_fn(int argc, char **argv)
+{
+    uint32_t mn, mx, mean;
+    (void)argc; (void)argv;
+    half_stats(&mn, &mx, &mean);
     put_kv("half", ready_half);
     put_kv("min", mn);
     put_kv("max", mx);
-    put_kv("mean", acc / SAMPLES_PER_HALF);
+    put_kv("mean", mean);
     put_kv("pp", mx - mn);
 }
 CMD_DEFINE(stats, "stats", cmd_stats_fn, "stats - min/max/mean of the completed half");
@@ -807,7 +827,7 @@ void cli_init(void)
                  "adc_dma_40msps - ADC at 40 MSPS into RAM via DMA\r\n"
                  SIM_BANNER_NOTE           /* empty on silicon            */
                  "board: EV74H48A, dsPIC33AK512MPS512 GP DIM\r\n"
-                 "build: " __DATE__ " " __TIME__ "\r\n"
+                 "build: " BUILD_ID "\r\n"
                  "type 'help' for the commands\r\n"
                  "please log this terminal from power-up and send it back\r\n");
 

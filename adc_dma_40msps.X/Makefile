@@ -55,6 +55,12 @@ build: .build-post
 
 .build-pre:
 # Add your pre 'build' code here...
+# Git revision for the firmware banner -> ../version.h (tools/version.bat; writes
+# "unknown" without git, never fails the build). Runs for every configuration,
+# from the IDE and from tools/_test_mplabx.bat alike. Absolute path with
+# backslashes, quoted: MPLAB X's make reports SHELL=sh.exe without having one,
+# and neither a relative path nor "cd ../tools &&" reached cmd intact.
+	-@cmd /c "$(subst /,\,$(CURDIR))\..\tools\version.bat"
 
 .build-post: .build-impl
 # Add your post 'build' code here...
