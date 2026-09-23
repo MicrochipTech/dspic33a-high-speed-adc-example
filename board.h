@@ -1,23 +1,128 @@
 /*
  * board.h
  *
- * Everything that ties the ADC/DMA example to the EV74H48A (dsPIC33
- * Curiosity Platform Development Board) with the dsPIC33AK512MPS512 GP
- * DIM: which ADC core and input, the LED pin, the console pins. Change
- * this file for another board or another input; the modules do not care.
+ * Everything that ties the ADC/DMA example to a board: which ADC core
+ * and input, the LED pin and its polarity, the console pins, the
+ * device. Two boards are known; BOARD selects one (the MPLAB X
+ * configurations and build.bat set it, the default is the EV74H48A):
+ *
+ *   BOARD_EV74H48A  dsPIC33 Curiosity Platform Development Board with the
+ *                   dsPIC33AK512MPS512 GP DIM (user guide DS70005562D, DIM
+ *                   info sheet DS70005563A). Console on the MCP2221A
+ *                   USB-UART channel, input on mikroBUS A.
+ *   BOARD_EV17P63A  dsPIC33AK512MPS506 Curiosity Nano (user guide
+ *                   DS70005634). Console on the debugger's CDC channel,
+ *                   input on the edge connector.
+ *
+ * The modules never look at BOARD; they use the macros below. The two
+ * devices share the ADC, the DMA, the clock tree and the RAM map, so
+ * the rest of the code is the same for both - only the device the
+ * compiler is told about (-mcpu, the project's target device) differs.
  */
 #ifndef BOARD_H
 #define BOARD_H
 
-/* ADC core and input. EV74H48A defaults: ADC3, AD3AN5 = mikroBUS A pin AN
- * (device pin RA0). The on-board potentiometer is AD5AN0 (RA7): set
- * ADC_INSTANCE 5, ADC_PINSEL 0 and a longer sample time for that. */
+#define BOARD_EV74H48A    1
+#define BOARD_EV17P63A    2
+
+#ifndef BOARD
+#define BOARD             BOARD_EV74H48A
+#endif
+
+#if BOARD == BOARD_EV74H48A
+/* ---------------------------------------------------------------- */
+#define BOARD_NAME        "EV74H48A, dsPIC33AK512MPS512 GP DIM"
+#if !defined(__dsPIC33AK512MPS512__)
+#warning "BOARD_EV74H48A carries a dsPIC33AK512MPS512 - is the project's device right?"
+#endif
+
+/* ADC core and input: ADC3, AD3AN5 = mikroBUS A pin AN (device pin
+ * RA0). The on-board potentiometer is AD5AN0 (RA7): set ADC_INSTANCE 5,
+ * ADC_PINSEL 0 and a longer sample time for that. */
 #ifndef ADC_INSTANCE
 #define ADC_INSTANCE      3
 #endif
 #ifndef ADC_PINSEL
 #define ADC_PINSEL        5u
 #endif
+#define BOARD_INPUT_NAME  "AD3AN5 = mikroBUS A pin AN (RA0)"
+
+/* LED0 is RC8, DIM pin 28 (DS70005563A Table 1), driven HIGH to light
+ * (DS70005562D 2.5). Port C has no ANSEL. */
+#define LED_TRIS          TRISCbits.TRISC8
+#define LED_LAT           LATCbits.LATC8
+#define LED_ACTIVE_LOW    0
+
+/* Console: UART2 on the MCP2221A USB-UART channel. U2TX -> RH1 (RP114,
+ * DIM pin P98 "UART_USB_TX"), U2RX <- RD1 (RP50, DIM pin P96
+ * "UART_USB_RX"). PPS: U2TX output function 21 (p613), input remap
+ * numbers from Table 11-19 (p611). Neither port has an analog function. */
+#define CONSOLE_TX_TRIS   TRISHbits.TRISH1
+#define CONSOLE_RX_TRIS   TRISDbits.TRISD1
+#define CONSOLE_RX_RPINR  _U2RXR
+#define CONSOLE_RX_RP     50u             /* RP50  -> U2RX */
+#define CONSOLE_TX_RPOR   _RP114R
+#define CONSOLE_TX_FN     21u             /* RP114 <- U2TX */
+#define CONSOLE_PORT_NAME "UART2 on the MCP2221A USB-UART channel (RH1/RD1)"
+/* The whole registers behind the pins, for the register dump: RPOR28
+ * holds RP112..115 (RP114R in bits 23:16), RPINR13 holds U2RXR. */
+#define CONSOLE_TX_TRIS_WORD  TRISH
+#define CONSOLE_RX_TRIS_WORD  TRISD
+#define CONSOLE_TX_RPOR_WORD  RPOR28
+#define CONSOLE_RX_RPINR_WORD RPINR13
+
+#elif BOARD == BOARD_EV17P63A
+/* ---------------------------------------------------------------- */
+#define BOARD_NAME        "EV17P63A, dsPIC33AK512MPS506 Curiosity Nano"
+#if !defined(__dsPIC33AK512MPS506__)
+#warning "BOARD_EV17P63A carries a dsPIC33AK512MPS506 - is the project's device right?"
+#endif
+
+/* ADC core and input: ADC1, AD1AN0 = RA2 (RP3, QFN64 pin 12, shared
+ * with OA1OUT/CMP1A; the op amp is off after reset), on the edge
+ * connector, labelled "RA2 / AD1AN0" (DS70005634 4.2, pin table). Port A
+ * ANSEL resets to analog (DS70005591D 11.3.6, p640: reset 1 = digital
+ * Schmitt trigger disabled), so nothing to set. */
+#ifndef ADC_INSTANCE
+#define ADC_INSTANCE      1
+#endif
+#ifndef ADC_PINSEL
+#define ADC_PINSEL        0u
+#endif
+#define BOARD_INPUT_NAME  "AD1AN0 = edge connector RA2"
+
+/* LED0 is RD0 (RP49), active LOW: driving the pin low lights it
+ * (DS70005634 4.2.2). Port D has no ANSEL. */
+#define LED_TRIS          TRISDbits.TRISD0
+#define LED_LAT           LATDbits.LATD0
+#define LED_ACTIVE_LOW    1
+
+/* Console: UART2 on the on-board debugger's CDC channel. DS70005634
+ * Table 4-x / 6.2: RC10 = RP43 is "UART TX (dsPIC33AK512MPS506 TX
+ * line)" = the debugger's CDC RX; RC11 = RP44 is "UART RX (... RX line)"
+ * = the debugger's CDC TX. So U2TX -> RC10, U2RX <- RC11. The UART
+ * instance stays 2 - only the pins differ from the other board. Port C
+ * has no ANSEL. */
+#define CONSOLE_TX_TRIS   TRISCbits.TRISC10
+#define CONSOLE_RX_TRIS   TRISCbits.TRISC11
+#define CONSOLE_RX_RPINR  _U2RXR
+#define CONSOLE_RX_RP     44u             /* RP44 (RC11) -> U2RX */
+#define CONSOLE_TX_RPOR   _RP43R
+#define CONSOLE_TX_FN     21u             /* RP43 (RC10) <- U2TX */
+#define CONSOLE_PORT_NAME "UART2 on the debugger's CDC channel (RC10/RC11)"
+/* For the register dump: RPOR10 holds RP40..43 (RP43R in bits 31:24),
+ * RPINR13 holds U2RXR; both console pins are on port C. */
+#define CONSOLE_TX_TRIS_WORD  TRISC
+#define CONSOLE_RX_TRIS_WORD  TRISC
+#define CONSOLE_TX_RPOR_WORD  RPOR10
+#define CONSOLE_RX_RPINR_WORD RPINR13
+
+#else
+#error "BOARD must be BOARD_EV74H48A or BOARD_EV17P63A"
+#endif
+
+/* ---- Board-independent choices ---------------------------------- */
+
 #ifndef ADC_SAMC
 #define ADC_SAMC          0u      /* sample time 0.5 TAD                      */
 #endif
@@ -71,24 +176,5 @@
 #define AUTO_SWEEP        1
 #endif
 #endif
-
-/* LED0 on the Curiosity Platform Development Board is RC8, DIM pin 28
- * (DIM info sheet DS70005563A, Table 1). The green LEDs are driven high
- * to light (user guide DS70005562D 2.5; Microchip's own example on this
- * board reports "LED0 HIGH during sampling"). Port C has no ANSEL. */
-#define LED_TRIS          TRISCbits.TRISC8
-#define LED_LAT           LATCbits.LATC8
-
-/* Console: UART2 on the MCP2221A USB-UART channel. U2TX -> RH1 (RP114,
- * DIM pin P98 "UART_USB_TX"), U2RX <- RD1 (RP50, DIM pin P96
- * "UART_USB_RX"). PPS codes: U2TX output function 21 (Table "Output
- * Selection for Remappable Pins", p613). Neither port has an analog
- * function. */
-#define CONSOLE_TX_TRIS   TRISHbits.TRISH1
-#define CONSOLE_RX_TRIS   TRISDbits.TRISD1
-#define CONSOLE_RX_RPINR  _U2RXR
-#define CONSOLE_RX_RP     50u             /* RP50  -> U2RX */
-#define CONSOLE_TX_RPOR   _RP114R
-#define CONSOLE_TX_FN     21u             /* RP114 <- U2TX */
 
 #endif /* BOARD_H */

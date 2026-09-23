@@ -64,6 +64,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "board.h"
+#include "adc.h"
 #include "timebase.h"
 #include "clock.h"
 #include "capture.h"
@@ -333,14 +334,16 @@ void console_regs_dump(void)
     console_kv_hex("U2STAT", U2STAT);
     console_kv_hex("U2BRG", U2BRG);
     /* Pin routing of the console itself: with a silent terminal these say
-     * whether console_early_init() took effect. Expected: IOLOCK set,
-     * RP114R (bits 14:8 of RPOR28) = 21 = 0x15, U2RXR (bits 23:16 of
-     * RPINR13) = 50 = 0x32, TRISH bit 1 clear, TRISD bit 1 set. */
+     * whether console_early_init() took effect. Expected: IOLOCK set, the
+     * TX pin's byte in its RPOR word = 21 = 0x15 (U2TX), U2RXR (bits 23:16
+     * of RPINR13) = the RX pin's remap number (board.h: 50 = 0x32 on the
+     * EV74H48A, 44 = 0x2C on the Nano), the TX pin's TRIS bit clear, the
+     * RX pin's TRIS bit set. */
     console_kv_hex("RPCON", RPCON);
-    console_kv_hex("RPOR28", RPOR28);
-    console_kv_hex("RPINR13", RPINR13);
-    console_kv_hex("TRISH", TRISH);
-    console_kv_hex("TRISD", TRISD);
+    console_kv_hex("RPORn (TX pin's word)", CONSOLE_TX_RPOR_WORD);
+    console_kv_hex("RPINRn (U2RXR's word)", CONSOLE_RX_RPINR_WORD);
+    console_kv_hex("TRISx (TX pin's port)", CONSOLE_TX_TRIS_WORD);
+    console_kv_hex("TRISx (RX pin's port)", CONSOLE_RX_TRIS_WORD);
 }
 
 #if BOOT_VERBOSE
@@ -390,7 +393,7 @@ void console_status_line(void)
      * the DMA trigger and stays masked (IEC6 = 0), so this flag being 1
      * while the DMA runs says the event is visible to the CPU - the
      * precondition for the vector-201 trap TROUBLESHOOTING 2.0b describes. */
-    p = copy_str(p, " ad3if=");    p = u32_to_str(p, (uint32_t)IFS6bits.AD3CH0IF);
+    p = copy_str(p, " adif=");     p = u32_to_str(p, adc_ch0_irq_flag());
     /* Receive diagnostics, see rx_count above. */
     p = copy_str(p, " rx=");       p = u32_to_str(p, rx_count);
     p = copy_str(p, " last=");     p = u32_to_hex(p, rx_last);
@@ -426,7 +429,9 @@ static void cmd_version_fn(int argc, char **argv)
 {
     (void)argc; (void)argv;
     put_line("adc_dma_40msps " __DATE__ " " __TIME__);
-    put_line("board: EV74H48A, dsPIC33AK512MPS512 GP DIM");
+    put_line("board: " BOARD_NAME);
+    put_line("input: " BOARD_INPUT_NAME);
+    put_line("console: " CONSOLE_PORT_NAME);
     put_kv("adc core", ADC_INSTANCE);
     put_kv("default input", ADC_PINSEL);
     put_kv("samples per half", SAMPLES_PER_HALF);
@@ -806,7 +811,7 @@ void cli_init(void)
     console_puts("\r\n"
                  "adc_dma_40msps - ADC at 40 MSPS into RAM via DMA\r\n"
                  SIM_BANNER_NOTE           /* empty on silicon            */
-                 "board: EV74H48A, dsPIC33AK512MPS512 GP DIM\r\n"
+                 "board: " BOARD_NAME "\r\n"
                  "build: " __DATE__ " " __TIME__ "\r\n"
                  "type 'help' for the commands\r\n"
                  "please log this terminal from power-up and send it back\r\n");

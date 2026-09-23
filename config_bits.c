@@ -59,7 +59,9 @@
  * would wipe exactly that. */
 #pragma config FDEVOPT_ALTI2C1 = OFF    /* primary I2C1 pins                   */
 #pragma config FDEVOPT_ALTI2C2 = OFF    /* primary I2C2 pins                   */
-#pragma config FDEVOPT_ALTI2C3 = OFF    /* primary I2C3 pins                   */
+#if !defined(__dsPIC33AK512MPS506__) && !defined(__dsPIC33AK512MPS505__)
+#pragma config FDEVOPT_ALTI2C3 = OFF    /* primary I2C3 pins - the 64-pin parts have no I2C3 and no such bit (pack ATDF) */
+#endif
 #pragma config FDEVOPT_BISTDIS = OFF    /* start-up RAM test disabled          */
 #pragma config FDEVOPT_SPI2PIN = OFF    /* SPI2 pins via PPS                   */
 

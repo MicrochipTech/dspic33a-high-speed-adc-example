@@ -42,6 +42,15 @@ $(OUTDIR):
 $(OUTDIR)/$(TARGET).elf: $(SRC) $(HDR) | $(OUTDIR)
 	"$(CC)" $(CFLAGS) $(LDFLAGS) $(SRC) -o $@
 
+#          make nano       dsPIC33AK512MPS506 Curiosity Nano (BOARD=2) -> ../build/adc_dma_40msps_nano.elf
+MCU_NANO = 33AK512MPS506
+GLD_NANO = $(DFP)/support/dsPIC33A/gld/p$(MCU_NANO).gld
+
+nano: $(OUTDIR)/$(TARGET)_nano.elf
+
+$(OUTDIR)/$(TARGET)_nano.elf: $(SRC) $(HDR) | $(OUTDIR)
+	"$(CC)" -mcpu=$(MCU_NANO) -mdfp="$(DFP)" -O1 -Wall -Wextra -DBOARD=2 -T"$(GLD_NANO)" $(SRC) -o $@
+
 sim: $(OUTDIR)/$(TARGET)_sim.elf
 
 $(OUTDIR)/$(TARGET)_sim.elf: $(SRC_SIM) $(HDR) | $(OUTDIR)

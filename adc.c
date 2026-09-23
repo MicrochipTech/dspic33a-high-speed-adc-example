@@ -88,13 +88,21 @@ void adc_init(uint8_t pinsel, uint8_t samc, uint8_t rptcnt)
     /* The channel-done event of this core is the DMA trigger. It must not
      * also reach the CPU: there is no handler for it, and with IRQSEL = 0
      * it would arrive on every conversion, 40 million times a second.
-     * IEC6 bit 9 (AD3CH0IE, IRQ 201) resets to 0, but a previous program
-     * or the debugger may have left it set, so clear ADC3's whole enable
-     * word (IRQ 192..223) and its flags before the core starts. If the
-     * trap report ever shows vector 201 with IEC6 = 0, the event reaches
-     * the CPU regardless of the enable, and this assumption is wrong. */
-    IEC6 = 0u;
-    IFS6 = 0u;
+     * The enables reset to 0, but a previous program or the debugger may
+     * have left one set, so clear the enable and the flag of every one
+     * of the core's twelve channel/comparator events (ADC_CH0_IRQ ..
+     * + 11; the IEC/IFS words are contiguous from IEC0/IFS0, 32 IRQs
+     * each) before the core starts. If the trap report ever shows one
+     * of those vectors with its enable clear, the event reaches the CPU
+     * regardless of the enable, and this assumption is wrong. */
+    {
+        volatile uint32_t *const iec = &IEC0;
+        volatile uint32_t *const ifs = &IFS0;
+        for (uint32_t irq = ADC_CH0_IRQ; irq < ADC_CH0_IRQ + ADC_IRQ_COUNT; irq++) {
+            iec[irq / 32u] &= ~(1ul << (irq % 32u));
+            ifs[irq / 32u] &= ~(1ul << (irq % 32u));
+        }
+    }
 
     ADCREG(CONbits).ON = 1;
     WAIT_WHILE(!ADCREG(CONbits).ADRDY, 5u);    /* wait for the core     */
@@ -149,6 +157,13 @@ void adc_regs_dump(void)
     console_kv_hex("ADxCH0CNT", ADCREG(CH0CNT));
     console_kv_hex("ADxCH0RES", ADCREG(CH0RES));
     console_kv_hex("ADxCH0DATA", ADCREG(CH0DATA));
-    console_kv_hex("IEC6", IEC6);           /* AD3CH0 enable,  bit 9     */
-    console_kv_hex("IFS6", IFS6);           /* AD3CH0 flag,    bit 9     */
+    /* The IEC/IFS word that holds the core's channel-0 event. */
+    console_kv("ch0 irq", ADC_CH0_IRQ);
+    console_kv_hex("IECn (word of ch0 irq)", (&IEC0)[ADC_CH0_IRQ / 32u]);
+    console_kv_hex("IFSn (word of ch0 irq)", (&IFS0)[ADC_CH0_IRQ / 32u]);
+}
+
+uint32_t adc_ch0_irq_flag(void)
+{
+    return ((&IFS0)[ADC_CH0_IRQ / 32u] >> (ADC_CH0_IRQ % 32u)) & 1u;
 }

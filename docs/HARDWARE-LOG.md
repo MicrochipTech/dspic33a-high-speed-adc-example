@@ -126,6 +126,21 @@ paced source that passed - back-to-back if none. `pacing <3|32|2>` and `period <
 change it at run time; the sweep steps the list of the active source (SCCP1: 80, 40,
 20, 10, 8, 5, 4 ticks = 1.25 to 25 MSPS, so 25 MSPS is on this grid).
 
+## 2026-09-23, branch `nano-board` - the second board, untested
+
+CLAAS will order the dsPIC33AK512MPS506 Curiosity Nano (EV17P63A) from 1 October, not
+the EV74H48A the measurements run on. Branch `nano-board` adds it without touching
+master: `board.h` carries two profiles (`BOARD`), the MPLAB X configuration `nano` and
+`build.bat nano` select the second one (device MPS506, `nEdbgTool`, `BOARD=2`). Facts
+from the Nano user guide DS70005634: LED0 RD0 active low, SW0 RC3, AD1AN0 on RA2 (RP3),
+the debugger's CDC channel on RC10 = RP43 (target TX) and RC11 = RP44 (target RX); from
+the datasheet: ANSEL resets to analog (p640), ADC1 channel 0 is IRQ 157 (IEC4 bit 29).
+Board-specific code that was hard-wired to ADC3 and to the EV74H48A pins (interrupt
+masking, the `adif=` field, the trap text, the routing registers in the dump, the
+banner) now derives from `ADC_INSTANCE` and `board.h`. Builds clean for both devices and
+the simulator; nothing on a Nano yet. Plan: master keeps the EV74H48A measurements,
+this branch takes them in by merge, and goes to master once a Nano has run it.
+
 What the whole exercise is for, stated once: continuous sampling, ADC and DMA running
 in the background into a ping-pong buffer, the CPU processing the half that is not
 being written. The sweep's `process` column is exactly that case, and the highest rate

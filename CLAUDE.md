@@ -14,7 +14,7 @@ before changing anything; the register writes in the code cite the datasheet
 | File | Owns | May call |
 |---|---|---|
 | `main.c` | start-up order, main loop | everything below |
-| `board.h` | pins, ADC core/input, `AUTO_SWEEP` | – |
+| `board.h` | two board profiles selected by `BOARD` (EV74H48A with the MPS512 DIM, default; EV17P63A Curiosity Nano with the MPS506): pins, ADC core/input, LED polarity, console pins; plus `ADC_PACING`, `AUTO_SWEEP`, `BOOT_VERBOSE` | – |
 | `config_bits.c` | every configuration word, with reasons | – |
 | `clock.c/.h` | PLLs, clock generators, clock-fail interrupt, `clock_cpu_on_pll()` | console, diag |
 | `adc.c/.h` | the ADC core: init, burst trigger, PINSEL/SAMC register | console, diag |
@@ -43,8 +43,10 @@ tools\build.bat        hardware  -> build\adc_dma_40msps.elf/.hex   (must be -Wa
 tools\build.bat sim    simulator -> build\adc_dma_40msps_sim.elf    (same)
 ```
 
-MPLAB X project: configurations `default` (PKOB4, `dma.c`) and `sim` (Simulator,
-`sim_dma.c`, `__MPLAB_DEBUGGER_SIMULATOR=1`). `tools\_test_mplabx.bat` builds `default`
+MPLAB X project: configurations `default` (EV74H48A, PKOB4, `dma.c`), `nano`
+(EV17P63A Curiosity Nano: device dsPIC33AK512MPS506, `nEdbgTool`, `BOARD=2`) and `sim`
+(Simulator, `sim_dma.c`, `__MPLAB_DEBUGGER_SIMULATOR=1`). Command line:
+`tools\build.bat`, `tools\build.bat nano`, `tools\build.bat sim`. `tools\_test_mplabx.bat` builds `default`
 from the command line through MPLAB X's own makefile generator. Two pitfalls: the
 generator rewrites `languageToolchainVersion` in `nbproject/configurations.xml` to
 whatever compiler it finds first - restore that one line, never `git checkout` the

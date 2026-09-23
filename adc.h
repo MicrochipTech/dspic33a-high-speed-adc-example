@@ -20,19 +20,36 @@
 #define ADC_CAT(a, b, c)   ADC_CAT_(a, b, c)
 #define ADCREG(suffix)     ADC_CAT(AD, ADC_INSTANCE, suffix)
 
+/* ADC_CH0_IRQ is the interrupt number of "ADCn data channel 0 done"
+ * (ATDF interrupt list: AD1CH0 157, AD2CH0 179, AD3CH0 201, AD4CH0 221,
+ * AD5CH0 241); the core's twelve channel/comparator events follow it
+ * (CH0, CMP0, CH1, CMP1 ... CH5, CMP5 = IRQ .. IRQ + 11). The enable and
+ * flag bits sit in IEC[IRQ / 32] bit IRQ % 32 - for ADC3 that is IEC6
+ * bit 9, for ADC1 IEC4 bit 29 (device header _IEC4_AD1CH0IE_MASK). */
 #if   ADC_INSTANCE == 1
 #define DMA_TRIG_ADC_CH0   0x2Fu
+#define ADC_CH0_IRQ        157u
 #elif ADC_INSTANCE == 2
 #define DMA_TRIG_ADC_CH0   0x35u
+#define ADC_CH0_IRQ        179u
 #elif ADC_INSTANCE == 3
 #define DMA_TRIG_ADC_CH0   0x3Bu
+#define ADC_CH0_IRQ        201u
 #elif ADC_INSTANCE == 4
 #define DMA_TRIG_ADC_CH0   0x41u
+#define ADC_CH0_IRQ        221u
 #elif ADC_INSTANCE == 5
 #define DMA_TRIG_ADC_CH0   0x48u
+#define ADC_CH0_IRQ        241u
 #else
 #error "ADC_INSTANCE must be 1..5"
 #endif
+#define ADC_IRQ_COUNT      12u      /* CH0..CH5 and CMP0..CMP5 of the core */
+
+/* The core's channel-0 event as the CPU sees it (IFS bit), for the
+ * status line: 1 while the DMA runs means the event is visible to the
+ * CPU although its enable is clear. */
+uint32_t adc_ch0_irq_flag(void);
 
 /* ADC core ADC_INSTANCE, channel 0, Integration mode, CNT = SAMPLES_PER_BUF,
  * conversions inside a burst paced by the ADC's repeat timer with period

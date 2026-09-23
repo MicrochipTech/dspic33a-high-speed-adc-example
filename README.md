@@ -127,7 +127,8 @@ of use — so every setting can be checked against the primary source.
 ## Getting started
 
 **You need:** an EV74H48A (dsPIC33 Curiosity Platform Development Board) with the
-dsPIC33AK512MPS512 GP DIM, a USB cable, MPLAB X with the XC-DSC compiler and the
+dsPIC33AK512MPS512 GP DIM — or a dsPIC33AK512MPS506 Curiosity Nano (EV17P63A), then
+pick the MPLAB X configuration `nano` — a USB cable, MPLAB X with the XC-DSC compiler and the
 dsPIC33AK-MP device pack (MPLAB X offers to download the pack when you open the
 project). A signal source is optional — the self-test does not need one. A terminal
 program (Tera Term, PuTTY, MPLAB Data Visualizer's terminal) is optional too — the LED
@@ -205,6 +206,30 @@ host compiler without a board.
 The `tools/` folder builds the same file from the command line without the IDE. **You
 can ignore it** — we use it to check that the code compiles against different
 compiler and pack versions.
+
+### The other board: dsPIC33AK512MPS506 Curiosity Nano (EV17P63A)
+
+The same code runs on the Curiosity Nano, which carries the 64-pin
+**dsPIC33AK512MPS506** (user guide DS70005634). Everything that differs is in
+`board.h` under `BOARD_EV17P63A`, and the MPLAB X configuration **`nano`** selects it
+(device MPS506, the on-board debugger `nEdbgTool`, `BOARD=2`); on the command line it is
+`tools\build.bat nano` or `make -C tools nano`. The two devices share the ADC, the DMA,
+the clock tree and the RAM map; the only configuration word that differs is
+`FDEVOPT_ALTI2C3`, which the 64-pin part does not have.
+
+| Function | Pin | Where | Notes |
+|---|---|---|---|
+| **Analog input** AD1AN0 | RA2 (RP3, QFN64 pin 12) | edge connector, labelled "RA2 / AD1AN0" | `ADC_INSTANCE 1`, `ADC_PINSEL 0`; shares the pin with OA1OUT/CMP1A, both off after reset |
+| Internal reference ADxAN6 | — | inside the ADC | 15/16·VDD, the self-test input on every core |
+| **LED0** | RD0 (RP49) | the yellow LED | **active low** — `LED_ACTIVE_LOW 1` |
+| SW0 | RC3 (RP36) | push button | no external pull-up; not used by this example |
+| **Console UART2** | TX RC10 (RP43), RX RC11 (RP44) | the debugger's CDC channel, one COM port | 115200 8N1; DS70005634 6.2: RC10 is the target's TX line (debugger CDC RX), RC11 the target's RX line (debugger CDC TX) |
+| Debugger | — | the on-board nEDBG via the USB connector | programming, debugging and the console share the one cable |
+| GND | — | edge connector | signal ground for the generator |
+
+The generator goes to RA2 and GND on the edge connector. Nothing on the Nano has run
+yet at the time of writing (`docs/HARDWARE-LOG.md`); the EV74H48A is where the
+measurements come from, and the results carry over because the silicon is the same.
 
 ## First run on hardware
 

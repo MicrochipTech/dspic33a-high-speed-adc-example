@@ -29,6 +29,13 @@ if /i "%1"=="sim" (
   set EXTRA=-D__MPLAB_DEBUGGER_SIMULATOR=1 -g
   set OUT=..\build\%TARGET%_sim
 )
+rem  build.bat nano   the dsPIC33AK512MPS506 Curiosity Nano (EV17P63A): other
+rem                   device, other pins (BOARD in board.h) -> ..\build\adc_dma_40msps_nano.elf/.hex
+if /i "%1"=="nano" (
+  set MCU=33AK512MPS506
+  set EXTRA=-DBOARD=2
+  set OUT=..\build\%TARGET%_nano
+)
 set SOURCES=..\main.c ..\config_bits.c ..\clock.c ..\adc.c %DMA% ..\capture.c ..\led.c ..\diag.c ..\timebase.c ..\sccp.c ..\cli.c ..\cmd_parser.c
 
 if not exist ..\build mkdir ..\build

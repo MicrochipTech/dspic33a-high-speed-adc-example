@@ -16,14 +16,15 @@
 #include "board.h"
 #include "led.h"
 
-/* LED0 on the Curiosity Platform Development Board is RC8, DIM pin 28
- * (DIM info sheet DS70005563A, Table 1). The green LEDs are driven high
- * to light (user guide DS70005562D 2.5; Microchip's own example on this
- * board reports "LED0 HIGH during sampling"). Port C has no ANSEL. */
-#define LED_TRIS          TRISCbits.TRISC8
-#define LED_LAT           LATCbits.LATC8
+/* Pin and polarity come from board.h: RC8 driven high on the EV74H48A,
+ * RD0 driven low on the Curiosity Nano. */
+#if LED_ACTIVE_LOW
+#define LED_ON()          (LED_LAT = 0u)
+#define LED_OFF()         (LED_LAT = 1u)
+#else
 #define LED_ON()          (LED_LAT = 1u)
 #define LED_OFF()         (LED_LAT = 0u)
+#endif
 #define LED_TOGGLE()      (LED_LAT = (uint8_t)!LED_LAT)
 
 

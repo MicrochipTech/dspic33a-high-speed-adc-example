@@ -197,10 +197,10 @@ static void trap_report(uint32_t vec)
         } else if ((vec == 9u) || (vec == 10u)) {
             console_puts("[TRAP] vector 9/10 = clock fail / clock error: the FSCM saw"
                          " the system clock stop; OSCCTRL, PLL2CON, CLK1CON below\r\n");
-        } else if ((vec >= 201u) && (vec <= 212u)) {
-            console_puts("[TRAP] vector 201..212 = an ADC3 channel or comparator event"
-                         " reached the CPU; it is meant to trigger only the DMA."
-                         " IEC6 below says whether it was enabled\r\n");
+        } else if ((vec >= ADC_CH0_IRQ) && (vec < ADC_CH0_IRQ + ADC_IRQ_COUNT)) {
+            console_kv("[TRAP] a channel or comparator event of the ADC core in use"
+                       " reached the CPU; it is meant to trigger only the DMA."
+                       " The IECn word in the dump says whether it was enabled. ch0 irq", ADC_CH0_IRQ);
         } else {
             console_puts("[TRAP] a peripheral raised an interrupt we do not handle;"
                          " look up the number in the ATDF interrupt list\r\n");
