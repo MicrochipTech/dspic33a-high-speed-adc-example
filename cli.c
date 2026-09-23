@@ -150,6 +150,11 @@ static void console_drain(void)
     while (!U2STATbits.TXMTIF && (--n != 0u)) { }   /* shift reg empty too */
 }
 
+void console_flush(void)
+{
+    console_drain();
+}
+
 /* Bring the console back up from scratch, assuming nothing about the
  * current state of the pins, the PPS mapping or the UART.
  *

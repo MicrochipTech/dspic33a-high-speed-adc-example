@@ -18,6 +18,12 @@ void console_sync_baud(void);
  * the current state. Used by the trap handler, which cannot rely on the
  * console still being intact. */
 void console_force_up(void);
+/* Wait (bounded) until the transmitter is empty, shift register included.
+ * console_puts() returns as soon as the last character is in the FIFO,
+ * so anything that changes the clock or the baud generator right after
+ * a message must call this first, or the tail of the message goes out
+ * at the wrong rate. */
+void console_flush(void);
 /* Blocking trace output, safe from main() and from fail(). */
 void console_puts(const char *s);
 void console_kv(const char *key, uint32_t v);        /* "key: 123"        */

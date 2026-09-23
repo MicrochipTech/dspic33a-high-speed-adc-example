@@ -128,6 +128,10 @@ static void trap_report(uint32_t vec)
         console_puts("\r\n[TRAP] unhandled vector or CPU trap\r\n");
         console_kv("[TRAP] INTTREG.VECNUM", vec);
         console_kv("[TRAP] INTTREG.ILR", (uint32_t)INTTREGbits.ILR);
+        /* PCTRAP holds the program counter at the moment of a trap. Look
+         * it up in the .map file or with "xc-dsc-nm -n" on the ELF: the
+         * function whose address is just below it is where it happened. */
+        console_kv_hex("[TRAP] PCTRAP (PC at the trap)", PCTRAP);
         console_kv("[TRAP] reached boot stage", boot_stage);
         console_puts("[TRAP] last step completed: ");
         console_puts((boot_stage < 10u) ? boot_text[boot_stage] : "unknown");
@@ -136,6 +140,14 @@ static void trap_report(uint32_t vec)
             console_puts("[TRAP] vector 1 = CPU/FPU: read INTCON1/3/4 below\r\n");
         } else if (vec == 0u) {
             console_puts("[TRAP] vector 0 = COMMON (collapsed) interrupt\r\n");
+        } else if ((vec >= 2u) && (vec <= 5u)) {
+            console_puts("[TRAP] vector 2..5 = X RAM ECC / Y RAM ECC / PBU parity / NVM ECC:"
+                         " a memory error. RAM on this device is ECC-protected and a word"
+                         " never written since power-up has random check bits, so READING"
+                         " uninitialised RAM raises this (persistent variables, a buffer"
+                         " read before it was filled, a 16-bit write into a never-written"
+                         " 32-bit word). PCTRAP above says where; INTCON3 below says"
+                         " whether it escalated to a bus-error trap\r\n");
         } else if ((vec == 9u) || (vec == 10u)) {
             console_puts("[TRAP] vector 9/10 = clock fail / clock error: the FSCM saw"
                          " the system clock stop; OSCCTRL, PLL2CON, CLK1CON below\r\n");
@@ -242,5 +254,6 @@ void regs_dump(void)
     console_regs_dump();
     console_puts("[regs] cpu\r\n");
     console_kv_hex("INTCON1", INTCON1);
+    console_kv_hex("PCTRAP", PCTRAP);
     console_kv("fail_code", fail_code);
 }

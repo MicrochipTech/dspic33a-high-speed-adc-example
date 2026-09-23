@@ -139,6 +139,10 @@ void clock_init(void)
     PLL2CONbits.DIVSWEN = 1u;
     WAIT_WHILE(PLL2CONbits.DIVSWEN, 2u);
     console_puts("[clk] PLL2 locked, 200 MHz\r\n");
+    /* Let that line leave the shift register before the CPU clock, and
+     * with it the baud rate, changes 25x. Seen on the board: without
+     * this the tail of the line came out as garbage. */
+    console_flush();
 
     /* ---- CLKGEN1 = system clock, from PLL2, no divider ----
      * DS70005591D 12.4.9, p795: "Clock Generator 1 is the clock source
