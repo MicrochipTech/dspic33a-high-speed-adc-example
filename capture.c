@@ -68,7 +68,21 @@
  * fits. Aligned to 4 bytes: the DMA writes through a 32-bit path and
  * unaligned buffers are asking for trouble.
  * ------------------------------------------------------------------ */
-volatile uint16_t buf[SAMPLES_PER_BUF] __attribute__((aligned(4)));
+/* Guard words directly behind the buffer, in the same struct so that the
+ * linker cannot put anything between. capture_init() fills them with a
+ * pattern, capture_service() and the self-test check them: if the DMA
+ * writes one transaction past the buffer - wrong SIZE encoding, wrong
+ * CNT semantics, wrong DAMODE - this is the first memory it hits, and
+ * the run stops in fail(11) with the words printed instead of dying
+ * somewhere in the variables or the stack that follow. */
+#define BUF_GUARD_WORDS       16u
+#define BUF_GUARD_PATTERN(i)  (0xA5C3F00Du + (i))
+
+static volatile struct {
+    uint16_t data[SAMPLES_PER_BUF];
+    uint32_t guard[BUF_GUARD_WORDS];
+} buf_store __attribute__((aligned(4)));
+#define buf (buf_store.data)
 
 /* ------------------------------------------------------------------ *
  * Measurement counters - the actual point of this program
@@ -119,7 +133,23 @@ static void start_burst(void)
  * ------------------------------------------------------------------ */
 void capture_init(void)
 {
+    for (uint32_t i = 0; i < BUF_GUARD_WORDS; i++) {
+        buf_store.guard[i] = BUF_GUARD_PATTERN(i);
+    }
     dma0_init(DMA_TRIG_ADC_CH0, &ADCREG(CH0RES), buf, SAMPLES_PER_BUF);
+}
+
+/* Stop with code 11 if anything wrote past the end of the buffer. */
+static void guard_check(void)
+{
+    for (uint32_t i = 0; i < BUF_GUARD_WORDS; i++) {
+        if (buf_store.guard[i] != BUF_GUARD_PATTERN(i)) {
+            console_kv("[guard] word behind the buffer changed, index", i);
+            console_kv_hex("[guard] value", buf_store.guard[i]);
+            console_kv_hex("[guard] expected", BUF_GUARD_PATTERN(i));
+            fail(11u);
+        }
+    }
 }
 
 /* Switch the stream off hard, so that a 40 MSPS stream does not keep
@@ -294,6 +324,7 @@ bool capture_service(void)
     }
     seen_blocks = done;
     process_buffer(capture_completed_half(), SAMPLES_PER_HALF);
+    guard_check();                    /* did the DMA stay inside buf?    */
 
     /* Heartbeat: slow while clean, fast once any error counter moved. */
     if (led_get_mode() == 2u) {
@@ -316,6 +347,7 @@ static uint32_t wait_for_blocks(uint32_t target)
         if (!dma0_enabled()) { return 8u; }
         if (--n == 0u)       { return 6u; }
     }
+    guard_check();
     return 0u;
 }
 
@@ -370,4 +402,10 @@ void capture_regs_dump(void)
     console_kv("dma_addr_err", dma_addr_err);
     console_kv("dma_bus_err", dma_bus_err);
     console_kv("selftest_mean", selftest_mean);
+    /* The guard words behind the buffer: all must read 0xA5C3F00D + i. */
+    console_kv_hex("buf", (uint32_t)buf);
+    console_kv_hex("buf_end", (uint32_t)&buf[SAMPLES_PER_BUF]);
+    console_kv_hex("guard0", buf_store.guard[0]);
+    console_kv_hex("guard1", buf_store.guard[1]);
+    console_kv_hex("guard15", buf_store.guard[BUF_GUARD_WORDS - 1u]);
 }

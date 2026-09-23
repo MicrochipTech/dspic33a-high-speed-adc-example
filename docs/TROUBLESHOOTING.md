@@ -294,6 +294,7 @@ already contains what the "Where to look" column below asks for.
 | 8 | self-test or main loop | `DMA0CHbits.CHEN` went to 0 on its own | address fault: `dma_addr_err`, `DMALOW`, `DMAHIGH` |
 | 9 | anywhere | CPU trap or an interrupt with no handler | the `[TRAP]` block on the console, §2.0b |
 | 10 | `_CLKFInterrupt()` | the fail-safe clock monitor moved the CPU to the backup FRC (IRQ 9) | `[CLKF]` lines: `OSCCTRL` (is `PLL2RDY` still set?), `PLL2CON`, `CLK1CON.COSC`; a supply dip or a PLL2 divider outside its limits are the usual causes |
+| 11 | `capture_service()` or the self-test | one of the 16 guard words directly behind the sample buffer changed: something wrote past the end of `buf` | the `[guard]` lines say which word and what it holds; `buf`/`buf_end`/`guard*` in the dump. If the value looks like a sample (12-bit), the DMA ran past the buffer — check `DMA0CNT` against the buffer size and the `SIZE` encoding in `dma.c` |
 
 The blink *speed* depends on which clock the CPU is on when it stops (8 MHz FRC for
 codes 1 and 2, 200 MHz afterwards); the code is chosen so that it reads the same either

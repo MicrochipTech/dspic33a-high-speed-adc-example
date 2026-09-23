@@ -15,7 +15,8 @@
 #define SAMPLES_PER_BUF   (2u * SAMPLES_PER_HALF)
 
 /* ---- Measurement state (defined in capture.c) ---- */
-extern volatile uint16_t buf[SAMPLES_PER_BUF];
+/* The sample buffer itself is private to capture.c (it sits in a struct
+ * with guard words behind it); readers use capture_completed_half(). */
 
 extern volatile uint32_t blocks_done;    /* completed buffer halves        */
 extern volatile uint32_t dma_overrun;    /* DMA triggered while busy       */

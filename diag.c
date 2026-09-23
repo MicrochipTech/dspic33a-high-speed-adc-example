@@ -46,6 +46,7 @@ volatile uint32_t trap_stage __attribute__((persistent));
  *   8     DMA channel switched itself off (CHEN = 0) self-test / run
  *   9     CPU trap or unhandled interrupt            _DefaultInterrupt()
  *   10    clock fail: FSCM moved the CPU to BFRC     _CLKFInterrupt()
+ *   11    guard words behind the buffer changed      capture.c guard_check()
  *
  * Pattern: <code> short blinks, one long pause, repeat. The blink speed
  * depends on which clock the CPU is on at the time; the count is what
@@ -63,6 +64,7 @@ static const char *const fail_text[] = {
     "DMA channel switched itself off (CHEN = 0)",
     "CPU trap or unhandled interrupt - see the [TRAP] lines",
     "clock fail - the FSCM moved the CPU to the backup FRC, see the [CLKF] lines",
+    "something wrote past the end of the sample buffer - see the [guard] lines",
 };
 #define FAIL_TEXT_N  (sizeof fail_text / sizeof fail_text[0])
 

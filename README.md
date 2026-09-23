@@ -220,6 +220,8 @@ The stop codes:
 | 7 | self-test value out of range | `selftest_mean` — expected ≈ 3840, window 3648 … 4032 |
 | 8 | the DMA channel switched itself off | `dma_addr_err`, `DMALOW`, `DMAHIGH` |
 | 9 | a CPU trap or an interrupt with no handler | the `[TRAP]` block on the console — it names the vector, the boot stage and the `INTCON*` cause bits. `docs/TROUBLESHOOTING.md` §2.0b |
+| 10 | the fail-safe clock monitor moved the CPU to the backup FRC | the `[CLKF]` lines: `OSCCTRL`, `PLL2CON`, `CLK1CON` |
+| 11 | something wrote past the end of the sample buffer | the `[guard]` lines: which of the 16 guard words behind `buf` changed and what it holds. A 12-bit value there means the DMA ran past the buffer |
 
 **What the self-test proves.** Before the external pin is used, the code runs the
 identical clock, ADC, DMA and interrupt chain on the ADC's internal 15/16·VDD reference
