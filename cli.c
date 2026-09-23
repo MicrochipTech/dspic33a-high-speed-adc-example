@@ -61,6 +61,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <libpic30.h>       /* __delay32(), for the sweep's timer check */
 #include "board.h"
 #include "clock.h"
 #include "capture.h"
@@ -597,11 +598,31 @@ CMD_DEFINE(led, "led", cmd_led_fn, "led on|off|auto - LED0");
 #define SWEEP_HALVES_DEFAULT  2000u          /* 2 M samples per point   */
 #define SWEEP_WAIT_LIMIT      400000000u     /* loop iterations, ~10 s  */
 
+/* Time base for the MEASURED rate: Timer1, 32-bit, free running on the
+ * peripheral clock with prescaler 1:8. The peripheral clock is the
+ * 100 MHz the UART's baud generator runs on, so one tick is 80 ns and
+ * the counter wraps after 343 s - longer than any sweep. The rate the
+ * first board sweep printed was the nominal 40/(SAMC+1); the counters
+ * said it was not what the ADC did (equal overruns at every "rate",
+ * halves missed at 1.25 MSPS), so from now on the sweep measures. The
+ * time base itself is checked once against __delay32() and printed. */
+#define SWEEP_TICK_HZ         12500000u      /* 100 MHz / 8             */
+
+static void sweep_timer_init(void)
+{
+    T1CON = 0u;                       /* off, internal clock, no gate    */
+    TMR1  = 0u;
+    PR1   = 0xFFFFFFFFu;              /* free running, 32 bit            */
+    T1CONbits.TCKPS = 1u;             /* 1:8                             */
+    T1CONbits.ON    = 1u;
+}
+
 enum sweep_load { SWEEP_IDLE = 0, SWEEP_PROCESS = 1, SWEEP_SFR = 2 };
 
 /* Run `halves` halves at `samc` with the CPU under `load` meanwhile.
- * Returns false if the stream stopped or never delivered. */
-static bool sweep_point(uint8_t samc, uint32_t halves, enum sweep_load load)
+ * *ticks receives the Timer1 ticks the halves took. Returns false if
+ * the stream stopped or never delivered. */
+static bool sweep_point(uint8_t samc, uint32_t halves, enum sweep_load load, uint32_t *ticks)
 {
     uint32_t n = SWEEP_WAIT_LIMIT;
     capture_stop();
@@ -610,6 +631,7 @@ static bool sweep_point(uint8_t samc, uint32_t halves, enum sweep_load load)
     (void)capture_set_input(capture_pinsel(), samc);   /* idle: applied now */
     counters_clear();
     const uint32_t target = blocks_done + halves;
+    const uint32_t t0 = TMR1;
     capture_start();
     n = SWEEP_WAIT_LIMIT;
     while (blocks_done < target) {
@@ -618,25 +640,34 @@ static bool sweep_point(uint8_t samc, uint32_t halves, enum sweep_load load)
         else if (load == SWEEP_SFR)     { (void)U2STAT; }
         if (--n == 0u) { capture_stop(); return false; }
     }
+    *ticks = TMR1 - t0;               /* unsigned: wrap-safe             */
     capture_stop();
     return true;
 }
 
 static void sweep_row(uint8_t samc, uint32_t halves)
 {
-    uint32_t ov[3];
+    uint32_t ov[3], ticks[3] = { 0, 0, 0 };
     bool     ok[3];
     uint32_t late = 0, missed = 0;
     for (int l = 0; l < 3; l++) {
-        ok[l] = sweep_point(samc, halves, (enum sweep_load)l);
+        ok[l] = sweep_point(samc, halves, (enum sweep_load)l, &ticks[l]);
         ov[l] = dma_overrun;
         if (l == SWEEP_PROCESS) { late = late_service; missed = proc_missed; }
     }
-    /* Longest line: 116 characters plus NUL; every number is at most
+    /* Measured rate of the idle run: samples per second / 1000. 64-bit
+     * arithmetic, 2 M samples x 12.5 M ticks/s overflows 32 bits. */
+    uint32_t meas_ksps = 0;
+    if (ok[0] && (ticks[0] != 0u)) {
+        meas_ksps = (uint32_t)(((uint64_t)halves * SAMPLES_PER_HALF * SWEEP_TICK_HZ / 1000u) / ticks[0]);
+    }
+    /* Longest line: 150 characters plus NUL; every number is at most
      * 10 digits, "STOPPED" is shorter. */
-    char line[128];
+    char line[176];
     char *p = copy_str(line, "samc ");        p = u32_to_str(p, samc);
-    p = copy_str(p, "  ksps ");               p = u32_to_str(p, 40000u / ((uint32_t)samc + 1u));
+    p = copy_str(p, " (reg ");                p = u32_to_str(p, capture_samc());
+    p = copy_str(p, ")  ksps nominal ");      p = u32_to_str(p, 40000u / ((uint32_t)samc + 1u));
+    p = copy_str(p, " measured ");            p = u32_to_str(p, meas_ksps);
     p = copy_str(p, "  overrun idle/process/sfr ");
     for (int l = 0; l < 3; l++) {
         if (l) { *p++ = '/'; }
@@ -661,7 +692,18 @@ void console_sweep(uint32_t halves)
 
     console_kv("[sweep] halves per point", halves);
     console_puts("[sweep] idle = CPU polls RAM only, process = main-loop processing, sfr = CPU polls an SFR\r\n"
-                 "[sweep] overrun must be 0 for a usable rate; late/missed are from the process run\r\n");
+                 "[sweep] overrun must be 0 for a usable rate; late/missed are from the process run\r\n"
+                 "[sweep] measured = samples per second seen by the DMA (Timer1), reg = SAMC read back\r\n");
+
+    /* Time base check: 100 ms of CPU time (200 MHz) must be 1 250 000
+     * ticks. Anything else and the measured rates are off by the same
+     * factor - and the assumption about the timer's clock is wrong. */
+    sweep_timer_init();
+    {
+        const uint32_t t0 = TMR1;
+        __delay32(20000000ul);
+        console_kv("[sweep] timer check, ticks per 100 ms (expect 1250000)", TMR1 - t0);
+    }
     for (uint32_t i = 0; i < sizeof samcs / sizeof samcs[0]; i++) {
         console_puts("[sweep] ");
         sweep_row(samcs[i], halves);
