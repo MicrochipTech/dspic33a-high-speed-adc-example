@@ -55,6 +55,9 @@ uint8_t capture_samc(void);
  * ADC_TRG2_REPEAT: the ADC's repeat timer, period in TAD (12.5 ns), 2..63.
  * ADC_TRG2_SCCP1:  SCCP1 timer, period in ticks of 10 ns, 2..65535.
  * ADC_TRG2_B2B:    back-to-back, no period, as fast as the converter goes.
+ * ADC_PACE_CLKDIV: back-to-back conversions, the rate set by the ADC clock
+ *                  divider (clock.c); period = divide ratio 1, 2, 4, 6, 8,
+ *                  10 of the 320 MHz clock (40 ... 4 MSPS).
  * capture_set_pacing() switches source and default period between two
  * bursts; capture_set_period() sets the period in the active source's
  * unit, applied between two bursts; false for out-of-range or for B2B.
@@ -87,8 +90,9 @@ uint32_t capture_selftest(uint32_t *mean);
 uint32_t capture_ratetest(void);
 
 /* Choose the pacing at boot per ADC_PACING (board.h). AUTO: run the rate
- * test on every candidate - repeat timer, SCCP1, back-to-back - print
- * each result, then take the first that passed, back-to-back if none.
+ * test on every candidate - repeat timer, SCCP1, ADC clock divider,
+ * back-to-back - print each result, then take the first that passed,
+ * back-to-back if none.
  * A fixed source is tested once and the boot stops with its code if it
  * fails. Returns 0 or that code. */
 uint32_t capture_autopace(void);

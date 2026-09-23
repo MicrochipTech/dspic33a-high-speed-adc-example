@@ -124,9 +124,10 @@ int main(void)
 
 #if AUTO_SWEEP
     /* The rate sweep, once, without anyone typing (AUTO_SWEEP in
-     * board.h): from 1.25 MSPS up to 40 MSPS, one line per rate. */
+     * board.h): slowest to fastest, one line per rate - and the
+     * measurement then runs at the fastest clean one. */
     console_puts("[boot] automatic rate sweep before the measurement (AUTO_SWEEP in board.h)\r\n");
-    console_sweep(2000u);
+    console_sweep(2000u, true);
 #endif
 
     console_puts("[boot] self-test passed, measurement running on the external input\r\n");

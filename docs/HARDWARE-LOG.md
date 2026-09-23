@@ -258,7 +258,15 @@ Reading:
 4. `[half]` says the input is at 8...35 counts of 4096, mean 17: nothing is connected
    to mikroBUS A AN, the pin floats near ground. Expected; the signal source comes later.
 
-Next: pace through `CLK6DIV` (a fourth candidate in the auto-pacing, and the sweep
-stepping the divider), and stop taking an interrupt per overrun (read `DMA0STAT`
-in the block-done interrupt and count halves with overrun), so that the CPU and the
-console survive the 40 MSPS point.
+Changed after run 6 (no board run yet): the ADC clock divider is the fourth pacing
+candidate (`pacing 64`, `clock_adc_set_div()`: CLKGEN6 `INTDIV`, divided clock =
+F_IN / (2 · INTDIV), switched with `DIVSWEN`, ratios 1/2/4/6/8/10 = 40/20/10/6.7/5/4
+MSPS; 32 MHz is the ADC minimum). The rate test tries it at ratios 8 and 2 after the
+repeat timer and SCCP1. The boot sweep now ends with a decision: the highest rate whose
+`process` run had overrun 0 and missed 0 becomes the measurement rate (`[sweep] using
+period ...`), or `[sweep] NO CLEAN RATE` if none. The overrun interrupt cannot be
+switched off on its own - DS70005591D 13.6.1 says any channel event flag raises the
+channel interrupt and `DMA0CH` has enables only for HALF, DONE and MATCH - so the
+storm at 40 MSPS is avoided by not running there, not by masking it. If the console
+was starved by that storm, `rx` will count at the chosen rate; if it stays 0, the
+bytes never reach RD1.

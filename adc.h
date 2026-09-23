@@ -4,6 +4,7 @@
 #ifndef ADC_H
 #define ADC_H
 
+#include <stdbool.h>
 #include <stdint.h>
 #include "board.h"
 
@@ -58,8 +59,14 @@ uint8_t adc_period(void);
 #define ADC_TRG2_B2B      2u        /* back-to-back: as fast as it goes  */
 #define ADC_TRG2_REPEAT   3u        /* the ADC's repeat timer, RPTCNT    */
 #define ADC_TRG2_SCCP1    32u       /* SCCP1 timer period match          */
+/* Not a TRG2SRC value: pacing by the ADC clock divider (clock.c), with
+ * TRG2SRC = back-to-back. capture.c owns the distinction. */
+#define ADC_PACE_CLKDIV   64u
 void    adc_set_trg2(uint8_t trg2src);
 uint8_t adc_trg2(void);
+
+/* ADRDY: the core is ready (again) - checked after a clock change. */
+bool    adc_ready(void);
 
 /* The core's registers as "name: 0x........" lines (part of regs_dump()). */
 void adc_regs_dump(void);

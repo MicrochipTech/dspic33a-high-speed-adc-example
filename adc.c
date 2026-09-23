@@ -8,6 +8,7 @@
  */
 
 #include <xc.h>
+#include <stdbool.h>
 #include "board.h"
 #include "adc.h"
 #include "capture.h"
@@ -127,6 +128,8 @@ void adc_set_trg2(uint8_t trg2src)
 }
 
 uint8_t adc_trg2(void) { return (uint8_t)ADCREG(CH0CON1bits).TRG2SRC; }
+
+bool adc_ready(void) { return ADCREG(CONbits).ADRDY != 0u; }
 
 uint8_t adc_pinsel(void) { return (uint8_t)ADCREG(CH0CON1bits).PINSEL; }
 uint8_t adc_samc(void)   { return (uint8_t)ADCREG(CH0CON1bits).SAMC; }

@@ -18,6 +18,17 @@ void clock_init(void);
 bool     clock_cpu_on_pll(void);
 uint32_t clock_cpu_hz(void);
 
+/* ADC clock divider, CLKGEN6. ratio 1 = 320 MHz straight through
+ * (INTDIV 0), or an even 2..10: the divided clock is Fin / (2 * INTDIV)
+ * (DS70005591D, CLKnDIV INTDIV description), and 32 MHz is the ADC's
+ * minimum (Table 16-1, p1223), so 10 is the largest ratio. Switches with
+ * DIVSWEN and waits, bounded, for the switch and for ADRDY. False for a
+ * bad ratio or a switch that did not complete; the divider is then
+ * whatever the hardware says (clock_adc_div()). Only between bursts. */
+bool     clock_adc_set_div(uint32_t ratio);
+uint32_t clock_adc_div(void);
+uint32_t clock_adc_hz(void);
+
 /* The clock registers as "name: 0x........" lines (part of regs_dump()). */
 void clock_regs_dump(void);
 

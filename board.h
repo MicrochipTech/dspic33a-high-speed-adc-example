@@ -34,10 +34,16 @@
  *   3   the ADC's repeat timer, period ADC_RPTCNT TAD (12.5 ns)
  *   32  SCCP1 timer period match, period ADC_SCCP_TICKS x 10 ns - what
  *       datasheet Example 16-8 shows with Integration mode
+ *   64  the ADC clock itself: back-to-back conversions, rate set by the
+ *       CLKGEN6 divider (period = divide ratio of the 320 MHz clock:
+ *       1, 2, 4, 6, 8, 10 -> 40, 20, 10, 6.7, 5, 4 MSPS). Not a TRG2SRC
+ *       value; clock.c does the switching. The board showed on 23.09.
+ *       (HARDWARE-LOG run 6) that neither 3 nor 32 paces a burst in
+ *       Integration mode, so this is the source that actually works.
  *   2   back-to-back, as fast as the converter goes - no rate control;
  *       what Microchip's 40 MSPS example uses
- *   0   AUTO: try 3, then 32, each with the rate test; the first that
- *       delivers the rate its period says wins; if neither does, 2.
+ *   0   AUTO: try 3, then 32, then 64, each with the rate test; the first
+ *       that delivers the rate its period says wins; if none does, 2.
  *       The log says which ("[pacing] ..."). The default, because the
  *       repeat-timer pairing rests on the datasheet text alone and the
  *       board has the last word.
@@ -48,6 +54,9 @@
 #endif
 #ifndef ADC_SCCP_TICKS
 #define ADC_SCCP_TICKS    5u      /* 5 x 10 ns = 20 MSPS                      */
+#endif
+#ifndef ADC_CLKDIV
+#define ADC_CLKDIV        1u      /* ADC clock divide ratio: 1 = 320 MHz      */
 #endif
 
 /* Boot chatter: with 1 every start-up step reports its registers on the

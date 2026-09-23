@@ -15,6 +15,7 @@
 
 #include <xc.h>
 #include "clock.h"
+#include "adc.h"
 #include "capture.h"
 #include "console.h"
 #include "diag.h"
@@ -190,6 +191,47 @@ void __attribute__((interrupt, no_auto_psv)) _CLKFInterrupt(void)
     console_kv_hex("[CLKF] CLK1CON", CLK1CON);
     console_kv("[CLKF] reached boot stage", boot_stage);
     fail(10u);
+}
+
+/* ------------------------------------------------------------------ *
+ * ADC clock divider at run time (clock.h). INTDIV is bits 30:16 of
+ * CLK6DIV; the switch takes effect when DIVSWEN is set and is complete
+ * when the hardware clears it. Nothing else in the tree changes: the
+ * CPU stays on PLL2, the peripherals on their own generators.
+ * ------------------------------------------------------------------ */
+#define ADC_CLK_HZ        320000000u
+#define DIVSW_WAIT_LIMIT  100000u     /* loop iterations, far above the switch */
+
+bool clock_adc_set_div(uint32_t ratio)
+{
+    if ((ratio != 1u) && ((ratio < 2u) || (ratio > 10u) || (ratio % 2u != 0u))) {
+        return false;
+    }
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+    (void)ratio;                       /* no clock tree to switch          */
+    return true;
+#else
+    CLK6DIVbits.FRACDIV = 0u;
+    CLK6DIVbits.INTDIV  = (ratio == 1u) ? 0u : ratio / 2u;
+    CLK6CONbits.DIVSWEN = 1u;
+    uint32_t n = DIVSW_WAIT_LIMIT;
+    while (CLK6CONbits.DIVSWEN && (--n != 0u)) { }
+    if (n == 0u) { return false; }
+    n = DIVSW_WAIT_LIMIT;
+    while (!adc_ready() && (--n != 0u)) { }
+    return n != 0u;
+#endif
+}
+
+uint32_t clock_adc_div(void)
+{
+    const uint32_t intdiv = CLK6DIVbits.INTDIV;
+    return (intdiv == 0u) ? 1u : 2u * intdiv;
+}
+
+uint32_t clock_adc_hz(void)
+{
+    return ADC_CLK_HZ / clock_adc_div();
 }
 
 void clock_regs_dump(void)

@@ -71,7 +71,7 @@ Simulator test, the acceptance check for anything that touches the buffer logic:
 
 ```
 tools\build.bat sim
-python tools\sim_trap.py                   expect "[simtest] PASS"  (about 4 minutes)
+python tools\sim_trap.py --run-seconds 600 expect "[simtest] PASS"  (6-8 minutes; the boot alone - register snapshot, time base check, four pacing candidates - takes over 4)
 python tools\sim_trap.py --fault 65536     expect "[simtest] FAIL" with one mismatch at index 0
 ```
 
@@ -97,21 +97,24 @@ interrupt aborts with E0110). It proves the ping-pong buffer logic and nothing e
 
 ## Open questions (as of 23.09.2026)
 
-1. The rate is now set by the ADC's repeat timer (`TRG2SRC = 3`, period `RPTCNT` in
-   TAD, DS70005591D Table 16-4 p1227 and 16.4.5 p1322) instead of the back-to-back
-   trigger, after the sweep showed the delivered rate did not follow `SAMC`. Whether
-   the hardware counts `RPTCNT` or `RPTCNT + 1` TAD per period, and whether 40 MSPS
-   (`RPTCNT = 2`) is reached at all, is what the measured column of the next sweep
-   settles. The pacing is chosen at boot (`ADC_PACING` in `board.h`, default AUTO):
-   the rate test runs on the repeat timer, on SCCP1 as trigger (`TRG2SRC = 32`,
-   Example 16-8 p1334, `sccp.c`) and on back-to-back, prints a verdict per source and
-   uses the first paced one that passed. `pacing`/`period` change it at run time. The
-   question the whole project answers: the highest rate at which the sweep's `process`
-   column shows `overrun 0` and `missed 0` - continuous sampling into a ping-pong
-   buffer with the CPU working on the other half.
+1. Neither the ADC's repeat timer (`TRG2SRC = 3`, `RPTCNT`) nor SCCP1 (`TRG2SRC =
+   32`) paces a burst in Integration mode on the board: the registers hold the
+   written values and the DMA still receives the back-to-back rate (HARDWARE-LOG runs
+   5 and 6, registers decoded). Since 23.09. evening the fourth candidate is the ADC
+   clock divider (`ADC_PACE_CLKDIV` = 64, `clock_adc_set_div()`, CLKGEN6 `INTDIV`,
+   ratios 1/2/4/6/8/10 = 40 … 4 MSPS), tried after the two trigger sources in the
+   AUTO pacing; the boot sweep then steps the divider and **takes the highest rate
+   whose `process` run had overrun 0 and missed 0** for the measurement. Whether the
+   divider switch (`DIVSWEN`) works between bursts and the ADC stays calibrated at a
+   lower clock is what the next log settles (`[ratetest]` for pacing 64, then the
+   sweep rows). `pacing`/`period` change it at run time.
 2. At 40 MSPS about 4 % of the samples are lost as OVERRUN, independent of what the
    CPU does, and every overrun raises the DMA interrupt (~1.6 million per second),
-   which starves the main loop and the console. Whether the DMA bus or something
-   else limits the rate is the measurement the example exists for.
+   which starves the main loop and probably the console (`rx=0` in run 6). The
+   overrun interrupt has no enable bit (DS70005591D 13.6.1: any channel event flag
+   raises the channel interrupt; `DMA0CH` has HALFEN/DONEEN/MATCHEN only), so it
+   cannot be masked on its own - the remedy is to run the measurement at a rate
+   without overruns, which is what the sweep now selects. Whether the DMA bus or
+   something else limits the rate is the measurement the example exists for.
 3. One build (23.09., 11:36) reset right after "measurement running"; the next build
    printed a full sweep. The boot line now reports `RCON`; watch for it.

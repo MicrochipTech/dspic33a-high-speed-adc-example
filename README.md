@@ -483,8 +483,8 @@ The console is the [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser) mod
 | `regs` | the clock, ADC, DMA, interrupt and UART registers as hex, plus the counters — the dump `docs/TROUBLESHOOTING.md` Part 4 asks for |
 | `start`, `stop` | start the burst stream / let the current buffer finish and stop |
 | `samc <0..31>` | sample time in TAD steps: (2·SAMC + 0.5) TAD — the aperture, not the rate. Applied between two bursts |
-| `pacing <3\|32\|2>` | **what triggers the conversions:** 3 = the ADC's repeat timer (period in TAD = 12.5 ns, 2…63), 32 = SCCP1 timer (period in ticks of 10 ns, 2…65535), 2 = back-to-back (no rate control). At boot `ADC_PACING` in `board.h` decides; the default AUTO runs the rate test on all three and prints a `[pacing]` verdict per source, then uses the first paced one that passed |
-| `period <n>` | **the sample rate:** the period in the active pacing's unit. Repeat timer: rate = 80000 / n kSPS (2 = 40 MSPS, 4 = 20 MSPS, 63 = 1.27 MSPS); SCCP1: rate = 100000 / n kSPS (4 = 25 MSPS, 5 = 20 MSPS, 80 = 1.25 MSPS). Applied between two bursts |
+| `pacing <3\|32\|64\|2>` | **what paces the conversions:** 3 = the ADC's repeat timer (period in TAD = 12.5 ns, 2…63), 32 = SCCP1 timer (period in ticks of 10 ns, 2…65535), 64 = the ADC clock divider (period = divide ratio 1, 2, 4, 6, 8, 10 of the 320 MHz clock; the conversions run back-to-back at the divided clock), 2 = back-to-back at 320 MHz (no rate control). At boot `ADC_PACING` in `board.h` decides; the default AUTO runs the rate test on all four and prints a `[pacing]` verdict per source, then uses the first paced one that passed. On the board (run 6) only 64 paces |
+| `period <n>` | **the sample rate:** the period in the active pacing's unit. Clock divider: rate = 40000 / n kSPS (1 = 40 MSPS, 2 = 20, 4 = 10, 6 = 6.7, 8 = 5, 10 = 4); repeat timer: rate = 80000 / n kSPS (2 = 40 MSPS, 4 = 20 MSPS, 63 = 1.27 MSPS); SCCP1: rate = 100000 / n kSPS (4 = 25 MSPS, 5 = 20 MSPS, 80 = 1.25 MSPS). Applied between two bursts |
 | `input <0..15>` | PINSEL of the ADC core; 6 is the internal 15/16·VDD reference. Applied between two bursts |
 | `selftest` | samples the internal reference, prints the mean, NAK if it is outside 3648 … 4032 |
 | `stats` | min, max, mean and peak-to-peak of the completed half |
@@ -602,17 +602,22 @@ with `SAMC` at all (`docs/HARDWARE-LOG.md`, run 4), so this example no longer re
 it. `SAMC` remains the remedy for a source impedance that is too high for a 6.25 ns
 sample window — it sets the aperture, the repeat timer sets the rate.
 
-**2. Repeat timer — the way this example runs now** (`TRG2SRC = 3`, period in
-`RPTCNT[5:0]` of `AD3CON`, page 1258; `ADC_RPTCNT` in `board.h`, `period` on the
-console). A trigger every k TAD, k = 2 … 63, at TAD = 12.5 ns: 80 / k MSPS, i.e. 40,
-26.7, 20, 16, 13.3, 11.4, 10, 8.9, 8 … down to 1.27 MSPS. A finer grid than `SAMC`,
-but **25 MSPS is not on it**. Whether the hardware counts k or k + 1 cycles is what the
-measured column of the sweep table says.
+**2. Repeat timer or SCCP1 as the second trigger — what the datasheet describes, and
+what the board did not do** (`TRG2SRC = 3`, period in `RPTCNT[5:0]` of `AD3CON`, page
+1258, or `TRG2SRC = 32` with SCCP1 as in Example 16-8). On paper a trigger every k TAD,
+k = 2 … 63: 80 / k MSPS, 40 down to 1.27 MSPS. On the board (`docs/HARDWARE-LOG.md`,
+runs 5 and 6) the register holds `TRG2SRC = 3` and `RPTCNT = 16`, and the DMA still
+receives 36 MSPS; SCCP1 at 20 ticks likewise 37 MSPS. In Integration mode the
+conversions inside a burst run back-to-back whatever the second trigger says. Both
+sources stay in the firmware as candidates, and the rate test at boot says so.
 
-**3. The ADC input clock, CLKGEN6.** Rate = F_IN / 8 at `SAMC = 0`. With the 9-bit
-fractional divider in `CLK6DIV` almost any value between 4 MSPS (32 MHz) and 40 MSPS is
-reachable — 25 MSPS, for example, with 200 MHz in. Combined with `SAMC` or the repeat
-timer the range extends down to about 125 kSPS (32 MHz, k = 64).
+**3. The ADC input clock, CLKGEN6 — the way this example runs now** (`pacing 64`,
+`period` = divide ratio; `ADC_CLKDIV` in `board.h`). The divided clock is F_IN /
+(2 · `INTDIV`), and the conversions run back-to-back at TAD = 4 / F_IN: ratio 1 = 40
+MSPS, 2 = 20, 4 = 10, 6 = 6.7, 8 = 5, 10 = 4 (32 MHz, the ADC's minimum). The 9-bit
+fractional divider would fill the gaps — 25 MSPS with 200 MHz in — but is not used
+yet. `SAMC` and the repeat timer would extend the range down to about 125 kSPS (32
+MHz, k = 64) if they paced, which on this board they do not.
 
 **Below that** the burst mechanism is the wrong tool. For rates like the 40 kHz of a
 piezo grain sensor, use Single Conversion mode with an SCCP or PWM trigger as
@@ -828,7 +833,7 @@ simulator run takes about 2.5 minutes for the 100 halves.
 | `main.c` | start-up sequence and the main loop — the order of the inits, and why |
 | `board.h` | everything board-specific: the compile-time choices (`ADC_INSTANCE`, `ADC_PINSEL`, `ADC_SAMC`), the LED pin, the console pins |
 | `config_bits.c` | every configuration word of the device, with the reason for each value — and why two of them are written as numbers |
-| `clock.c`, `clock.h` | FRC → PLL1 320 MHz (ADC) and PLL2 200 MHz (CPU), the switching order, the clock-fail interrupt |
+| `clock.c`, `clock.h` | FRC → PLL1 320 MHz (ADC) and PLL2 200 MHz (CPU), the switching order, the clock-fail interrupt, and the ADC clock divider (`clock_adc_set_div()`, CLKGEN6 `INTDIV` with `DIVSWEN`) that paces the conversions when the trigger sources do not |
 | `adc.c`, `adc.h` | the ADC core: channel 0 in Integration mode, burst trigger, input/sample-time register |
 | `dma.c`, `dma.h` | DMA channel 0: address window, Repeated Continuous mode, HALF/DONE interrupt, status flags — knows no ADC and no buffer |
 | `sim_dma.c`, `sim.h` | **simulator build only:** stand-in for `dma.c` that produces buffer halves (1 MHz sine) and the ping-pong check; see "In the MPLAB X simulator" |

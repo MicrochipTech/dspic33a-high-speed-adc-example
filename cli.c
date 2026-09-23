@@ -670,7 +670,8 @@ static bool sweep_point(uint32_t period, uint32_t halves, enum sweep_load load, 
     return true;
 }
 
-static void sweep_row(uint32_t period, uint32_t halves)
+/* Returns true if the process run delivered every half with no overrun. */
+static bool sweep_row(uint32_t period, uint32_t halves)
 {
     uint32_t ov[3], ticks[3] = { 0, 0, 0 };
     bool     ok[3];
@@ -698,6 +699,7 @@ static void sweep_row(uint32_t period, uint32_t halves)
     p = copy_str(p, "  missed ");             p = u32_to_str(p, missed);
     copy_str(p, "\r\n");
     console_puts(line);               /* blocking: works from main() too */
+    return ok[SWEEP_PROCESS] && (ov[SWEEP_PROCESS] == 0u) && (missed == 0u) && (late == 0u);
 }
 
 /* The sweep itself, callable from the command and from main() (the
@@ -705,7 +707,7 @@ static void sweep_row(uint32_t period, uint32_t halves)
  * through the blocking console_puts(), not the parser's sink, so it
  * does not depend on the receive path - which is one of the things
  * the automatic run is there to investigate. */
-void console_sweep(uint32_t halves)
+void console_sweep(uint32_t halves, bool choose)
 {
     uint32_t count = 0;
     const uint32_t *periods    = capture_sweep_periods(&count);   /* slowest first */
@@ -725,15 +727,33 @@ void console_sweep(uint32_t halves)
      * ticks. Anything else and the measured rates are off by the same
      * factor - and the assumption about the timer's clock is wrong. */
     console_kv("[sweep] timer check, ticks per 100 ms (expect 1250000)", timebase_check());
+    uint32_t best = 0u;                   /* last clean row = fastest   */
     for (uint32_t i = 0; i < count; i++) {
         console_puts("[sweep] ");
-        sweep_row(periods[i], halves);
+        if (sweep_row(periods[i], halves) && (periods[i] != 0u)) { best = periods[i]; }
     }
 
-    if (keep_period != 0u) { (void)capture_set_period(keep_period); }
+    /* The question the sweep answers: the highest rate at which the CPU
+     * gets every half (missed 0) and the DMA every sample (overrun 0),
+     * with the main-loop processing running. At boot that rate is what
+     * the measurement then runs at; a rate with overruns would also
+     * raise the DMA interrupt for every lost sample (1.6 million per
+     * second at 40 MSPS on the board) and starve the console. */
+    if (choose && (best != 0u)) {
+        (void)capture_set_period(best);
+        console_kv("[sweep] using period", best);
+        console_kv("[sweep]   ksps nominal", capture_nominal_ksps(best));
+        console_puts("[sweep]   the highest rate with overrun 0 and missed 0 in the process run\r\n");
+    } else if (choose && (keep_period != 0u)) {
+        (void)capture_set_period(keep_period);
+        console_kv("[sweep] NO CLEAN RATE - every row lost samples or halves; keeping period", keep_period);
+    } else {
+        if (keep_period != 0u) { (void)capture_set_period(keep_period); }
+    }
     counters_clear();
     if (was_running) { capture_start(); }
-    console_puts("[sweep] done: counters cleared, previous period and run state restored\r\n");
+    console_puts(choose ? "[sweep] done: counters cleared\r\n"
+                        : "[sweep] done: counters cleared, previous period and run state restored\r\n");
 }
 
 static void cmd_sweep_fn(int argc, char **argv)
@@ -743,15 +763,15 @@ static void cmd_sweep_fn(int argc, char **argv)
         usage("sweep [halves per point 10..100000, default 2000]");
         return;
     }
-    console_sweep(halves);
+    console_sweep(halves, false);
 }
-CMD_DEFINE(sweep, "sweep", cmd_sweep_fn, "sweep [halves] - overrun vs sample rate, 1.27..40 MSPS");
+CMD_DEFINE(sweep, "sweep", cmd_sweep_fn, "sweep [halves] - overrun vs sample rate for the active pacing");
 
 static void cmd_period_fn(int argc, char **argv)
 {
     uint32_t v;
     if ((argc != 2) || !arg_u32(argv[1], 2u, 65535u, &v)) {
-        usage("period <n>  (sample period in the active pacing's unit: repeat timer 2..63 TAD, SCCP1 2..65535 x 10 ns)");
+        usage("period <n>  (sample period in the active pacing's unit: repeat timer 2..63 TAD, SCCP1 2..65535 x 10 ns, clock divider 1|2|4|6|8|10)");
         return;
     }
     if (!capture_set_period(v)) {
@@ -767,15 +787,15 @@ CMD_DEFINE(period, "period", cmd_period_fn, "period <n> - sample period in the a
 static void cmd_pacing_fn(int argc, char **argv)
 {
     uint32_t v;
-    if ((argc != 2) || !arg_u32(argv[1], 0u, 63u, &v) || !capture_set_pacing((uint8_t)v)) {
-        usage("pacing <3|32|2>  (3 = ADC repeat timer, 32 = SCCP1 timer, 2 = back-to-back)");
+    if ((argc != 2) || !arg_u32(argv[1], 0u, 64u, &v) || !capture_set_pacing((uint8_t)v)) {
+        usage("pacing <3|32|64|2>  (3 = ADC repeat timer, 32 = SCCP1 timer, 64 = ADC clock divider, 2 = back-to-back)");
         return;
     }
     put_kv("pacing", v);
     put_line(capture_pacing_name());
     put_kv("period", capture_period());
 }
-CMD_DEFINE(pacing, "pacing", cmd_pacing_fn, "pacing <3|32|2> - what triggers the conversions");
+CMD_DEFINE(pacing, "pacing", cmd_pacing_fn, "pacing <3|32|64|2> - what paces the conversions");
 
 static void cmd_reset_fn(int argc, char **argv)
 {
