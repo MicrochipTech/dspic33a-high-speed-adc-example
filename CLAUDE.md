@@ -88,6 +88,13 @@ interrupt aborts with E0110). It proves the ping-pong buffer logic and nothing e
 - Commit messages: what changed, why, what was verified. No attribution trailers.
 - Do not edit `cmd_parser.c/.h`.
 
+## Planned, not built
+
+`docs/PLAN-BINARY-TRANSFER.md`: a `blk <n>` command that sends a contiguous block of up
+to 2048 samples as binary with a text header and a CRC-16 line, the client side in
+`tools/adc_gui.py`, an optional `baud` command - ordered so that everything but the
+baud limit is proven in the simulator and with the fake target before a board run.
+
 ## Open questions (as of 23.09.2026)
 
 1. The rate is now set by the ADC's repeat timer (`TRG2SRC = 3`, period `RPTCNT` in
