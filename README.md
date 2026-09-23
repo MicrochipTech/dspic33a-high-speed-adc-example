@@ -60,10 +60,14 @@ page it rests on.
 
 ## Read this first
 
-**This code has never run on hardware.** It compiles and links cleanly with the real
-compiler, and every bit set in it was read out of the datasheet and the device pack —
-but nobody has executed it on a board or measured a signal with it. Treat it as a
-clean scaffold with measurement points, not as a reference implementation.
+**What has run on hardware, and what has not.** Since 23.09.2026 this code runs on the
+EV74H48A: clock tree, console, ADC core, DMA channel and the self-test on the internal
+reference all work on silicon, and every one of those runs is recorded with its log in
+`docs/HARDWARE-LOG.md`. What is **not** settled is the measurement itself: the first
+sweep showed the ADC ignoring the sample time with the back-to-back trigger and losing
+about 4 % of the samples to DMA overruns at full rate; the trigger was changed to the
+ADC's repeat timer in response, and that version has not been on the board yet. Treat
+the rate figures as open until the log says otherwise.
 
 Parts of this example were **AI-assisted**. All register names, bitfields and value
 ranges were taken from datasheet **DS70005591D**, the errata **DS80001162E** and the
@@ -72,6 +76,17 @@ of use — so every setting can be checked against the primary source.
 
 **Revision history**
 
+- **2026-09-23, first runs on the board** (four of them, all in `docs/HARDWARE-LOG.md`).
+  Found and fixed: the console's tail garbled at the clock switch (flush first); a
+  lost DMA `DONE` because the interrupt flag was cleared at the end of the handler and
+  the status flags by read-modify-write; the sample buffer is a dedicated volatile
+  object with guard words and the DMA window is exactly that buffer; `RCON` is
+  reported at boot; the rate sweep runs automatically and measures the rate with
+  Timer1. Found and not yet closed: the delivered rate did not follow `SAMC` with the
+  back-to-back trigger, so the conversions are now paced by the ADC's repeat timer
+  (`TRG2SRC = 3`, `RPTCNT`) — untested on the board at the time of writing. The
+  source was also split into modules (`board.h`, `clock`, `adc`, `dma`, `capture`,
+  `led`, `diag`, `cli`) with a simulator build for the buffer logic.
 - **2026-09-22, after the first report from a board** — the project's tool is the PKOB4
   (`pkob4hybrid`). A first attempt had run against a PC-side tool instead of the board
   and looked like a dead board; that was the whole cause. The project now has no
@@ -193,8 +208,9 @@ compiler and pack versions.
 
 ## First run on hardware
 
-Since this has never run on silicon, here is what to expect and where it is most
-likely to trip you up.
+Here is what to expect and where it is most likely to trip you up. The boot path,
+the self-test and the sweep have run on a board (`docs/HARDWARE-LOG.md`); the steps
+below are still the way to read a first run.
 
 ### Step 1 — read the LED, no signal and no debugger needed
 

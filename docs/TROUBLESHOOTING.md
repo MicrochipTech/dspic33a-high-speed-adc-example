@@ -1,8 +1,12 @@
 # Troubleshooting guide
 
-This code has **never run on hardware**. It compiles cleanly and every register value
-was read out of DS70005591D and the device pack ATDF — but "compiles" and "works" are
-different things, and the first person to run it will find whatever is wrong.
+This code was written before it had run on hardware, and this guide with it: every
+register value was read out of DS70005591D and the device pack ATDF, and the guide
+lists where we were least sure. Since 23.09.2026 it has run on the EV74H48A, and what
+the board actually said — clocks, console, ADC, DMA and self-test fine; a lost DMA
+`DONE`, a garbled line at the clock switch, a sample rate that ignored `SAMC` — is in
+`HARDWARE-LOG.md`, with the fixes. The parts below that the board has not yet
+confirmed are the rate figures.
 
 This guide is written for that. It is ordered by how likely each thing is to be the
 problem, and it tells you **where we are least certain of our own code**, so you do not

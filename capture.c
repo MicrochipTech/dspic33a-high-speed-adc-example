@@ -31,7 +31,7 @@
  *   That proves clock, ADC, DMA and ISR together without a signal source.
  *
  * Every register write below cites the datasheet table or page it comes
- * from. Nothing here has run on silicon - see README.md.
+ * from. What has and has not run on the board: docs/HARDWARE-LOG.md.
  */
 
 #include <xc.h>
