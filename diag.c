@@ -47,6 +47,7 @@ volatile uint32_t trap_stage __attribute__((persistent));
  *   9     CPU trap or unhandled interrupt            _DefaultInterrupt()
  *   10    clock fail: FSCM moved the CPU to BFRC     _CLKFInterrupt()
  *   11    guard words behind the buffer changed      capture.c guard_check()
+ *   12    measured rate does not follow RPTCNT       capture_ratetest()
  *
  * Pattern: <code> short blinks, one long pause, repeat. The blink speed
  * depends on which clock the CPU is on at the time; the count is what
@@ -65,6 +66,7 @@ static const char *const fail_text[] = {
     "CPU trap or unhandled interrupt - see the [TRAP] lines",
     "clock fail - the FSCM moved the CPU to the backup FRC, see the [CLKF] lines",
     "something wrote past the end of the sample buffer - see the [guard] lines",
+    "sample rate does not follow the repeat-timer period - see the [ratetest] lines",
 };
 #define FAIL_TEXT_N  (sizeof fail_text / sizeof fail_text[0])
 

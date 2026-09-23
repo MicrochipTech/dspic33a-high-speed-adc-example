@@ -43,6 +43,7 @@
 #include "console.h"
 #include "diag.h"
 #include "sim.h"
+#include "timebase.h"
 
 /* Self-test input and window. ADxAN6 is the internal 15/16 * VDD
  * reference on every core and package (Table 16-2, p1224), which the
@@ -432,6 +433,89 @@ uint32_t capture_selftest(uint32_t *mean)
         capture_stop();
     }
     return rc;
+}
+
+/* ------------------------------------------------------------------ *
+ * Rate self-test
+ *
+ * The ADC's repeat timer is what sets the sample rate; Timer1
+ * (timebase.c) is only the stopwatch that checks it. Run RATETEST_HALVES
+ * halves at RPTCNT 16 and at RPTCNT 4, count ticks, compare the delivered
+ * rate with the nominal 80000 / RPTCNT kSPS. Then the ratio of the two:
+ * the failure seen on the board was a rate that did not move when the
+ * period changed, and that is caught even if the nominal figure itself
+ * were off by a constant factor (RPTCNT vs RPTCNT + 1 cycles, or a wrong
+ * TAD). The burst restart from the DMA interrupt costs a little per
+ * 2048 samples, which the 10 % tolerance covers.
+ * ------------------------------------------------------------------ */
+#define RATETEST_HALVES   200u
+#define RATETEST_TOL_PCT  10u
+
+#ifndef __MPLAB_DEBUGGER_SIMULATOR
+static uint32_t rate_measure(uint8_t rptcnt, uint32_t *ksps)
+{
+    uint32_t n = WAIT_LIMIT;
+    capture_stop();
+    while (burst_active && (--n != 0u)) { SIM_DMA_TICK(); }
+    if (n == 0u) { return 6u; }
+    (void)capture_set_period(rptcnt);            /* idle: applied now   */
+    counters_clear();
+    const uint32_t target = blocks_done + RATETEST_HALVES;
+    const uint32_t t0     = timebase_ticks();
+    capture_start();
+    const uint32_t rc     = wait_for_blocks(target);
+    const uint32_t ticks  = timebase_ticks() - t0;
+    capture_stop();
+    if (rc != 0u) { return rc; }
+    *ksps = timebase_ksps(RATETEST_HALVES * SAMPLES_PER_HALF, ticks);
+    return 0u;
+}
+#endif
+
+uint32_t capture_ratetest(void)
+{
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+    console_puts("[ratetest] skipped: the simulator has no ADC clock to measure\r\n");
+    return 0u;
+#else
+    static const uint8_t rpt[2] = { 16u, 4u };   /* 5 and 20 MSPS nominal */
+    const uint8_t keep        = capture_period();
+    const bool    was_running = capture_running();
+    uint32_t      ksps[2]     = { 0u, 0u };
+    uint32_t      rc          = 0u;
+
+    timebase_init();
+    console_kv("[ratetest] time base check, ticks per 100 ms (expect 1250000)", timebase_check());
+
+    for (uint32_t i = 0; (i < 2u) && (rc == 0u); i++) {
+        rc = rate_measure(rpt[i], &ksps[i]);
+        if (rc == 0u) {
+            const uint32_t nominal = 80000u / rpt[i];
+            const uint32_t diff    = (ksps[i] > nominal) ? ksps[i] - nominal : nominal - ksps[i];
+            console_kv("[ratetest] rptcnt", rpt[i]);
+            console_kv("[ratetest]   nominal ksps", nominal);
+            console_kv("[ratetest]   measured ksps", ksps[i]);
+            if (diff > nominal * RATETEST_TOL_PCT / 100u) {
+                console_puts("[ratetest]   outside the 10 % window\r\n");
+                rc = 12u;
+            }
+        }
+    }
+    if (rc == 0u) {
+        /* RPTCNT 16 -> 4 must make the rate four times higher (3..5x). */
+        if ((ksps[1] < 3u * ksps[0]) || (ksps[1] > 5u * ksps[0])) {
+            console_puts("[ratetest] the rate does not follow the period\r\n");
+            rc = 12u;
+        }
+    }
+
+    (void)capture_set_period(keep);
+    counters_clear();
+    if (was_running) { capture_start(); }
+    console_puts((rc == 0u) ? "[ratetest] passed: the rate follows RPTCNT\r\n"
+                            : "[ratetest] FAILED\r\n");
+    return rc;
+#endif
 }
 
 void capture_regs_dump(void)

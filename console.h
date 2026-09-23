@@ -28,6 +28,11 @@ void console_flush(void);
 void console_puts(const char *s);
 void console_kv(const char *key, uint32_t v);        /* "key: 123"        */
 void console_kv_hex(const char *key, uint32_t v);    /* "key: 0x00000123" */
+/* The same three, but only with BOOT_VERBOSE 1 (board.h): the start-up
+ * steps' running commentary. Empty otherwise. */
+void console_trace(const char *s);
+void console_trace_kv(const char *key, uint32_t v);
+void console_trace_kv_hex(const char *key, uint32_t v);
 /* One line with every counter, for the periodic trace from main(). */
 void console_status_line(void);
 /* The rate sweep (the "sweep" command): overrun vs sample rate from

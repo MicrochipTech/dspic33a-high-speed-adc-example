@@ -29,6 +29,15 @@
 #define ADC_RPTCNT        2u
 #endif
 
+/* Boot chatter: with 1 every start-up step reports its registers on the
+ * console ([clk] PLL1 locked, [adc] pinsel, [dma] DMALOW ...). With 0 the
+ * boot prints only what changes from run to run - reset cause, self-test
+ * and rate-test results, the sweep, and anything that fails. fail() and
+ * the trap handler print everything either way. */
+#ifndef BOOT_VERBOSE
+#define BOOT_VERBOSE      0
+#endif
+
 /* Run the rate sweep (the "sweep" console command) once automatically,
  * right after the self-test and before the measurement starts. Needs no
  * console input: the table appears on the terminal by itself, from the

@@ -98,9 +98,9 @@ void clock_init(void)
      * FRC first. Changing PLL settings underneath a running CPU clock can
      * overclock the core - this matters on a debugger restart, where the
      * part is not freshly reset. (The MCC example does the same.) */
-    console_kv_hex("[clk] CLK1CON at entry", CLK1CON);
+    console_trace_kv_hex("[clk] CLK1CON at entry", CLK1CON);
     if ((CLK1CONbits.COSC >= NOSC_PLL1_OUT) && (CLK1CONbits.COSC <= 0x8u)) {
-        console_puts("[clk] system clock on a PLL, parking on FRC\r\n");
+        console_trace("[clk] system clock on a PLL, parking on FRC\r\n");
         CLK1CONbits.NOSC  = NOSC_FRC;
         CLK1CONbits.OSWEN = 1u;
         WAIT_WHILE(CLK1CONbits.OSWEN, 3u);
@@ -121,7 +121,7 @@ void clock_init(void)
     VCO1DIV = 0x10000u;         /* VCO divider output, unused here       */
     PLL1CONbits.DIVSWEN = 1u;
     WAIT_WHILE(PLL1CONbits.DIVSWEN, 1u);
-    console_puts("[clk] PLL1 locked, 320 MHz\r\n");
+    console_trace("[clk] PLL1 locked, 320 MHz\r\n");
 
     /* ---- PLL2: 200 MHz for the system clock ---- */
     PLL2CON = 0x8100u;
@@ -138,7 +138,7 @@ void clock_init(void)
     VCO2DIV = 0x10000u;
     PLL2CONbits.DIVSWEN = 1u;
     WAIT_WHILE(PLL2CONbits.DIVSWEN, 2u);
-    console_puts("[clk] PLL2 locked, 200 MHz\r\n");
+    console_trace("[clk] PLL2 locked, 200 MHz\r\n");
     /* Let that line leave the shift register before the CPU clock, and
      * with it the baud rate, changes 25x. Seen on the board: without
      * this the tail of the line came out as garbage. */

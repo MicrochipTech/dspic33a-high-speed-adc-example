@@ -62,8 +62,8 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
-#include <libpic30.h>       /* __delay32(), for the sweep's timer check */
 #include "board.h"
+#include "timebase.h"
 #include "clock.h"
 #include "capture.h"
 #include "led.h"
@@ -342,6 +342,16 @@ void console_regs_dump(void)
     console_kv_hex("TRISD", TRISD);
 }
 
+#if BOOT_VERBOSE
+void console_trace(const char *s)                    { console_puts(s); }
+void console_trace_kv(const char *key, uint32_t v)   { console_kv(key, v); }
+void console_trace_kv_hex(const char *key, uint32_t v) { console_kv_hex(key, v); }
+#else
+void console_trace(const char *s)                    { (void)s; }
+void console_trace_kv(const char *key, uint32_t v)   { (void)key; (void)v; }
+void console_trace_kv_hex(const char *key, uint32_t v) { (void)key; (void)v; }
+#endif
+
 static void put_kv(const char *key, uint32_t v)
 {
     char num[16];
@@ -604,24 +614,10 @@ CMD_DEFINE(led, "led", cmd_led_fn, "led on|off|auto - LED0");
 #define SWEEP_HALVES_DEFAULT  2000u          /* 2 M samples per point   */
 #define SWEEP_WAIT_LIMIT      400000000u     /* loop iterations, ~10 s  */
 
-/* Time base for the MEASURED rate: Timer1, 32-bit, free running on the
- * peripheral clock with prescaler 1:8. The peripheral clock is the
- * 100 MHz the UART's baud generator runs on, so one tick is 80 ns and
- * the counter wraps after 343 s - longer than any sweep. The rate the
- * first board sweep printed was the nominal 40/(SAMC+1); the counters
+/* The MEASURED rate comes from timebase.c (Timer1 at 12.5 MHz). The rate
+ * the first board sweep printed was the nominal 40/(SAMC+1); the counters
  * said it was not what the ADC did (equal overruns at every "rate",
- * halves missed at 1.25 MSPS), so from now on the sweep measures. The
- * time base itself is checked once against __delay32() and printed. */
-#define SWEEP_TICK_HZ         12500000u      /* 100 MHz / 8             */
-
-static void sweep_timer_init(void)
-{
-    T1CON = 0u;                       /* off, internal clock, no gate    */
-    TMR1  = 0u;
-    PR1   = 0xFFFFFFFFu;              /* free running, 32 bit            */
-    T1CONbits.TCKPS = 1u;             /* 1:8                             */
-    T1CONbits.ON    = 1u;
-}
+ * halves missed at 1.25 MSPS), so from then on the sweep measures. */
 
 enum sweep_load { SWEEP_IDLE = 0, SWEEP_PROCESS = 1, SWEEP_SFR = 2 };
 
@@ -637,7 +633,7 @@ static bool sweep_point(uint8_t rptcnt, uint32_t halves, enum sweep_load load, u
     (void)capture_set_period(rptcnt);                  /* idle: applied now */
     counters_clear();
     const uint32_t target = blocks_done + halves;
-    const uint32_t t0 = TMR1;
+    const uint32_t t0 = timebase_ticks();
     capture_start();
     n = SWEEP_WAIT_LIMIT;
     while (blocks_done < target) {
@@ -646,7 +642,7 @@ static bool sweep_point(uint8_t rptcnt, uint32_t halves, enum sweep_load load, u
         else if (load == SWEEP_SFR)     { (void)U2STAT; }
         if (--n == 0u) { capture_stop(); return false; }
     }
-    *ticks = TMR1 - t0;               /* unsigned: wrap-safe             */
+    *ticks = timebase_ticks() - t0;   /* unsigned: wrap-safe             */
     capture_stop();
     return true;
 }
@@ -661,12 +657,8 @@ static void sweep_row(uint8_t rptcnt, uint32_t halves)
         ov[l] = dma_overrun;
         if (l == SWEEP_PROCESS) { late = late_service; missed = proc_missed; }
     }
-    /* Measured rate of the idle run: samples per second / 1000. 64-bit
-     * arithmetic, 2 M samples x 12.5 M ticks/s overflows 32 bits. */
-    uint32_t meas_ksps = 0;
-    if (ok[0] && (ticks[0] != 0u)) {
-        meas_ksps = (uint32_t)(((uint64_t)halves * SAMPLES_PER_HALF * SWEEP_TICK_HZ / 1000u) / ticks[0]);
-    }
+    /* Measured rate of the idle run. */
+    const uint32_t meas_ksps = ok[0] ? timebase_ksps(halves * SAMPLES_PER_HALF, ticks[0]) : 0u;
     /* Longest line: 150 characters plus NUL; every number is at most
      * 10 digits, "STOPPED" is shorter. */
     char line[176];
@@ -706,12 +698,7 @@ void console_sweep(uint32_t halves)
     /* Time base check: 100 ms of CPU time (200 MHz) must be 1 250 000
      * ticks. Anything else and the measured rates are off by the same
      * factor - and the assumption about the timer's clock is wrong. */
-    sweep_timer_init();
-    {
-        const uint32_t t0 = TMR1;
-        __delay32(20000000ul);
-        console_kv("[sweep] timer check, ticks per 100 ms (expect 1250000)", TMR1 - t0);
-    }
+    console_kv("[sweep] timer check, ticks per 100 ms (expect 1250000)", timebase_check());
     for (uint32_t i = 0; i < sizeof periods / sizeof periods[0]; i++) {
         console_puts("[sweep] ");
         sweep_row(periods[i], halves);
@@ -768,7 +755,7 @@ void cli_init(void)
     if (U2BRG != UART_BRG_PLL) {
         console_drain();
         uart2_setup(UART_BRG_PLL);
-        console_puts("[boot] uart reclocked to PLL2, 115200 8N1\r\n");
+        console_trace("[boot] uart reclocked to PLL2, 115200 8N1\r\n");
     }
 
     cmd_parser_init(console_write);

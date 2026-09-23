@@ -98,10 +98,10 @@ void adc_init(uint8_t pinsel, uint8_t samc, uint8_t rptcnt)
 
     ADCREG(CONbits).ON = 1;
     WAIT_WHILE(!ADCREG(CONbits).ADRDY, 5u);    /* wait for the core     */
-    console_puts("[adc] core ready, Integration mode, CNT 2048, repeat-timer trigger\r\n");
-    console_kv("[adc] pinsel", pinsel);
-    console_kv("[adc] samc", samc);
-    console_kv("[adc] rptcnt (period in TAD of 12.5 ns)", rptcnt);
+    console_trace("[adc] core ready, Integration mode, CNT 2048, repeat-timer trigger\r\n");
+    console_trace_kv("[adc] pinsel", pinsel);
+    console_trace_kv("[adc] samc", samc);
+    console_trace_kv("[adc] rptcnt (period in TAD of 12.5 ns)", rptcnt);
 }
 
 /* Input pin and sample time of channel 0. Only safe while no burst is

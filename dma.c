@@ -112,9 +112,9 @@ void dma0_init(uint32_t trigger, const volatile void *src,
      * priority 4. Nothing fires until the first burst is started. */
     IFS2bits.DMA0IF = 0;
     IEC2bits.DMA0IE = 1;
-    console_puts("[dma] channel 0 armed, IRQ on; address window = the buffer:\r\n");
-    console_kv_hex("[dma] DMALOW", DMALOW);
-    console_kv_hex("[dma] DMAHIGH", DMAHIGH);
+    console_trace("[dma] channel 0 armed, IRQ on; address window = the buffer:\r\n");
+    console_trace_kv_hex("[dma] DMALOW", DMALOW);
+    console_trace_kv_hex("[dma] DMAHIGH", DMAHIGH);
 }
 
 bool dma0_enabled(void)

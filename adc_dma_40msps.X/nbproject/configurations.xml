@@ -13,6 +13,7 @@
       <itemPath>../diag.h</itemPath>
       <itemPath>../console.h</itemPath>
       <itemPath>../sim.h</itemPath>
+      <itemPath>../timebase.h</itemPath>
       <itemPath>../cmd_parser.h</itemPath>
     </logicalFolder>
     <logicalFolder name="ExternalFiles"
@@ -36,6 +37,7 @@
       <itemPath>../capture.c</itemPath>
       <itemPath>../led.c</itemPath>
       <itemPath>../diag.c</itemPath>
+      <itemPath>../timebase.c</itemPath>
       <itemPath>../cli.c</itemPath>
       <itemPath>../cmd_parser.c</itemPath>
     </logicalFolder>

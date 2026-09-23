@@ -104,6 +104,15 @@ int main(void)
     }
     boot_mark(8u);
 
+    /* Does the delivered rate follow the repeat-timer period? Two short
+     * runs against Timer1; blink code 12 if not. */
+    {
+        const uint32_t rc = capture_ratetest();
+        if (rc != 0u) {
+            fail(rc);
+        }
+    }
+
 #if AUTO_SWEEP
     /* The rate sweep, once, without anyone typing (AUTO_SWEEP in
      * board.h): from 1.25 MSPS up to 40 MSPS, one line per rate. */

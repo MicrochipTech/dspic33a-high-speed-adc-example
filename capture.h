@@ -65,6 +65,16 @@ uint8_t capture_period(void);
  * previous input afterwards. */
 uint32_t capture_selftest(uint32_t *mean);
 
+/* Rate self-test: run a few hundred halves at two repeat-timer periods
+ * (16 and 4 TAD) and judge the delivered sample rate, measured against
+ * Timer1, against the nominal one - and against each other, because
+ * the failure seen on the board was a rate that did not change at all.
+ * Blocking, bounded, prints its numbers. Returns 0, or 6/8 from the
+ * waits, or 12 if a rate is off by more than 10 % or the two do not
+ * differ by the expected factor. Restores the previous period. Skipped
+ * in the simulator build. */
+uint32_t capture_ratetest(void);
+
 /* Process the completed half if a new one arrived; returns true if it did.
  * Called from the main loop and from the console's yield hook, so that
  * the measurement keeps running while a long console reply drains. */

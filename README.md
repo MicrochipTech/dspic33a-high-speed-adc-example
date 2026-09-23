@@ -238,6 +238,7 @@ The stop codes:
 | 9 | a CPU trap or an interrupt with no handler | the `[TRAP]` block on the console — it names the vector, the boot stage and the `INTCON*` cause bits. `docs/TROUBLESHOOTING.md` §2.0b |
 | 10 | the fail-safe clock monitor moved the CPU to the backup FRC | the `[CLKF]` lines: `OSCCTRL`, `PLL2CON`, `CLK1CON` |
 | 11 | something wrote past the end of the sample buffer | the `[guard]` lines: which of the 16 guard words behind `buf` changed and what it holds. A 12-bit value there means the DMA ran past the buffer |
+| 12 | the delivered sample rate does not follow the repeat-timer period | the `[ratetest]` lines: nominal and measured kSPS at RPTCNT 16 and 4, measured against Timer1. Off by more than 10 %, or the two not four times apart, means the ADC is not being paced by its repeat timer (`TRG2SRC`, `RPTCNT`) — or the time base check above them is not 1 250 000 |
 
 **What the self-test proves.** Before the external pin is used, the code runs the
 identical clock, ADC, DMA and interrupt chain on the ADC's internal 15/16·VDD reference
@@ -806,7 +807,8 @@ simulator run takes about 2.5 minutes for the 100 halves.
 | `sim_dma.c`, `sim.h` | **simulator build only:** stand-in for `dma.c` that produces buffer halves (1 MHz sine) and the ping-pong check; see "In the MPLAB X simulator" |
 | `capture.c`, `capture.h` | the measurement: wires ADC and DMA together, handles the DMA events with every error counter and the burst restart, start/stop/input, self-test, per-half processing — what the console may read and control |
 | `led.c`, `led.h` | LED0 |
-| `diag.c`, `diag.h` | stop codes (`fail()`), trap and unhandled-interrupt handler, boot-stage record, register dump |
+| `diag.c`, `diag.h` | stop codes (`fail()`), trap and unhandled-interrupt handler, boot-stage record, reset cause, register dump |
+| `timebase.c`, `timebase.h` | Timer1 as a 12.5 MHz stopwatch — the independent clock the delivered sample rate is measured against (rate test at boot, `sweep`). It does **not** pace the ADC; the ADC's own repeat timer does that |
 | `cli.c`, `console.h` | the console: UART2 on the MCP2221A channel, the receive interrupt, the commands |
 | `cmd_parser.c`, `cmd_parser.h` | the command parser, unchanged from [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser) (Apache 2.0) |
 | `adc_dma_40msps.X/` | MPLAB X project — build, program and debug from here |

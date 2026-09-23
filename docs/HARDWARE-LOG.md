@@ -106,3 +106,11 @@ nominal at TAD 12.5 ns), `period <2..63>` command, `rpt=` in the status line, th
 now steps `RPTCNT` 63, 32, 16, 8, 4, 3, 2 (1.27 to 40 MSPS nominal, "nominal =
 80000/rptcnt ksps") and prints the measured rate next to it. Rates below 1.27 MSPS would
 need `CLK6DIV` or the CCP trigger; not built.
+
+Added with it, still before any board run: a **rate self-test** after the reference
+self-test (`capture_ratetest()`, `fail 12`): 200 halves at RPTCNT 16 and at RPTCNT 4,
+delivered rate measured against Timer1 (`timebase.c`, checked once against
+`__delay32()`), each within 10 % of nominal and the two four times apart — the check
+that would have caught run 4's "rate does not change" without a sweep. And
+`BOOT_VERBOSE` (board.h, default 0): the `[clk]`/`[adc]`/`[dma]` register commentary
+at boot is off; reset cause, self-test, rate test, sweep and every failure still print.
