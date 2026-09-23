@@ -131,6 +131,25 @@ uint8_t adc_trg2(void) { return (uint8_t)ADCREG(CH0CON1bits).TRG2SRC; }
 
 bool adc_ready(void) { return ADCREG(CONbits).ADRDY != 0u; }
 
+void adc_deinit(void)
+{
+    ADCREG(CONbits).ON = 0;
+    (void)ADCREG(CH0DATA);            /* clears a stale CH0RDY            */
+    IFS6 = 0u;                        /* this core's event flags          */
+}
+
+bool adc_reinit(void)
+{
+    ADCREG(CONbits).ON = 1;
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+    return true;                       /* no core to wait for              */
+#else
+    uint32_t n = WAIT_LIMIT;
+    while (!ADCREG(CONbits).ADRDY && (--n != 0u)) { }
+    return n != 0u;
+#endif
+}
+
 uint8_t adc_pinsel(void) { return (uint8_t)ADCREG(CH0CON1bits).PINSEL; }
 uint8_t adc_samc(void)   { return (uint8_t)ADCREG(CH0CON1bits).SAMC; }
 

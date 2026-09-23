@@ -22,9 +22,10 @@ uint32_t clock_cpu_hz(void);
  * (INTDIV 0), or an even 2..10: the divided clock is Fin / (2 * INTDIV)
  * (DS70005591D, CLKnDIV INTDIV description), and 32 MHz is the ADC's
  * minimum (Table 16-1, p1223), so 10 is the largest ratio. Switches with
- * DIVSWEN and waits, bounded, for the switch and for ADRDY. False for a
- * bad ratio or a switch that did not complete; the divider is then
- * whatever the hardware says (clock_adc_div()). Only between bursts. */
+ * DIVSWEN and waits, bounded, for the switch. False for a bad ratio or a
+ * switch that did not complete; the divider is then whatever the
+ * hardware says (clock_adc_div()). The ADC core must be OFF while this
+ * runs: capture.c switches it off, calls this, switches it on again. */
 bool     clock_adc_set_div(uint32_t ratio);
 uint32_t clock_adc_div(void);
 uint32_t clock_adc_hz(void);

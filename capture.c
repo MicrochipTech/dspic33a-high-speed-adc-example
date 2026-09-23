@@ -145,14 +145,41 @@ static uint32_t          sccp_ticks     = ADC_SCCP_TICKS;   /* SCCP1 period */
  * from plain back-to-back: both run the converter back-to-back. */
 static volatile uint8_t  pacing_cur     = ADC_TRG2_REPEAT;   /* adc_init() */
 
+/* Stop the stream and wait for the burst in flight to end - at most one
+ * buffer, 52 us at 40 MSPS, bounded. Returns whether it was running, so
+ * the caller can restart it. For changes that need an idle ADC. */
+static bool quiesce(void)
+{
+    const bool was_running = run_enabled;
+    run_enabled = false;
+    uint32_t n = WAIT_LIMIT;
+    while (burst_active && (--n != 0u)) { SIM_DMA_TICK(); }
+    return was_running;
+}
+
+/* The ADC clock is not changed under a running core: adc_deinit(),
+ * CLKGEN6 divider switched, adc_reinit() and ADRDY back - the same
+ * order as at boot. Idle only (quiesce() first). False if the switch or
+ * the core did not come back; the log says so through the rate test or
+ * the sweep row. */
+static bool adc_clock_switch(uint32_t ratio)
+{
+    adc_deinit();
+    const bool switched = clock_adc_set_div(ratio);
+    const bool ready    = adc_reinit();
+    return switched && ready;
+}
+
 /* Write the period for the active source; the caller guarantees the
- * channel is idle (or that this is the DONE moment). */
+ * channel is idle (or that this is the DONE moment). The clock-divider
+ * source never gets here from the DONE moment: its changes go through
+ * quiesce() and happen at once, because they switch the ADC off. */
 static void apply_period(uint32_t period)
 {
     switch (pacing_cur) {
     case ADC_TRG2_REPEAT:  adc_set_period((uint8_t)period); break;
     case ADC_TRG2_SCCP1:   sccp_ticks = period; sccp1_start(period); break;
-    case ADC_PACE_CLKDIV:  (void)clock_adc_set_div(period); break;
+    case ADC_PACE_CLKDIV:  (void)adc_clock_switch(period); break;
     default:               break;                /* B2B: nothing to set */
     }
 }
@@ -260,12 +287,8 @@ void dma0_event(uint32_t st)
             switch_pending = false;
         }
         if (pacing_pending) {
-            /* Leaving the clock-divider source: full ADC clock again, so
-             * the other sources' units (TAD, 10 ns ticks) are what the
-             * comments say. */
-            if ((pacing_cur == ADC_PACE_CLKDIV) && (pacing_next != ADC_PACE_CLKDIV)) {
-                (void)clock_adc_set_div(1u);
-            }
+            /* Never involves the clock-divider source: those switches
+             * go through quiesce() in capture_set_pacing(). */
             adc_set_trg2((pacing_next == ADC_PACE_CLKDIV) ? ADC_TRG2_B2B : pacing_next);
             pacing_cur     = pacing_next;
             pacing_pending = false;
@@ -348,12 +371,18 @@ bool capture_set_pacing(uint8_t pacing)
     default:               return false;
     }
     if (pacing != ADC_TRG2_SCCP1) { sccp1_stop(); }
+    /* Into or out of the clock-divider source the ADC is switched off
+     * and on: not between two bursts in the ISR, but now, with the
+     * stream stopped and restarted around it. */
+    bool restart = false;
+    if ((pacing == ADC_PACE_CLKDIV) || (pacing_cur == ADC_PACE_CLKDIV)) {
+        restart = quiesce();
+    }
     /* Leaving the clock-divider source: back to the full ADC clock, so
      * that the other sources' units (TAD, 10 ns ticks) mean what the
-     * comments say. At once if idle; the DONE handler does the same
-     * when the switch is deferred. */
-    if ((pacing_cur == ADC_PACE_CLKDIV) && (pacing != ADC_PACE_CLKDIV) && !burst_active) {
-        (void)clock_adc_set_div(1u);
+     * comments say. */
+    if ((pacing_cur == ADC_PACE_CLKDIV) && (pacing != ADC_PACE_CLKDIV)) {
+        (void)adc_clock_switch(1u);
     }
     pacing_next    = pacing;
     pacing_pending = true;
@@ -365,6 +394,7 @@ bool capture_set_pacing(uint8_t pacing)
         apply_period(period);
         pacing_pending = period_pending = false;
     }
+    if (restart) { capture_start(); }
     return true;
 }
 
@@ -388,6 +418,15 @@ bool capture_set_period(uint32_t period)
     case ADC_TRG2_SCCP1:   if ((period < 2u) || (period > 65535u)) { return false; } break;
     case ADC_PACE_CLKDIV:  if ((period != 1u) && ((period < 2u) || (period > 10u) || (period % 2u != 0u))) { return false; } break;
     default:               return false;
+    }
+    if (pacing_cur == ADC_PACE_CLKDIV) {
+        /* ADC off and on around the clock switch: stop the stream, do
+         * it now, restart. Not deferred to the DONE moment. */
+        const bool restart = quiesce();
+        const bool ok      = adc_clock_switch(period);
+        period_pending     = false;
+        if (restart) { capture_start(); }
+        return ok;
     }
     period_next    = period;
     period_pending = true;

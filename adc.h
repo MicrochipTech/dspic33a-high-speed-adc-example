@@ -65,7 +65,15 @@ uint8_t adc_period(void);
 void    adc_set_trg2(uint8_t trg2src);
 uint8_t adc_trg2(void);
 
-/* ADRDY: the core is ready (again) - checked after a clock change. */
+/* Take the core down and bring it back. The clock of a running core is
+ * not changed: the caller calls adc_deinit(), changes CLKGEN6, calls
+ * adc_reinit() and gets ADRDY back (bounded wait; false on timeout, and
+ * the core is then not usable). adc_deinit() also clears the channel's
+ * event flags and a stale CH0RDY, so nothing old triggers the DMA when
+ * the core comes back. Only while no burst is in flight. The channel
+ * configuration (adc_init) survives ON = 0 and is not repeated. */
+void    adc_deinit(void);
+bool    adc_reinit(void);
 bool    adc_ready(void);
 
 /* The core's registers as "name: 0x........" lines (part of regs_dump()). */

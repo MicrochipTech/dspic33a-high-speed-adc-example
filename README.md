@@ -614,7 +614,10 @@ sources stay in the firmware as candidates, and the rate test at boot says so.
 **3. The ADC input clock, CLKGEN6 — the way this example runs now** (`pacing 64`,
 `period` = divide ratio; `ADC_CLKDIV` in `board.h`). The divided clock is F_IN /
 (2 · `INTDIV`), and the conversions run back-to-back at TAD = 4 / F_IN: ratio 1 = 40
-MSPS, 2 = 20, 4 = 10, 6 = 6.7, 8 = 5, 10 = 4 (32 MHz, the ADC's minimum). The 9-bit
+MSPS, 2 = 20, 4 = 10, 6 = 6.7, 8 = 5, 10 = 4 (32 MHz, the ADC's minimum). The clock is
+not changed under a running core: the stream is stopped, the ADC taken down (`adc_deinit()`), the
+divider switched, the ADC brought back (`adc_reinit()`, `ADRDY` awaited) — the order
+of the boot — and then the stream restarted. The 9-bit
 fractional divider would fill the gaps — 25 MSPS with 200 MHz in — but is not used
 yet. `SAMC` and the repeat timer would extend the range down to about 125 kSPS (32
 MHz, k = 64) if they paced, which on this board they do not.

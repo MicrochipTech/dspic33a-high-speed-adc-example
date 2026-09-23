@@ -15,7 +15,6 @@
 
 #include <xc.h>
 #include "clock.h"
-#include "adc.h"
 #include "capture.h"
 #include "console.h"
 #include "diag.h"
@@ -197,7 +196,9 @@ void __attribute__((interrupt, no_auto_psv)) _CLKFInterrupt(void)
  * ADC clock divider at run time (clock.h). INTDIV is bits 30:16 of
  * CLK6DIV; the switch takes effect when DIVSWEN is set and is complete
  * when the hardware clears it. Nothing else in the tree changes: the
- * CPU stays on PLL2, the peripherals on their own generators.
+ * CPU stays on PLL2, the peripherals on their own generators. The ADC
+ * is off meanwhile (capture.c): its clock is set before it is enabled,
+ * as at boot, not changed under a running core.
  * ------------------------------------------------------------------ */
 #define ADC_CLK_HZ        320000000u
 #define DIVSW_WAIT_LIMIT  100000u     /* loop iterations, far above the switch */
@@ -216,9 +217,6 @@ bool clock_adc_set_div(uint32_t ratio)
     CLK6CONbits.DIVSWEN = 1u;
     uint32_t n = DIVSW_WAIT_LIMIT;
     while (CLK6CONbits.DIVSWEN && (--n != 0u)) { }
-    if (n == 0u) { return false; }
-    n = DIVSW_WAIT_LIMIT;
-    while (!adc_ready() && (--n != 0u)) { }
     return n != 0u;
 #endif
 }
