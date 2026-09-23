@@ -104,16 +104,22 @@ void dma0_halt(void)
 
 /* DMAxSTAT flags are "R/C/HS": a flag is cleared by writing 0 to it
  * (legend p815, Example 13-4 p835: "DMA0STATbits.DONE=0"); writing 1
- * does nothing. One bit-field write per flag, so nothing else in the
- * word is touched. */
+ * does nothing. So the whole word is written at once, with 0 only in
+ * the flags to clear and 1 everywhere else.
+ *
+ * NOT a bit-field write. "DMA0STATbits.DONE = 0" compiles to
+ * read-modify-write: it reads the word, clears the bit, writes the word
+ * back - and a flag that the hardware set between that read and that
+ * write is written back as 0, i.e. cleared without ever being seen. On
+ * the board this lost the DONE of a burst: the ISR was busy with
+ * overrun events, DONE arrived during the write-back, the burst was
+ * never restarted and the stream stopped (fail 6, DMA0STAT still
+ * showing DONE). The datasheet's own example uses the bit-field form,
+ * which is fine as long as only one flag can change at a time; here
+ * OVERRUN, HALF and DONE arrive independently. */
 void dma0_clear(uint32_t flags)
 {
-    if (flags & DMA0_OVERRUN) { DMA0STATbits.OVERRUN = 0; }
-    if (flags & DMA0_ADRERR)  { DMA0STATbits.ADRERR  = 0; }
-    if (flags & DMA0_BRERR)   { DMA0STATbits.BRERR   = 0; }
-    if (flags & DMA0_BWERR)   { DMA0STATbits.BWERR   = 0; }
-    if (flags & DMA0_HALF)    { DMA0STATbits.HALF    = 0; }
-    if (flags & DMA0_DONE)    { DMA0STATbits.DONE    = 0; }
+    DMA0STAT = ~flags;
 }
 
 /* ------------------------------------------------------------------ *
@@ -122,11 +128,21 @@ void dma0_clear(uint32_t flags)
  * they mean and what to do about them is decided there; the snapshot
  * is taken once so that a flag arriving during the handler is seen by
  * the next interrupt, not half by this one.
+ *
+ * The interrupt flag is cleared FIRST, before the snapshot. An event
+ * that arrives while the handler runs then sets it again and the
+ * handler re-enters right after returning. Cleared at the end, as the
+ * first version did, that event's interrupt is wiped: its flag stays
+ * set in DMA0STAT but nothing comes to read it. With the overrun
+ * events of a 40 MSPS stream keeping the handler busy, that is exactly
+ * what happened on the board - a DONE was lost, the burst was never
+ * restarted, the stream stopped (fail 6 with DONE still set in the
+ * register dump).
  * ------------------------------------------------------------------ */
 void __attribute__((interrupt, no_auto_psv)) _DMA0Interrupt(void)
 {
+    IFS2bits.DMA0IF = 0;              /* first, see above               */
     dma0_event(DMA0STAT);
-    IFS2bits.DMA0IF = 0;
 }
 
 void dma0_regs_dump(void)
