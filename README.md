@@ -781,6 +781,8 @@ simulator run takes about 2.5 minutes for the 100 halves.
 | `cmd_parser.c`, `cmd_parser.h` | the command parser, unchanged from [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser) (Apache 2.0) |
 | `adc_dma_40msps.X/` | MPLAB X project — build, program and debug from here |
 | `docs/TROUBLESHOOTING.md` | **what to do when it does not work** — including where we doubt our own code |
+| `docs/HARDWARE-LOG.md` | every run on the board, dated: what the log said, what was changed because of it |
+| `CLAUDE.md` | working notes for continuing with Claude Code: module rules, build and verification steps, open questions |
 | `docs/*.png`, `docs/*.mmd` | the block diagrams above, with their Mermaid sources |
 | `tools/sim_trap.py` | drives the simulator build in MDB and reports the verdict ("In the MPLAB X simulator" above) |
 | `tools/` | command-line build without the IDE; **ignore this unless you want it** |
