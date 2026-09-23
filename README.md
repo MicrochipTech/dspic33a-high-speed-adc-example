@@ -534,15 +534,31 @@ please log this terminal from power-up and send it back
 [pacing] using: back-to-back (no rate control) - NO PACED SOURCE PASSED, the rate is not under control
 [boot] automatic rate sweep before the measurement (AUTO_SWEEP in board.h)
 [sweep] ...
-[boot] self-test passed, measurement running on the external input
-[stat] blocks=195312 overrun=0 late=0 missed=0 addr_err=0 bus_err=0 last=2047 input=5 samc=0 pace=2 per=0 run=1 ad3if=0 rx=0 last=0x00 cr=0 lf=0
+
+==============================================================
+[DONE] ALL AUTOMATIC TESTS FINISHED
+[DONE] ADC core and its clock generator (CLKGEN6) are switched OFF - nothing converts
+[DONE] pacing chosen: one conversion per SCCP1 trigger, no burst (period in ticks of 10 ns)
+[DONE] period: 5
+[DONE] ksps nominal: 20000
+[DONE] the console is free now: type help. start = measure at that rate, stop, status, sweep
+==============================================================
+
+[stat] blocks=0 overrun=0 late=0 missed=0 addr_err=0 bus_err=0 last=0 input=5 samc=0 pace=65 per=5 run=0 pwr=0 ad3if=0 rx=0 last=0x00 cr=0 lf=0
+> start
+[stat] blocks=195312 overrun=0 late=0 missed=0 addr_err=0 bus_err=0 last=2047 input=5 samc=0 pace=65 per=5 run=1 pwr=1 ad3if=0 rx=6 last=0x0D cr=1 lf=0
 [half] n=1 min=1990 max=2103 mean=2047 pp=113
 [stat] blocks=390624 overrun=0 ...
 [half] n=0 min=1988 max=2105 mean=2046 pp=117
 ```
 
-A `[stat]` line comes every 5 s for the first minute, then every minute, each followed
-by a `[half]` line with min, max, mean and peak-to-peak of the last completed half - the
+**After the last test the ADC core and its clock generator are switched off** (`pwr=0`):
+nothing converts, no DMA event, no interrupt from lost samples, so the console is
+guaranteed to get the CPU - the interrupt storm of a rate with overruns cannot reach it.
+While idle a `[stat]` line comes every 10 s (`rx` shows typed bytes arriving). `start`
+brings clock and core back and measures at the rate the sweep chose; then a `[stat]`
+line comes every 5 s for the first minute, then every minute, each followed by a
+`[half]` line with min, max, mean and peak-to-peak of the last completed half - the
 same figures as the `stats` command, so the log says whether a signal is there. If a step
 fails, the log ends with `[FAIL] code n`, the reason in words, and the full register
 dump (`[regs] …`) — the same thing the `regs` command prints — and then LED0 blinks

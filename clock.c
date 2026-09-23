@@ -237,6 +237,23 @@ bool clock_adc_set_div(uint32_t ratio_h)
 #endif
 }
 
+void clock_adc_off(void)
+{
+    CLK6CONbits.ON = 0u;
+}
+
+bool clock_adc_on(void)
+{
+    CLK6CONbits.ON = 1u;
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+    return true;
+#else
+    uint32_t n = DIVSW_WAIT_LIMIT;
+    while (!CLK6CONbits.CLKRDY && (--n != 0u)) { }
+    return n != 0u;
+#endif
+}
+
 uint32_t clock_adc_div(void)
 {
     /* Back from the register, in hundredths: 2 * (INTDIV + FRACDIV/512)

@@ -42,6 +42,7 @@
 #include "capture.h"
 #include "led.h"
 #include "diag.h"
+#include "timebase.h"
 #include "console.h"
 #include "sim.h"
 
@@ -54,6 +55,7 @@
 #define STATUS_EVERY_HALVES   195312u
 #endif
 #define STATUS_FAST_LINES     12u
+#define IDLE_STATUS_TICKS     125000000u     /* 10 s of the 12.5 MHz time base */
 
 int main(void)
 {
@@ -130,15 +132,39 @@ int main(void)
     console_sweep(2000u, true);
 #endif
 
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+    /* The simulator's job is the ping-pong check, which needs the stream. */
     console_puts("[boot] self-test passed, measurement running on the external input\r\n");
     counters_clear();                 /* the self-test halves were not serviced */
     capture_start();
+#else
+    /* All tests done. ADC core and its clock generator off: no
+     * conversion, no DMA event, no interrupt storm from lost samples,
+     * so the console is guaranteed to get the CPU. "start" brings the
+     * ADC back at the rate the sweep chose. */
+    capture_shutdown();
+    counters_clear();
+    /* Unmistakable end marker: the reader of a log must see at a glance
+     * that every automatic test is over and what came out of it. */
+    console_puts("\r\n"
+                 "==============================================================\r\n"
+                 "[DONE] ALL AUTOMATIC TESTS FINISHED\r\n"
+                 "[DONE] ADC core and its clock generator (CLKGEN6) are switched OFF - nothing converts\r\n");
+    console_puts("[DONE] pacing chosen: ");
+    console_puts(capture_pacing_name());
+    console_puts("\r\n");
+    console_kv("[DONE] period", capture_period());
+    console_kv("[DONE] ksps nominal", capture_nominal_ksps(capture_period()));
+    console_puts("[DONE] the console is free now: type help. start = measure at that rate, stop, status, sweep\r\n"
+                 "==============================================================\r\n\r\n");
+#endif
     boot_mark(9u);
     led_mode(2u);                     /* heartbeat                       */
 
     uint32_t idle = 0;
     uint32_t next_status = STATUS_EVERY_HALVES;
     uint32_t status_lines = 0;
+    uint32_t t_idle_status = timebase_ticks();   /* idle: a line per 10 s */
 
     for (;;) {
         SIM_DMA_TICK();               /* simulator: one half per pass    */
@@ -165,6 +191,13 @@ int main(void)
             if (++idle > WAIT_LIMIT) { fail(6u); }
         } else {
             idle = 0;                 /* stopped from the console        */
+            /* Nothing running: a status line every 10 s anyway, so that
+             * the log shows the console alive (rx counts) and the ADC
+             * state (run=0, and after the boot powered=0). */
+            if ((timebase_ticks() - t_idle_status) >= IDLE_STATUS_TICKS) {
+                t_idle_status = timebase_ticks();
+                console_status_line();
+            }
         }
 
         /* What to look at with the debugger, the "status" command or the

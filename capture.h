@@ -38,6 +38,12 @@ void capture_halt(void);
 
 /* Start the burst stream; a no-op while it runs. */
 void capture_start(void);
+/* Everything off: stream stopped, ADC core down, CLKGEN6 off. No
+ * conversion, no DMA event, no interrupt from the ADC side - the console
+ * has the CPU to itself. capture_start() brings clock and core back with
+ * the pacing and period they had. capture_powered() says which state. */
+void capture_shutdown(void);
+bool capture_powered(void);
 /* Let the current burst finish and do not restart it. */
 void capture_stop(void);
 bool capture_running(void);

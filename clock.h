@@ -32,6 +32,10 @@ uint32_t clock_cpu_hz(void);
  * core must be OFF while this runs: capture.c takes it down, calls this,
  * brings it back. */
 bool     clock_adc_set_div(uint32_t ratio_h);
+/* CLKGEN6 off (the ADC has no clock then; the core must be off first) and
+ * on again with the divider it had, CLKRDY awaited, bounded. */
+void     clock_adc_off(void);
+bool     clock_adc_on(void);
 uint32_t clock_adc_div(void);
 uint32_t clock_adc_hz(void);
 

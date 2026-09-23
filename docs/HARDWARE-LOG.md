@@ -308,3 +308,10 @@ row of either pass wins. The AUTO order is now 65, 64, 3, 34, 2: Microchip's mec
 first, the divider second, the two burst triggers for the record, back-to-back as the
 reference. Verified in the simulator (boot cycles through all five, ping-pong PASS) and
 in all three builds; not on the board.
+
+Also (24.09., before any board run): after the sweep the boot switches the ADC core
+and CLKGEN6 off (`capture_shutdown()`, `pwr=0` in `[stat]`) and only serves the
+console, with a `[stat]` line every 10 s. That separates the two open questions of
+run 6: if `rx` counts now, the console was starved by the overrun interrupts; if it
+still stays 0 with nothing converting, the bytes never reach RD1. `start` brings
+clock and core back (`clock_adc_on()`, `adc_reinit()`) at the rate the sweep chose.

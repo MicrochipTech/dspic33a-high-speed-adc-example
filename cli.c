@@ -372,7 +372,7 @@ static void put_line(const char *s)
 /* One status line, blocking, for the periodic trace from main(). */
 void console_status_line(void)
 {
-    char line[240];                       /* 218 used with every field at max */
+    char line[240];                       /* 226 used with every field at max */
     char *p = copy_str(line, "[stat] blocks=");
     p = u32_to_str(p, blocks_done);
     p = copy_str(p, " overrun=");  p = u32_to_str(p, dma_overrun);
@@ -386,6 +386,7 @@ void console_status_line(void)
     p = copy_str(p, " pace=");     p = u32_to_str(p, capture_pacing());
     p = copy_str(p, " per=");      p = u32_to_str(p, capture_period());
     p = copy_str(p, " run=");      p = u32_to_str(p, capture_running() ? 1u : 0u);
+    p = copy_str(p, " pwr=");      p = u32_to_str(p, capture_powered() ? 1u : 0u);
     /* Does the ADC's channel-done event reach the CPU side at all? It is
      * the DMA trigger and stays masked (IEC6 = 0), so this flag being 1
      * while the DMA runs says the event is visible to the CPU - the
@@ -433,6 +434,7 @@ static void cmd_status_fn(int argc, char **argv)
 {
     (void)argc; (void)argv;
     put_kv("running", capture_running() ? 1u : 0u);
+    put_kv("powered", capture_powered() ? 1u : 0u);
     put_kv("blocks", blocks_done);
     put_kv("overrun", dma_overrun);
     put_kv("late", late_service);

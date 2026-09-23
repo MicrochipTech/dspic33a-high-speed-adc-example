@@ -131,6 +131,7 @@ volatile int32_t  proc_result   = 0;   /* output of process_buffer()       */
  * trigger a second one on top. */
 static volatile bool    run_enabled  = false;
 static volatile bool    burst_active = false;
+static volatile bool    powered      = true;    /* ADC core + CLKGEN6 on */
 
 /* Channel reconfiguration requested by the console or the self-test,
  * applied by the ISR between two bursts, when the channel is idle. */
@@ -323,10 +324,37 @@ void dma0_event(uint32_t st)
  * ------------------------------------------------------------------ */
 void capture_start(void)
 {
+    if (!powered) {
+        /* After capture_shutdown(): clock first, then the core - the boot
+         * order. Registers kept their values, so pacing and period are
+         * what they were. A wait that runs out is reported and the
+         * start refused; the counters show nothing moving. */
+        const bool clk = clock_adc_on();
+        const bool adc = adc_reinit();
+        if (!clk || !adc) {
+            console_puts(clk ? "[capture] ADC core did not come back (ADRDY)\r\n"
+                             : "[capture] CLKGEN6 did not come back (CLKRDY)\r\n");
+            return;
+        }
+        powered = true;
+    }
     run_enabled = true;
     if (!burst_active) {
         start_burst();
     }
+}
+
+void capture_shutdown(void)
+{
+    (void)quiesce();                  /* stream off, burst finished     */
+    adc_deinit();
+    clock_adc_off();
+    powered = false;
+}
+
+bool capture_powered(void)
+{
+    return powered;
 }
 
 void capture_stop(void)
