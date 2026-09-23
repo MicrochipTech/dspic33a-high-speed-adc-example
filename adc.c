@@ -78,7 +78,7 @@ void adc_init(uint8_t pinsel, uint8_t samc, uint8_t rptcnt)
     ADCREG(CH0CON1bits).IRQSEL  = 0u;          /* event per conversion  */
     ADCREG(CH0CON1bits).EIEN    = 0u;          /* no early IRQ with DMA */
     ADCREG(CH0CON1bits).TRG1SRC = 0x01u;       /* software trigger      */
-    ADCREG(CH0CON1bits).TRG2SRC = 0x03u;       /* ADC repeat timer      */
+    ADCREG(CH0CON1bits).TRG2SRC = ADC_TRG2SRC; /* 3 repeat timer, 2 b2b */
 
     /* Conversions per burst. One burst fills the whole DMA buffer, so
      * the DMA DONE interrupt is also the moment to start the next one.

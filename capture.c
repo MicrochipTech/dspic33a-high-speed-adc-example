@@ -451,7 +451,7 @@ uint32_t capture_selftest(uint32_t *mean)
 #define RATETEST_HALVES   200u
 #define RATETEST_TOL_PCT  10u
 
-#ifndef __MPLAB_DEBUGGER_SIMULATOR
+#if !defined(__MPLAB_DEBUGGER_SIMULATOR) && (ADC_TRG2SRC == 3u)
 static uint32_t rate_measure(uint8_t rptcnt, uint32_t *ksps)
 {
     uint32_t n = WAIT_LIMIT;
@@ -476,6 +476,9 @@ uint32_t capture_ratetest(void)
 {
 #ifdef __MPLAB_DEBUGGER_SIMULATOR
     console_puts("[ratetest] skipped: the simulator has no ADC clock to measure\r\n");
+    return 0u;
+#elif ADC_TRG2SRC != 3u
+    console_puts("[ratetest] skipped: ADC_TRG2SRC is not the repeat timer, the rate is not set by RPTCNT\r\n");
     return 0u;
 #else
     static const uint8_t rpt[2] = { 16u, 4u };   /* 5 and 20 MSPS nominal */

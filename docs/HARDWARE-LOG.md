@@ -114,3 +114,9 @@ delivered rate measured against Timer1 (`timebase.c`, checked once against
 that would have caught run 4's "rate does not change" without a sweep. And
 `BOOT_VERBOSE` (board.h, default 0): the `[clk]`/`[adc]`/`[dma]` register commentary
 at boot is off; reset cause, self-test, rate test, sweep and every failure still print.
+
+Because the repeat-timer pairing rests on the datasheet text alone (and Example 16-3 has
+already shown the datasheet can be wrong in detail), `ADC_TRG2SRC` in board.h switches
+back to back-to-back (2) without other changes; the rate test then skips itself. Plan B
+if the repeat timer fails on the board: a CCP timer as trigger, `TRG2SRC = 32`, which
+Example 16-8 (p1334) shows together with Integration mode.

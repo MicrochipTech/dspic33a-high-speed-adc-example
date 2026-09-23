@@ -87,7 +87,11 @@ interrupt aborts with E0110). It proves the ping-pong buffer logic and nothing e
    the hardware counts `RPTCNT` or `RPTCNT + 1` TAD per period, and whether 40 MSPS
    (`RPTCNT = 2`) is reached at all, is what the measured column of the next sweep
    settles. Rates below 1.27 MSPS need a divided ADC clock (`CLK6DIV`) or a CCP timer
-   as trigger (`TRG2SRC = 32` = CCP1, Example 16-8 p1334).
+   as trigger (`TRG2SRC = 32` = CCP1, Example 16-8 p1334). The repeat-timer pairing
+   with Integration mode rests on the datasheet text alone: `ADC_TRG2SRC 2` in
+   `board.h` falls back to back-to-back without further changes, and the CCP trigger
+   (Example 16-8 shows it with Integration mode) is plan B if the board rejects the
+   repeat timer.
 2. At 40 MSPS about 4 % of the samples are lost as OVERRUN, independent of what the
    CPU does, and every overrun raises the DMA interrupt (~1.6 million per second),
    which starves the main loop and the console. Whether the DMA bus or something

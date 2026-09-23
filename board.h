@@ -29,6 +29,24 @@
 #define ADC_RPTCNT        2u
 #endif
 
+/* What re-triggers the conversions inside a burst (TRG2SRC, DS70005591D
+ * Table 16-4 p1227):
+ *   3  the ADC's repeat timer, period ADC_RPTCNT TAD - deterministic rate,
+ *      the rate test at boot proves it (fail 12 if not); the default.
+ *   2  back-to-back, as fast as the converter goes - what Microchip's
+ *      40 MSPS example uses; the rate then ignores ADC_RPTCNT and the
+ *      board showed it ignoring SAMC too (docs/HARDWARE-LOG.md run 4).
+ *      The rate test is skipped, the sweep's nominal column is
+ *      meaningless.
+ * The fallback exists because the repeat-timer pairing with Integration
+ * mode rests on the datasheet text alone; if the board says otherwise,
+ * flip this rather than dig. Plan B after that: a CCP timer as trigger,
+ * TRG2SRC = 32, which datasheet Example 16-8 (p1334) shows with
+ * Integration mode. */
+#ifndef ADC_TRG2SRC
+#define ADC_TRG2SRC       3u
+#endif
+
 /* Boot chatter: with 1 every start-up step reports its registers on the
  * console ([clk] PLL1 locked, [adc] pinsel, [dma] DMALOW ...). With 0 the
  * boot prints only what changes from run to run - reset cause, self-test
