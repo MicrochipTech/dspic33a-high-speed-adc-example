@@ -43,9 +43,11 @@ tools\build.bat        hardware  -> build\adc_dma_40msps.elf/.hex   (must be -Wa
 tools\build.bat sim    simulator -> build\adc_dma_40msps_sim.elf    (same)
 ```
 
-MPLAB X project: configurations `EV74H48A` (the board, PKOB4, `dma.c`) and `sim`
-(Simulator, `sim_dma.c`, `__MPLAB_DEBUGGER_SIMULATOR=1`); configurations are named
-after the evaluation kit they run on. `tools\_test_mplabx.bat` builds `EV74H48A`
+MPLAB X project: configurations `EV74H48A_Curiosity_Platform_MPS512` (the board,
+PKOB4, `dma.c`) and `sim` (Simulator, `sim_dma.c`, `__MPLAB_DEBUGGER_SIMULATOR=1`);
+hardware configurations are named after the evaluation kit, order number first, so
+that the name in the IDE says what gets programmed. `tools\_test_mplabx.bat` builds
+the board configuration
 from the command line through MPLAB X's own makefile generator. Two pitfalls: the
 generator rewrites `languageToolchainVersion` in `nbproject/configurations.xml` to
 whatever compiler it finds first - restore that one line, never `git checkout` the

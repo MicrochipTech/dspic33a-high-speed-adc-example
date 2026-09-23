@@ -46,7 +46,7 @@
   </logicalFolder>
   <projectmakefile>Makefile</projectmakefile>
   <confs>
-    <conf name="EV74H48A" type="2">
+    <conf name="EV74H48A_Curiosity_Platform_MPS512" type="2">
       <toolsSet>
         <developmentServer>localhost</developmentServer>
         <targetDevice>dsPIC33AK512MPS512</targetDevice>
