@@ -15,11 +15,11 @@
                     <type>2</type>
                 </confElem>
                 <confElem>
-                    <name>sim</name>
+                    <name>EV17P63A_Curiosity_Nano_MPS506</name>
                     <type>2</type>
                 </confElem>
                 <confElem>
-                    <name>EV17P63A_Curiosity_Nano_MPS506</name>
+                    <name>sim</name>
                     <type>2</type>
                 </confElem>
             </confList>
