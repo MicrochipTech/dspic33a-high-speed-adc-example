@@ -488,7 +488,9 @@ please log this terminal from power-up and send it back
 [adc] core ready, Integration mode, CNT 2048
 [adc] pinsel: 5
 [adc] samc: 0
-[dma] channel 0 armed, window 0x4000..0x13FFF, IRQ on
+[dma] channel 0 armed, IRQ on; address window = the buffer:
+[dma] DMALOW: 0x00004070
+[dma] DMAHIGH: 0x0000506F
 [boot] self-test on the internal reference
 [selftest] mean on internal 15/16 VDD (expect ~3840): 3851
 [boot] self-test passed, measurement running on the external input

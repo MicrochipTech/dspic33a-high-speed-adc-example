@@ -14,14 +14,17 @@
 #include <xc.h>
 #include "dma.h"
 #include "console.h"
+#include "diag.h"
 
-/* RAM window for the DMA address limit registers. __DATA_BASE and
- * __DATA_LENGTH come from the device header (0x4000 and 0x10000 for the
- * 64 KB parts, matching p33AK512MPS512.gld), so the window follows the
- * device instead of being a magic number. */
+/* The device's data RAM, from the device header (0x4000 and 0x10000 for
+ * the 64 KB parts, matching p33AK512MPS512.gld). Only a sanity check
+ * now: the address window the channel gets is the buffer itself, and
+ * that buffer must lie inside RAM. */
 #if !defined(__DATA_BASE) || !defined(__DATA_LENGTH)
 #error "__DATA_BASE / __DATA_LENGTH not provided by the device header"
 #endif
+#define RAM_FIRST   ((uint32_t)__DATA_BASE)
+#define RAM_LAST    ((uint32_t)__DATA_BASE + (uint32_t)__DATA_LENGTH - 1u)
 
 /* ------------------------------------------------------------------ *
  * DMA channel 0: ADCn channel 0 result -> RAM
@@ -38,7 +41,16 @@
  * checked against them (13.4.8.1 p829, step 5), and an access above
  * DMAHIGH sets ADRERR = 10 and clears CHEN (p810, p826). With the reset
  * values the very first sample would disable the channel. Every
- * datasheet example (p832 ff.) and MCC set them.
+ * datasheet example (p832 ff.) and MCC set them - to the whole RAM.
+ *
+ * Here the window is the destination buffer itself, dst..dst+2*count-1,
+ * nothing else: the hardware then refuses any transaction that would
+ * leave the buffer, and the channel switches itself off instead of
+ * writing into whatever follows (fail 8, dma_addr_err). The source is
+ * outside that window on purpose - it is an SFR, far below RAM - and
+ * that is fine: the board ran with the source below DMALOW from the
+ * first day (window 0x4000..0x13FFF, source 0xB64), so the check does
+ * not apply to the peripheral side.
  *
  * TRMODE = Repeated Continuous with RELOADD/RELOADC restarts at the
  * buffer start after each block on its own (p812, p829 step 4). HALFEN
@@ -49,14 +61,27 @@
  * Example 13-4 p835: "DMA0STATbits.DONE=0"). Writing 1 does not clear.
  * ------------------------------------------------------------------ */
 void dma0_init(uint32_t trigger, const volatile void *src,
-               volatile void *dst, uint32_t count)
+               volatile void *dst, uint32_t dst_bytes)
 {
     DMACONbits.ON = 0;
     DMA0CHbits.CHEN = 0;
 
-    /* Address window = the device's data RAM (p809 f.). */
-    DMALOW  = (uint32_t)__DATA_BASE;
-    DMAHIGH = (uint32_t)__DATA_BASE + (uint32_t)__DATA_LENGTH - 1u; /* 0x13FFF */
+    /* Everything about the destination comes from the buffer object the
+     * caller passes (its address and its sizeof), nothing from a
+     * constant: the window is exactly the buffer, the block count is
+     * the buffer in 16-bit transactions. A buffer outside RAM or of odd
+     * size is a bug in the caller, not something to run with. */
+    const uint32_t count = dst_bytes / 2u;
+    const uint32_t first = (uint32_t)dst;
+    const uint32_t last  = first + dst_bytes - 1u;
+    if ((first < RAM_FIRST) || (last > RAM_LAST) || (last < first) ||
+        (dst_bytes % 2u != 0u) || (count > 0xFFFFu) || (first % 4u != 0u)) {
+        console_kv_hex("[dma] unusable buffer (outside RAM, odd size, misaligned or > 64K transactions), first", first);
+        console_kv_hex("[dma] unusable buffer, last", last);
+        fail(8u);
+    }
+    DMALOW  = first;
+    DMAHIGH = last;
 
     DMA0SEL = trigger;                      /* e.g. ADCn Done CH0       */
     DMA0SRC = (uint32_t)src;                /* peripheral result        */
@@ -87,7 +112,9 @@ void dma0_init(uint32_t trigger, const volatile void *src,
      * priority 4. Nothing fires until the first burst is started. */
     IFS2bits.DMA0IF = 0;
     IEC2bits.DMA0IE = 1;
-    console_puts("[dma] channel 0 armed, window 0x4000..0x13FFF, IRQ on\r\n");
+    console_puts("[dma] channel 0 armed, IRQ on; address window = the buffer:\r\n");
+    console_kv_hex("[dma] DMALOW", DMALOW);
+    console_kv_hex("[dma] DMAHIGH", DMAHIGH);
 }
 
 bool dma0_enabled(void)

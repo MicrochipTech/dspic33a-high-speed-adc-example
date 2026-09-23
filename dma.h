@@ -17,12 +17,15 @@
 #define DMA0_HALF      _DMA0STAT_HALF_MASK      /* first half complete    */
 #define DMA0_DONE      _DMA0STAT_DONE_MASK      /* block complete         */
 
-/* Channel 0: `count` 16-bit transfers from `src` (fixed) to `dst`
- * (incremented, reloaded after each block), started by `trigger` (a
- * DMA_SEL CHSEL code), HALF/DONE interrupts enabled. The address window
- * is the device's data RAM. Nothing transfers until the trigger fires. */
+/* Channel 0: 16-bit transfers from `src` (fixed) into the buffer `dst`
+ * of `dst_bytes` bytes (incremented, reloaded after each block), started
+ * by `trigger` (a DMA_SEL CHSEL code), HALF/DONE interrupts enabled. The
+ * block is the whole buffer (dst_bytes / 2 transactions) and the DMA's
+ * address window is exactly the buffer, so the channel cannot write
+ * anywhere else. Pass the buffer object and its sizeof, nothing derived.
+ * Nothing transfers until the trigger fires. */
 void dma0_init(uint32_t trigger, const volatile void *src,
-               volatile void *dst, uint32_t count);
+               volatile void *dst, uint32_t dst_bytes);
 
 /* False once the channel switched itself off (address fault). */
 bool dma0_enabled(void);

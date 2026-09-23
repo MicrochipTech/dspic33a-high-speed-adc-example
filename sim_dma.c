@@ -92,12 +92,12 @@ void sim_banner(void)
  * dma.h, simulated
  * ------------------------------------------------------------------ */
 void dma0_init(uint32_t trigger, const volatile void *src,
-               volatile void *dst, uint32_t count)
+               volatile void *dst, uint32_t dst_bytes)
 {
     (void)trigger;                        /* no trigger: the loop ticks  */
     (void)src;                            /* no source: a table          */
     sim_dst      = (volatile uint16_t *)dst;
-    sim_half_len = count / 2u;
+    sim_half_len = dst_bytes / 2u / 2u;   /* 16-bit samples, two halves  */
     sim_enabled  = true;
     console_puts("[dma] simulator stand-in armed: halves come from sim_dma_tick()\r\n");
 }

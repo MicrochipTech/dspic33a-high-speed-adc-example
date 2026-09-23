@@ -78,11 +78,26 @@
 #define BUF_GUARD_WORDS       16u
 #define BUF_GUARD_PATTERN(i)  (0xA5C3F00Du + (i))
 
+/* THE DMA BUFFER - a dedicated object, and nothing else is in it.
+ *
+ *   volatile   the DMA writes it behind the compiler's back; every read
+ *              must go to memory, never to a cached register value
+ *   section    its own section ".dma_buffer", so the linker keeps it in
+ *              one piece and no other variable is laid out inside or
+ *              across it (see the map file)
+ *   aligned    4 bytes, the DMA writes through a 32-bit path
+ *   window     dma0_init() sets DMALOW/DMAHIGH to exactly this object:
+ *              the hardware refuses any DMA transaction outside it
+ *   guard      the words behind the samples are the software check of
+ *              the same thing (fail 11)
+ *
+ * So a DMA transfer cannot collide with the rest of memory: not by
+ * layout, not by the hardware, and if it somehow did, not unnoticed. */
 static volatile struct {
     uint16_t data[SAMPLES_PER_BUF];
     uint32_t guard[BUF_GUARD_WORDS];
-} buf_store __attribute__((aligned(4)));
-#define buf (buf_store.data)
+} dma_buffer __attribute__((section(".dma_buffer"), aligned(4)));
+#define buf (dma_buffer.data)
 
 /* ------------------------------------------------------------------ *
  * Measurement counters - the actual point of this program
@@ -134,18 +149,23 @@ static void start_burst(void)
 void capture_init(void)
 {
     for (uint32_t i = 0; i < BUF_GUARD_WORDS; i++) {
-        buf_store.guard[i] = BUF_GUARD_PATTERN(i);
+        dma_buffer.guard[i] = BUF_GUARD_PATTERN(i);
     }
-    dma0_init(DMA_TRIG_ADC_CH0, &ADCREG(CH0RES), buf, SAMPLES_PER_BUF);
+    /* The buffer object itself and its size - not a constant that has to
+     * agree with it. The ADC's burst length (adc_init, SAMPLES_PER_BUF)
+     * must equal the block, which the check below pins down. */
+    dma0_init(DMA_TRIG_ADC_CH0, &ADCREG(CH0RES), dma_buffer.data, sizeof dma_buffer.data);
 }
+_Static_assert(sizeof dma_buffer.data == SAMPLES_PER_BUF * sizeof(uint16_t),
+               "ADC burst length and DMA buffer size must be the same thing");
 
 /* Stop with code 11 if anything wrote past the end of the buffer. */
 static void guard_check(void)
 {
     for (uint32_t i = 0; i < BUF_GUARD_WORDS; i++) {
-        if (buf_store.guard[i] != BUF_GUARD_PATTERN(i)) {
+        if (dma_buffer.guard[i] != BUF_GUARD_PATTERN(i)) {
             console_kv("[guard] word behind the buffer changed, index", i);
-            console_kv_hex("[guard] value", buf_store.guard[i]);
+            console_kv_hex("[guard] value", dma_buffer.guard[i]);
             console_kv_hex("[guard] expected", BUF_GUARD_PATTERN(i));
             fail(11u);
         }
@@ -405,7 +425,7 @@ void capture_regs_dump(void)
     /* The guard words behind the buffer: all must read 0xA5C3F00D + i. */
     console_kv_hex("buf", (uint32_t)buf);
     console_kv_hex("buf_end", (uint32_t)&buf[SAMPLES_PER_BUF]);
-    console_kv_hex("guard0", buf_store.guard[0]);
-    console_kv_hex("guard1", buf_store.guard[1]);
-    console_kv_hex("guard15", buf_store.guard[BUF_GUARD_WORDS - 1u]);
+    console_kv_hex("guard0", dma_buffer.guard[0]);
+    console_kv_hex("guard1", dma_buffer.guard[1]);
+    console_kv_hex("guard15", dma_buffer.guard[BUF_GUARD_WORDS - 1u]);
 }
