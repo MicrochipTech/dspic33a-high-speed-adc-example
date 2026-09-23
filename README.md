@@ -504,6 +504,14 @@ like this on a good day:
 
 ```
 [boot] uart up on FRC, 115200 8N1
+
+
+##############################################################
+##                                                          ##
+##   ADC/DMA TEST LOG  -  START OF RUN  (copy from here)    ##
+##                                                          ##
+##############################################################
+
 [boot] adc_dma_40msps Sep 23 2026 16:02:11 git 3c58fe5 (master)
 [boot] RCON: 0x00000080
 [boot] reset cause: EXTR
@@ -546,6 +554,12 @@ please log this terminal from power-up and send it back
 [DONE] ksps nominal: 20000
 [DONE] the console is free now: type help. start = measure at that rate, stop, status, sweep
 ==============================================================
+
+##############################################################
+##                                                          ##
+##   ADC/DMA TEST LOG  -  END OF RUN  (copy up to here)     ##
+##                                                          ##
+##############################################################
 
 [stat] blocks=0 overrun=0 late=0 missed=0 addr_err=0 bus_err=0 last=0 input=5 samc=0 pace=65 per=5 run=0 pwr=0 ad3if=0 rx=0 last=0x00 cr=0 lf=0
 > start

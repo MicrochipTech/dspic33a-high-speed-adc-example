@@ -129,6 +129,16 @@ int main(void)
     boot_mark(1u);
     console_early_init();
     boot_mark(2u);
+    /* A banner nobody can miss: where the log of one run begins. The
+     * matching END banner closes the [DONE] block, so a copy from one to
+     * the other is exactly one boot. */
+    console_puts("\r\n\r\n"
+                 "##############################################################\r\n"
+                 "##                                                          ##\r\n"
+                 "##   ADC/DMA TEST LOG  -  START OF RUN  (copy from here)    ##\r\n"
+                 "##                                                          ##\r\n"
+                 "##############################################################\r\n"
+                 "\r\n");
     console_puts("[boot] " BUILD_ID "\r\n");
     SIM_BANNER();                     /* simulator build: say so first   */
     diag_report_reset();              /* why are we booting? RCON        */
@@ -206,6 +216,12 @@ int main(void)
                               : "[DONE] DAC test: FAIL - see the [dactest] lines\r\n");
     console_puts("[DONE] the console is free now: type help. start = measure on the active core (5) at that rate; core 3 5 = back to the mikroBUS input\r\n"
                  "==============================================================\r\n\r\n");
+    console_puts("##############################################################\r\n"
+                 "##                                                          ##\r\n"
+                 "##   ADC/DMA TEST LOG  -  END OF RUN  (copy up to here)     ##\r\n"
+                 "##                                                          ##\r\n"
+                 "##############################################################\r\n"
+                 "\r\n");
 #endif
     boot_mark(9u);
     led_mode(2u);                     /* heartbeat                       */
