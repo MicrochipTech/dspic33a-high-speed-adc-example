@@ -202,3 +202,63 @@ from the IDE and the command line), a `[build]` block prints board and every
 compile-time switch, a `[regs]` snapshot is printed after initialisation and before
 the self-test (`AD3CH0CON1` with `TRG2SRC` and `RPTCNT` included), and every `[stat]`
 line is followed by a `[half]` line with min/max/mean/pp of the last completed half.
+
+## 2026-09-23, run 6 - master 1ebb140 (+local changes), first complete log, about 30 s
+
+`RCON = EXTR`. Self-test 3817. Time base 1 250 011 / 1 250 001. Rate test as in run 5:
+repeat timer at RPTCNT 16 delivered 36 067 ksps, SCCP1 at 20 ticks 37 401, back-to-back
+37 533 - no paced source, back-to-back used. One sweep row (back-to-back): measured
+38 262 ksps, overrun idle/process/sfr 82736/86980/82299 of 2 048 000 samples, missed
+1825 of 2000. Then four `[stat]` lines 5 s apart:
+
+```
+[stat] blocks=195425 overrun=7815329  late=0 missed=187326 ... last=17 ... pace=2 per=0 run=1 ad3if=1 rx=0 last=0x00000000 cr=0 lf=0
+[half] n=0 min=8 max=32 mean=17 pp=24
+[stat] blocks=390651 overrun=15916707 late=0 missed=381793 ...
+[stat] blocks=586133 overrun=24028708 late=0 missed=576515 ...
+[stat] blocks=781391 overrun=32131436 late=0 missed=771014 ...
+```
+
+Register snapshot, decoded with the device header (`_AD1CH0CON1_*_POSITION` etc.):
+`AD3CH0CON1 = 0x05000381` = TRG1SRC 1 (software), MODE 2 (Integration), **TRG2SRC 3
+(repeat timer)**, SAMC 0, PINSEL 5. `AD3CON = 0xC30A8000` = ON, **RPTCNT 2**, ADRDY,
+CALRDY. `DMA0CH = 0x06001C4B` = CHEN, HALFEN, DONEEN, SIZE 1 (16 bit), TRMODE 3,
+DAMODE 1, RELOADD/RELOADC. `U2CON = 0x48008030` = ON, RXEN, TXEN, MODE 0.
+`U2STAT = 0x001E0000` = RXBE, XON, **RCIDL** (receiver idle, line at the idle level),
+TXBF; no FERR/OERR/PERR. `IEC3 = 0x40` (U2RX on), `IPC12` U2RX priority 1, `IPC9` DMA0
+priority 4. `RPINR13 = 0x00320000` (U2RXR = 50 = RD1), `TRISD = 0xFFFF`.
+
+Reading:
+
+1. **The trigger registers hold what the firmware wrote** (TRG2SRC 3, RPTCNT 2, and the
+   rate test rewrites RPTCNT to 16 before measuring), and the rate still does not
+   follow them. In Integration mode on this silicon, the conversions inside a burst
+   run back-to-back whatever TRG2SRC says; the SCCP1 period match does not pace them
+   either. The datasheet text (16.4.5) is not what the board does. The remaining
+   lever for the rate is the ADC clock itself (CLKGEN6 divider, `CLK6DIV`), which
+   scales TAD and with it the back-to-back rate: /2 = 20 MSPS, /4 = 10 MSPS, /8 =
+   5 MSPS. Not built yet.
+
+2. **At 37.5 MSPS the DMA loses 4 % of the samples**, exactly as in runs 4 and 5
+   (7.8 million overruns per 5 s of 195 000 halves x 1024 samples), and every overrun
+   raises the DMA interrupt: 1.56 million per second, priority 4. The main loop gets
+   4 % of the halves (`missed` 96 %), `late` stays 0. This matches Microchip's own
+   example, which copies with a hand-timed 5-cycle loop instead of the DMA at this
+   rate.
+
+3. **The console receives nothing:** `rx=0` after 20 s of typing, no UART error
+   flags, receiver idle with the line high (`RCIDL`), pin routing and enables as
+   intended, JTAG off (RD1 is also TCK). Two explanations remain and the log cannot
+   separate them: the terminal's bytes never reach RD1 (wrong COM port or a terminal
+   that shows the log but does not send), or the priority-1 receive interrupt
+   starves behind the 1.56 million priority-4 interrupts per second. The second one
+   disappears with the rate; if `rx` stays 0 at a rate without overruns, it is the
+   first.
+
+4. `[half]` says the input is at 8...35 counts of 4096, mean 17: nothing is connected
+   to mikroBUS A AN, the pin floats near ground. Expected; the signal source comes later.
+
+Next: pace through `CLK6DIV` (a fourth candidate in the auto-pacing, and the sweep
+stepping the divider), and stop taking an interrupt per overrun (read `DMA0STAT`
+in the block-done interrupt and count halves with overrun), so that the CPU and the
+console survive the 40 MSPS point.
