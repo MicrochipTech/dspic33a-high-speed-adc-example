@@ -272,6 +272,39 @@ def main_gui(args):
 
     state = dict(target=None, live=False, busy=False, cycles=0)
 
+    # ---- look: dark, one accent colour, rounded cards ----
+    ACCENT, ACCENT2, DIM = "#22d3ee", "#a78bfa", "#94a3b8"
+    ui.colors(primary=ACCENT, secondary=ACCENT2, accent=ACCENT, dark="#0b1220", positive="#34d399", negative="#f87171")
+    ui.add_head_html("""<style>
+      body { background: #0b1220; }
+      .q-card { background: #111827 !important; border: 1px solid #1f2937; }
+      .q-field__label, .q-field__native, .q-field__control { color: #e5e7eb; }
+      .card-title { color: #94a3b8; font-size: 0.75rem; letter-spacing: .12em; text-transform: uppercase; }
+      .mono { font-family: ui-monospace, Consolas, monospace; }
+    </style>""")
+
+    def chart(title, x_name, y_name, y_min, y_max, colour):
+        return ui.echart({
+            "backgroundColor": "transparent",
+            "animation": False,
+            "title": {"text": title, "left": 16, "top": 8,
+                      "textStyle": {"color": "#e5e7eb", "fontSize": 14, "fontWeight": "normal"}},
+            "grid": {"left": 64, "right": 24, "top": 44, "bottom": 44},
+            "tooltip": {"trigger": "axis", "backgroundColor": "#1f2937", "borderColor": "#374151",
+                        "textStyle": {"color": "#e5e7eb"}},
+            "xAxis": {"type": "value", "name": x_name, "min": 0, "nameTextStyle": {"color": DIM},
+                      "axisLine": {"lineStyle": {"color": "#374151"}}, "axisLabel": {"color": DIM},
+                      "splitLine": {"lineStyle": {"color": "#1f2937"}}},
+            "yAxis": {"type": "value", "name": y_name, "min": y_min, "max": y_max,
+                      "nameTextStyle": {"color": DIM}, "axisLine": {"lineStyle": {"color": "#374151"}},
+                      "axisLabel": {"color": DIM}, "splitLine": {"lineStyle": {"color": "#1f2937"}}},
+            "series": [{"type": "line", "showSymbol": False, "data": [], "smooth": False,
+                        "lineStyle": {"width": 1.5, "color": colour},
+                        "areaStyle": {"color": {"type": "linear", "x": 0, "y": 0, "x2": 0, "y2": 1,
+                                                "colorStops": [{"offset": 0, "color": colour + "66"},
+                                                               {"offset": 1, "color": colour + "00"}]}}}],
+        }, theme="dark").classes("w-full h-80 rounded-xl")
+
     def ports():
         try:
             from serial.tools import list_ports
@@ -279,73 +312,78 @@ def main_gui(args):
         except Exception:
             return []
 
-    # ---- header: connection ----
-    with ui.header().classes("items-center gap-4"):
-        ui.label("dsPIC33A ADC/DMA - capture, plot, FFT").classes("text-lg")
+    # ---- header ----
+    with ui.header().classes("items-center gap-4 px-6").style("background: #0f172a; border-bottom: 1px solid #1f2937"):
+        ui.icon("show_chart", size="md").classes("text-cyan-400")
+        with ui.column().classes("gap-0"):
+            ui.label("dsPIC33A ADC / DMA").classes("text-lg font-medium leading-tight")
+            ui.label("capture · plot · FFT over the console").classes("text-xs text-slate-400 leading-tight")
+        ui.space()
         port_sel = ui.select(options=["fake"] + ports(), value=args.port or ("fake" if args.fake else None),
-                             label="port").classes("w-40")
-        conn_btn = ui.button("connect")
-        conn_lbl = ui.label("not connected")
+                             label="port").classes("w-44").props("dense outlined")
+        conn_btn = ui.button("connect", icon="usb").props("unelevated")
+        conn_chip = ui.chip("not connected", icon="link_off", color="grey-8").props("outline")
 
-    # ---- settings ----
-    with ui.row().classes("w-full gap-6"):
-        with ui.card().classes("w-96"):
-            ui.label("Sample rate").classes("text-base font-medium")
-            pacing_sel = ui.select({k: v[0] for k, v in PACING.items()}, value=3, label="pacing (TRG2SRC)")
-            period_in = ui.number("period", value=4, min=2, max=65535, step=1, format="%d")
-            rate_lbl = ui.label()
-            samc_in = ui.number("samc (sample time, 0..31)", value=0, min=0, max=31, step=1, format="%d")
-            input_in = ui.number("input (PINSEL, 6 = internal ref)", value=5, min=0, max=15, step=1, format="%d")
-            apply_btn = ui.button("apply to board")
-            apply_lbl = ui.label()
-        with ui.card().classes("w-96"):
-            ui.label("Capture").classes("text-base font-medium")
-            count_sel = ui.select([64, 128, 256, 512, 1024], value=1024, label="samples per capture (one buffer half max)")
-            interval_in = ui.number("live interval, ms", value=500, min=100, max=5000, step=100, format="%d")
-            with ui.row():
-                single_btn = ui.button("single capture")
-                live_btn = ui.button("live start")
-            cyc_lbl = ui.label()
-            cnt_lbl = ui.label().classes("text-sm")
-            if args.fake or True:
-                sig_in = ui.number("fake signal, kHz (fake target only)", value=100.0, min=0.1, max=20000.0, step=10)
+    with ui.row().classes("w-full p-4 gap-4 items-start no-wrap"):
+        # ---- left: settings ----
+        with ui.column().classes("gap-4").style("width: 22rem; min-width: 22rem"):
+            with ui.card().classes("w-full rounded-xl p-4 gap-2"):
+                ui.label("sample rate").classes("card-title")
+                pacing_sel = ui.select({k: v[0] for k, v in PACING.items()}, value=3, label="pacing (TRG2SRC)").props("dense outlined")
+                period_in = ui.number("period", value=4, min=2, max=65535, step=1, format="%d").props("dense outlined")
+                rate_lbl = ui.label().classes("text-cyan-300 mono")
+            with ui.card().classes("w-full rounded-xl p-4 gap-2"):
+                ui.label("adc channel").classes("card-title")
+                samc_in = ui.number("SAMC · sample time (0..31)", value=0, min=0, max=31, step=1, format="%d").props("dense outlined")
+                input_in = ui.number("PINSEL · input (6 = internal reference)", value=5, min=0, max=15, step=1, format="%d").props("dense outlined")
+                sig_in = ui.number("fake signal, kHz (fake target only)", value=100.0, min=0.1, max=20000.0, step=10).props("dense outlined")
+                apply_btn = ui.button("apply to board", icon="upload").props("unelevated").classes("w-full")
+                apply_lbl = ui.label().classes("text-xs text-slate-400 mono")
+            with ui.card().classes("w-full rounded-xl p-4 gap-2"):
+                ui.label("capture").classes("card-title")
+                count_sel = ui.select([64, 128, 256, 512, 1024], value=1024, label="samples per capture").props("dense outlined")
+                interval_in = ui.number("live interval, ms", value=500, min=100, max=5000, step=100, format="%d").props("dense outlined")
+                with ui.row().classes("w-full gap-2"):
+                    single_btn = ui.button("single", icon="camera").props("unelevated").classes("flex-grow")
+                    live_btn = ui.button("live", icon="play_arrow").props("unelevated").classes("flex-grow")
 
-    # ---- charts ----
-    time_chart = ui.echart({
-        "animation": False,
-        "grid": {"left": 60, "right": 20, "top": 30, "bottom": 40},
-        "xAxis": {"type": "value", "name": "sample", "min": 0},
-        "yAxis": {"type": "value", "name": "ADC counts", "min": 0, "max": 4096},
-        "series": [{"type": "line", "showSymbol": False, "data": [], "lineStyle": {"width": 1}}],
-        "title": {"text": "time signal", "left": "center"},
-    }).classes("w-full h-72")
-    fft_chart = ui.echart({
-        "animation": False,
-        "grid": {"left": 60, "right": 20, "top": 30, "bottom": 40},
-        "xAxis": {"type": "value", "name": "kHz", "min": 0},
-        "yAxis": {"type": "value", "name": "dBFS", "min": -100, "max": 0},
-        "series": [{"type": "line", "showSymbol": False, "data": [], "lineStyle": {"width": 1}}],
-        "title": {"text": "spectrum (Hann window)", "left": "center"},
-    }).classes("w-full h-72")
+        # ---- right: results ----
+        with ui.column().classes("flex-grow gap-4"):
+            with ui.row().classes("w-full items-center gap-2"):
+                cyc_lbl = ui.label("no capture yet").classes("text-slate-300 mono")
+                ui.space()
+                chips = {k: ui.chip(f"{k} –", color="grey-8").props("dense outline")
+                         for k in ("overrun", "late", "missed", "addr_err", "bus_err")}
+            with ui.card().classes("w-full rounded-xl p-2"):
+                time_chart = chart("time signal", "sample", "ADC counts", 0, 4096, ACCENT)
+            with ui.card().classes("w-full rounded-xl p-2"):
+                fft_chart = chart("spectrum · Hann window", "kHz", "dBFS", -100, 0, ACCENT2)
 
     def update_rate_label():
         try:
             r = rate_ksps(int(pacing_sel.value), int(period_in.value or 0))
-            rate_lbl.text = f"nominal rate: {r/1000:.3f} MSPS" if math.isfinite(r) else "nominal rate: not under control (back-to-back)"
+            rate_lbl.text = f"nominal  {r/1000:.3f} MSPS" if math.isfinite(r) else "nominal  not under control (back-to-back)"
         except Exception:
             rate_lbl.text = ""
     pacing_sel.on_value_change(lambda e: update_rate_label())
     period_in.on_value_change(lambda e: update_rate_label())
     update_rate_label()
 
+    def set_chip(name, value):
+        c = chips[name]
+        c.text = f"{name} {value}"
+        c.props(f'color={"positive" if value == 0 else "negative"}')
+
     # ---- connection ----
     def do_connect():
         if state["target"]:
             state["live"] = False
+            live_btn.text, live_btn.icon = "live", "play_arrow"
             state["target"].close()
             state["target"] = None
-            conn_btn.text = "connect"
-            conn_lbl.text = "not connected"
+            conn_btn.text, conn_btn.icon = "connect", "usb"
+            conn_chip.text, conn_chip.icon = "not connected", "link_off"
+            conn_chip.props("color=grey-8")
             return
         try:
             if port_sel.value == "fake":
@@ -353,10 +391,14 @@ def main_gui(args):
             else:
                 state["target"] = Target(port_sel.value)
             ok, lines = state["target"].cmd("version")
-            conn_lbl.text = " | ".join(lines[:2]) if ok else "connected, version refused"
-            conn_btn.text = "disconnect"
+            conn_chip.text = (lines[0] if ok and lines else f"{port_sel.value}: connected")
+            conn_chip.icon = "link"
+            conn_chip.props("color=positive")
+            conn_btn.text, conn_btn.icon = "disconnect", "usb_off"
         except Exception as ex:
-            conn_lbl.text = f"connect failed: {ex}"
+            conn_chip.text = f"connect failed: {ex}"
+            conn_chip.icon = "error"
+            conn_chip.props("color=negative")
             state["target"] = None
     conn_btn.on_click(do_connect)
 
@@ -373,8 +415,8 @@ def main_gui(args):
             if c.startswith("period") and int(pacing_sel.value) == 2:
                 continue
             ok, lines = await run.io_bound(t.cmd, c)
-            msgs.append(("ok " if ok else "NAK ") + c + (": " + lines[0] if lines else ""))
-        apply_lbl.text = " | ".join(msgs)
+            msgs.append(("✓ " if ok else "✗ ") + c)
+        apply_lbl.text = "   ".join(msgs)
     apply_btn.on_click(apply_settings)
 
     # ---- capture ----
@@ -385,7 +427,8 @@ def main_gui(args):
         state["busy"] = True
         try:
             samples, status = await run.io_bound(capture_cycle, t, int(count_sel.value))
-            fs = rate_ksps(int(status.get("pacing", pacing_sel.value)), int(status.get("period", period_in.value or 0))) * 1e3
+            fs = rate_ksps(int(status.get("pacing", pacing_sel.value)),
+                           int(status.get("period", period_in.value or 0))) * 1e3
             f, db = spectrum(samples, fs)
             time_chart.options["series"][0]["data"] = [[i, int(v)] for i, v in enumerate(samples)]
             time_chart.options["xAxis"]["max"] = max(len(samples) - 1, 1)
@@ -395,13 +438,15 @@ def main_gui(args):
             fft_chart.update()
             state["cycles"] += 1
             peak = (f[np.argmax(db[1:]) + 1] / 1e3) if len(db) > 1 else float("nan")
-            cyc_lbl.text = (f"cycle {state['cycles']}: {len(samples)} samples, "
-                            f"fs {fs/1e6:.3f} MHz" + (f", peak {peak:.1f} kHz" if math.isfinite(peak) else ""))
-            cnt_lbl.text = " ".join(f"{k}={status[k]}" for k in ("overrun", "late", "missed", "addr_err", "bus_err", "blocks") if k in status)
+            cyc_lbl.text = (f"cycle {state['cycles']}   {len(samples)} samples   "
+                            f"fs {fs/1e6:.3f} MHz" + (f"   peak {peak:.1f} kHz" if math.isfinite(peak) else ""))
+            for k in chips:
+                if k in status:
+                    set_chip(k, status[k])
         except Exception as ex:
             cyc_lbl.text = f"cycle failed: {ex}"
             state["live"] = False
-            live_btn.text = "live start"
+            live_btn.text, live_btn.icon = "live", "play_arrow"
         finally:
             state["busy"] = False
 
@@ -414,7 +459,8 @@ def main_gui(args):
 
     def toggle_live():
         state["live"] = not state["live"]
-        live_btn.text = "live stop" if state["live"] else "live start"
+        live_btn.text = "stop" if state["live"] else "live"
+        live_btn.icon = "stop" if state["live"] else "play_arrow"
         if state["live"]:
             asyncio.create_task(live_loop())
     live_btn.on_click(toggle_live)
@@ -422,7 +468,7 @@ def main_gui(args):
     if args.fake or args.port:
         ui.timer(0.5, do_connect, once=True)
 
-    ui.run(title="ADC/DMA capture", port=args.http_port, show=not args.no_browser, reload=False)
+    ui.run(title="ADC/DMA capture", port=args.http_port, show=not args.no_browser, reload=False, dark=True)
 
 
 def main():
