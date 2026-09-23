@@ -846,6 +846,30 @@ simulator run takes about 2.5 minutes for the 100 halves.
 | `tools/sim_trap.py` | drives the simulator build in MDB and reports the verdict ("In the MPLAB X simulator" above) |
 | `tools/` | command-line build without the IDE; **ignore this unless you want it** |
 
+### The GUI: capture, plot, FFT (`tools/adc_gui.py`)
+
+A browser front end for the console, for looking at what the ADC delivers: set the
+pacing source, the period (the rate is shown), `SAMC` and the input, then capture a
+block and see the time signal and its spectrum. It works in cycles, like a scope with a
+single-shot trigger — `start`, let the board run a moment, `stop`, `dump` one buffer
+half (up to 1024 samples), plot, and in live mode again and again until stopped — because
+115200 baud cannot carry a 20 MSPS stream. Below the time signal sits the FFT (Hann
+window, dBFS, frequency axis from the configured rate), so a known input frequency
+checks the sample rate from the data itself.
+
+Set-up once (a private Python environment in `tools\.venv`, nothing touches the system
+Python), then start:
+
+```
+tools\gui_setup.bat            creates .venv, installs nicegui/pyserial/numpy, runs the self-test
+tools\adc_gui.bat --fake       no board: a built-in stand-in with a synthetic sine, for trying the GUI
+tools\adc_gui.bat --port COM7  the board's console port
+```
+
+Linux/macOS: `tools/gui_setup.sh`, then `tools/.venv/bin/python tools/adc_gui.py ...`.
+The page opens at http://127.0.0.1:8080. Every command goes through the console and
+waits for the parser's ACK/NAK byte, so the tool never talks over the board.
+
 ### About `tools/`
 
 Only needed to build without MPLAB X:

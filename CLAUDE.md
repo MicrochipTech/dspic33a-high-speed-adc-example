@@ -27,6 +27,7 @@ before changing anything; the register writes in the code cite the datasheet
 | `diag.c/.h` | `fail()` codes, trap handler, boot record in persistent RAM, `RCON` report, `regs_dump()` | every module's `*_regs_dump()` |
 | `cli.c`, `console.h` | UART2, the commands, the `sweep` | clock, capture, led, diag |
 | `sim.h` | the hooks the simulator build needs; all empty on silicon | – |
+| `tools/adc_gui.py` | NiceGUI front end: sets rate/pacing/SAMC/input over the console, captures a buffer half per cycle, plots time signal and FFT; `--fake` uses a built-in stand-in, `--selftest` runs the pipeline without GUI. `tools/gui_setup.bat` makes its venv (`tools/.venv`, ignored) | the console protocol only |
 | `cmd_parser.c/.h` | the command parser, unchanged from github.com/zabooh/cmd_parser (Apache 2.0) – do not edit | – |
 
 Nobody outside `dma.c` touches a DMA register, nobody outside `adc.c` an ADC register,
@@ -56,6 +57,8 @@ whatever compiler it finds first - restore that one line, never `git checkout` t
 whole file (that once threw away a file-list change); and after any change to the
 file list delete `adc_dma_40msps.X/build` and `dist`, otherwise make links stale
 objects and a missing entry goes unnoticed.
+
+GUI tool: `tools\gui_setup.bat` once, then `toolsdc_gui.bat --fake`; `python toolsdc_gui.py --selftest` is its check.
 
 Simulator test, the acceptance check for anything that touches the buffer logic:
 

@@ -32,3 +32,7 @@ adc_dma_40msps.X/nbproject/private/
 
 # Command-line build output (tools/build.bat)
 build/
+
+# The GUI's private Python environment (tools/gui_setup.bat creates it)
+tools/.venv/
+__pycache__/
