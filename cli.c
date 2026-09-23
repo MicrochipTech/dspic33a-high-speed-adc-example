@@ -226,14 +226,31 @@ static void console_yield(void)
     }
 }
 
+/* Receive diagnostics, shown in the [stat] line and by "status": how many
+ * bytes the interrupt took from the UART, the last one, and how many
+ * CR / LF among them. "I type and nothing happens" is then one of three
+ * things: rx stays 0 (nothing reaches RD1, the echo was the terminal's),
+ * rx counts but cr stays 0 (the terminal sends LF only - the parser ends
+ * a line on CR), or cr counts and still no reply (the parser or the
+ * transmit path). */
+static volatile uint32_t rx_count = 0;
+static volatile uint32_t rx_cr    = 0;
+static volatile uint32_t rx_lf    = 0;
+static volatile uint8_t  rx_last  = 0;
+
 /* The parser thread: every received byte goes to the line editor, and
  * a completed line is dispatched right here, in interrupt context. */
 void __attribute__((interrupt, no_auto_psv)) _U2RXInterrupt(void)
 {
+    IFS3bits.U2RXIF = 0u;             /* first: a byte arriving meanwhile re-raises it */
     while (!U2STATbits.RXBE) {
-        cmd_parser_feed_char((char)U2RXB);
+        const uint8_t b = (uint8_t)U2RXB;
+        rx_count++;
+        rx_last = b;
+        if (b == 0x0Du)      { rx_cr++; }
+        else if (b == 0x0Au) { rx_lf++; }
+        cmd_parser_feed_char((char)b);
     }
-    IFS3bits.U2RXIF = 0u;
 }
 
 /* ------------------------------------------------------------------ *
@@ -342,7 +359,7 @@ static void put_line(const char *s)
 /* One status line, blocking, for the periodic trace from main(). */
 void console_status_line(void)
 {
-    char line[176];                       /* 163 used with every field at max */
+    char line[240];                       /* 218 used with every field at max */
     char *p = copy_str(line, "[stat] blocks=");
     p = u32_to_str(p, blocks_done);
     p = copy_str(p, " overrun=");  p = u32_to_str(p, dma_overrun);
@@ -359,6 +376,11 @@ void console_status_line(void)
      * while the DMA runs says the event is visible to the CPU - the
      * precondition for the vector-201 trap TROUBLESHOOTING 2.0b describes. */
     p = copy_str(p, " ad3if=");    p = u32_to_str(p, (uint32_t)IFS6bits.AD3CH0IF);
+    /* Receive diagnostics, see rx_count above. */
+    p = copy_str(p, " rx=");       p = u32_to_str(p, rx_count);
+    p = copy_str(p, " last=");     p = u32_to_hex(p, rx_last);
+    p = copy_str(p, " cr=");       p = u32_to_str(p, rx_cr);
+    p = copy_str(p, " lf=");       p = u32_to_str(p, rx_lf);
     copy_str(p, "\r\n");
     console_puts(line);
 }
@@ -411,6 +433,10 @@ static void cmd_status_fn(int argc, char **argv)
     put_kv("last", last_sample);
     put_kv("selftest_mean", selftest_mean);
     put_kv("fail_code", fail_code);
+    put_kv("rx_bytes", rx_count);
+    put_kv("rx_last", rx_last);
+    put_kv("rx_cr", rx_cr);
+    put_kv("rx_lf", rx_lf);
 }
 CMD_DEFINE(status, "status", cmd_status_fn, "status - run state and counters");
 

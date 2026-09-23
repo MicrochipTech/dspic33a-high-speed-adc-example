@@ -8,6 +8,7 @@
  */
 
 #include <xc.h>
+#include <stdbool.h>
 #include <libpic30.h>       /* __delay32()                                 */
 #include "diag.h"
 #include "clock.h"
@@ -99,6 +100,47 @@ static const char *const fail_text[] = {
 void boot_mark(uint32_t stage)
 {
     boot_stage = stage;
+}
+
+/* RCON bit -> name, from the device header (p33AK512MPS512.h, RCONBITS).
+ * Note what is NOT here: this device has no TRAPR or IOPUWR flag, so a
+ * trap that ends in a reset does not announce itself in RCON - only
+ * trap_seen in persistent RAM (below) can tell, and only if the reset
+ * was not a POR. */
+static const struct { uint32_t mask; const char *name; } rcon_bits[] = {
+    { _RCON_POR_MASK,    "POR"    },   /* power-on                          */
+    { _RCON_BOR_MASK,    "BOR"    },   /* brown-out: the supply dipped      */
+    { _RCON_WDTO_MASK,   "WDTO"   },   /* watchdog time-out                 */
+    { _RCON_SWR_MASK,    "SWR"    },   /* software reset (reset command)    */
+    { _RCON_EXTR_MASK,   "EXTR"   },   /* MCLR pin                          */
+    { _RCON_CM_MASK,     "CM"     },   /* configuration mismatch            */
+    { _RCON_BUCKR_MASK,  "BUCKR"  },   /* internal buck regulator reset     */
+    { _RCON_VREG2R_MASK, "VREG2R" },   /* internal regulator resets         */
+    { _RCON_VREG3R_MASK, "VREG3R" },
+    { _RCON_VREG4R_MASK, "VREG4R" },
+    { _RCON_IDLE_MASK,   "IDLE"   },   /* woke from Idle (not a reset)      */
+    { _RCON_SLEEP_MASK,  "SLEEP"  },   /* woke from Sleep (not a reset)     */
+};
+
+void diag_report_reset(void)
+{
+    const uint32_t rcon = RCON;
+    console_kv_hex("[boot] RCON", rcon);
+    console_puts("[boot] reset cause:");
+    bool any = false;
+    for (uint32_t i = 0; i < sizeof rcon_bits / sizeof rcon_bits[0]; i++) {
+        if (rcon & rcon_bits[i].mask) {
+            console_puts(" ");
+            console_puts(rcon_bits[i].name);
+            any = true;
+        }
+    }
+    if (!any) {
+        console_puts(" none flagged - a reset that RCON does not record, e.g. a"
+                     " trap that could not be handled, or a debugger restart");
+    }
+    console_puts("\r\n");
+    RCON = 0u;                        /* each boot reports its own cause  */
 }
 
 static const char *const boot_text[] = {

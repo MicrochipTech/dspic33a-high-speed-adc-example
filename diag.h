@@ -31,6 +31,13 @@ void boot_mark(uint32_t stage);
 /* Stop with a blink code (never returns). Codes: table in diag.c. */
 void fail(uint32_t code);
 
+/* Print RCON, the reset-cause register, decoded, then clear it so the
+ * next boot shows its own cause. Called once, right after the console
+ * is up. A board that "just restarts" is told apart here: POR/BOR
+ * (supply), WDTO, SWR (the reset command), EXTR (MCLR), CM (config
+ * mismatch), BUCKR/VREGxR (the internal regulators gave up). */
+void diag_report_reset(void);
+
 
 /* Wait until a condition becomes false, or give up with a code.
  *
