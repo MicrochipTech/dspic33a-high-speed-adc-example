@@ -194,11 +194,13 @@ void __attribute__((interrupt, no_auto_psv)) _CLKFInterrupt(void)
 
 /* ------------------------------------------------------------------ *
  * ADC clock divider at run time (clock.h). INTDIV is bits 30:16 of
- * CLK6DIV; the switch takes effect when DIVSWEN is set and is complete
- * when the hardware clears it. Nothing else in the tree changes: the
- * CPU stays on PLL2, the peripherals on their own generators. The ADC
- * is off meanwhile (capture.c): its clock is set before it is enabled,
- * as at boot, not changed under a running core.
+ * CLK6DIV. The generator is taken down and brought up again around the
+ * write (ON, then DIVSWEN until the hardware clears it, then CLKRDY) -
+ * the boot sequence repeated, as datasheet Example 12-2 orders it.
+ * Nothing else in the tree changes: the CPU stays on PLL2, the
+ * peripherals on their own generators. The ADC is off meanwhile
+ * (capture.c): its clock is set before it is enabled, as at boot, not
+ * changed under a running core.
  * ------------------------------------------------------------------ */
 #define ADC_CLK_HZ        320000000u
 #define DIVSW_WAIT_LIMIT  100000u     /* loop iterations, far above the switch */
@@ -212,11 +214,20 @@ bool clock_adc_set_div(uint32_t ratio)
     (void)ratio;                       /* no clock tree to switch          */
     return true;
 #else
+    /* The full boot sequence of the generator, not a divider switch
+     * under a running one: generator off, divider written, generator
+     * on, divider switch confirmed, clock ready. Source (NOSC = PLL1)
+     * and backup stay as clock_init() set them. */
+    CLK6CONbits.ON      = 0u;
     CLK6DIVbits.FRACDIV = 0u;
     CLK6DIVbits.INTDIV  = (ratio == 1u) ? 0u : ratio / 2u;
+    CLK6CONbits.ON      = 1u;
     CLK6CONbits.DIVSWEN = 1u;
     uint32_t n = DIVSW_WAIT_LIMIT;
     while (CLK6CONbits.DIVSWEN && (--n != 0u)) { }
+    if (n == 0u) { return false; }
+    n = DIVSW_WAIT_LIMIT;
+    while (!CLK6CONbits.CLKRDY && (--n != 0u)) { }
     return n != 0u;
 #endif
 }

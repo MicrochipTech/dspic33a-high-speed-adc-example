@@ -262,8 +262,9 @@ Changed after run 6 (no board run yet): the ADC clock divider is the fourth paci
 candidate (`pacing 64`, `clock_adc_set_div()`: CLKGEN6 `INTDIV`, divided clock =
 F_IN / (2 · INTDIV), switched with `DIVSWEN`, ratios 1/2/4/6/8/10 = 40/20/10/6.7/5/4
 MSPS; 32 MHz is the ADC minimum). The rate test tries it at ratios 8 and 2 after the
-repeat timer and SCCP1. The switch happens with the ADC core off (stream stopped,
-`ON = 0`, divider, `ON = 1`, `ADRDY`), never under a running core. The boot sweep now ends with a decision: the highest rate whose
+repeat timer and SCCP1. The switch repeats the boot sequence with the ADC core off
+(stream stopped, ADC `ON = 0`, generator `ON = 0`, divider, generator `ON = 1`, `DIVSWEN`,
+`CLKRDY`, ADC `ON = 1`, `ADRDY`), never under a running core or generator. The boot sweep now ends with a decision: the highest rate whose
 `process` run had overrun 0 and missed 0 becomes the measurement rate (`[sweep] using
 period ...`), or `[sweep] NO CLEAN RATE` if none. The overrun interrupt cannot be
 switched off on its own - DS70005591D 13.6.1 says any channel event flag raises the

@@ -21,11 +21,12 @@ uint32_t clock_cpu_hz(void);
 /* ADC clock divider, CLKGEN6. ratio 1 = 320 MHz straight through
  * (INTDIV 0), or an even 2..10: the divided clock is Fin / (2 * INTDIV)
  * (DS70005591D, CLKnDIV INTDIV description), and 32 MHz is the ADC's
- * minimum (Table 16-1, p1223), so 10 is the largest ratio. Switches with
- * DIVSWEN and waits, bounded, for the switch. False for a bad ratio or a
- * switch that did not complete; the divider is then whatever the
- * hardware says (clock_adc_div()). The ADC core must be OFF while this
- * runs: capture.c switches it off, calls this, switches it on again. */
+ * minimum (Table 16-1, p1223), so 10 is the largest ratio. Repeats the
+ * generator's boot sequence: off, divider, on, DIVSWEN, CLKRDY, every
+ * wait bounded. False for a bad ratio or a wait that ran out; the divider
+ * is then whatever the hardware says (clock_adc_div()). The ADC core must
+ * be OFF while this runs: capture.c takes it down, calls this, brings it
+ * back. */
 bool     clock_adc_set_div(uint32_t ratio);
 uint32_t clock_adc_div(void);
 uint32_t clock_adc_hz(void);
