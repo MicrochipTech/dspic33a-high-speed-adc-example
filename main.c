@@ -104,6 +104,13 @@ int main(void)
     }
     boot_mark(8u);
 
+#if AUTO_SWEEP
+    /* The rate sweep, once, without anyone typing (AUTO_SWEEP in
+     * board.h): from 1.25 MSPS up to 40 MSPS, one line per rate. */
+    console_puts("[boot] automatic rate sweep before the measurement (AUTO_SWEEP in board.h)\r\n");
+    console_sweep(2000u);
+#endif
+
     console_puts("[boot] self-test passed, measurement running on the external input\r\n");
     counters_clear();                 /* the self-test halves were not serviced */
     capture_start();

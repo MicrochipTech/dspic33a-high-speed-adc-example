@@ -30,6 +30,10 @@ void console_kv(const char *key, uint32_t v);        /* "key: 123"        */
 void console_kv_hex(const char *key, uint32_t v);    /* "key: 0x00000123" */
 /* One line with every counter, for the periodic trace from main(). */
 void console_status_line(void);
+/* The rate sweep (the "sweep" command): overrun vs sample rate from
+ * 1.25 to 40 MSPS, `halves` buffer halves per point, one line per rate.
+ * Blocking, takes a few seconds, restores sample time and run state. */
+void console_sweep(uint32_t halves);
 /* UART, its interrupt and its pin routing as "name: 0x........" lines
  * (part of regs_dump()). */
 void console_regs_dump(void);

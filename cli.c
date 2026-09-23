@@ -645,7 +645,32 @@ static void sweep_row(uint8_t samc, uint32_t halves)
     p = copy_str(p, "  late ");               p = u32_to_str(p, late);
     p = copy_str(p, "  missed ");             p = u32_to_str(p, missed);
     copy_str(p, "\r\n");
-    cmd_parser_write(line);
+    console_puts(line);               /* blocking: works from main() too */
+}
+
+/* The sweep itself, callable from the command and from main() (the
+ * automatic run after the self-test, AUTO_SWEEP in board.h). Output goes
+ * through the blocking console_puts(), not the parser's sink, so it
+ * does not depend on the receive path - which is one of the things
+ * the automatic run is there to investigate. */
+void console_sweep(uint32_t halves)
+{
+    static const uint8_t samcs[] = { 31u, 15u, 7u, 3u, 1u, 0u };
+    const uint8_t keep_samc   = capture_samc();
+    const bool    was_running = capture_running();
+
+    console_kv("[sweep] halves per point", halves);
+    console_puts("[sweep] idle = CPU polls RAM only, process = main-loop processing, sfr = CPU polls an SFR\r\n"
+                 "[sweep] overrun must be 0 for a usable rate; late/missed are from the process run\r\n");
+    for (uint32_t i = 0; i < sizeof samcs / sizeof samcs[0]; i++) {
+        console_puts("[sweep] ");
+        sweep_row(samcs[i], halves);
+    }
+
+    (void)capture_set_input(capture_pinsel(), keep_samc);
+    counters_clear();
+    if (was_running) { capture_start(); }
+    console_puts("[sweep] done: counters cleared, previous samc and run state restored\r\n");
 }
 
 static void cmd_sweep_fn(int argc, char **argv)
@@ -655,22 +680,7 @@ static void cmd_sweep_fn(int argc, char **argv)
         usage("sweep [halves per point 10..100000, default 2000]");
         return;
     }
-    static const uint8_t samcs[] = { 31u, 15u, 7u, 3u, 1u, 0u };
-    const uint8_t keep_samc   = capture_samc();
-    const bool    was_running = capture_running();
-
-    put_kv("sweep: halves per point", halves);
-    put_line("idle = CPU polls RAM only, process = main-loop processing, sfr = CPU polls an SFR");
-    put_line("overrun must be 0 for a usable rate; late/missed are from the process run");
-    for (uint32_t i = 0; i < sizeof samcs / sizeof samcs[0]; i++) {
-        sweep_row(samcs[i], halves);
-        if (cmd_parser_aborted()) { break; }
-    }
-
-    (void)capture_set_input(capture_pinsel(), keep_samc);
-    counters_clear();
-    if (was_running) { capture_start(); }
-    put_line("sweep done: counters cleared, previous samc and run state restored");
+    console_sweep(halves);
 }
 CMD_DEFINE(sweep, "sweep", cmd_sweep_fn, "sweep [halves] - overrun vs sample rate, 1.25..40 MSPS");
 

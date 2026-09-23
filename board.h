@@ -22,6 +22,19 @@
 #define ADC_SAMC          0u      /* 0.5 TAD, 40 MSPS at 320 MHz input clock */
 #endif
 
+/* Run the rate sweep (the "sweep" console command) once automatically,
+ * right after the self-test and before the measurement starts. Needs no
+ * console input: the table appears on the terminal by itself, from the
+ * slowest rate to the fastest, so a board that dies at some rate shows
+ * where. 0 = only on command. */
+#ifndef AUTO_SWEEP
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+#define AUTO_SWEEP        0       /* 36 000 halves at ~3 per second: no    */
+#else
+#define AUTO_SWEEP        1
+#endif
+#endif
+
 /* LED0 on the Curiosity Platform Development Board is RC8, DIM pin 28
  * (DIM info sheet DS70005563A, Table 1). The green LEDs are driven high
  * to light (user guide DS70005562D 2.5; Microchip's own example on this
