@@ -1,7 +1,7 @@
 {
   "adc": {
-    "core": 3,
-    "pinsel": 5,
+    "core": 5,
+    "pinsel": 3,
     "samc": 0
   },
   "board": "EV74H48A",
@@ -32,7 +32,7 @@
     "harmonic3": 0.0,
     "noise": 6.0,
     "signal_khz": 100.0,
-    "waveform": "sine"
+    "waveform": "triangle"
   },
   "pll": {
     "postdiv1": 5,

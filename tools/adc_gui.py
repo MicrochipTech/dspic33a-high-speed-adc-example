@@ -1404,6 +1404,7 @@ def main_gui(args):
                 waveform_sel = ui.select(
                     {"sine": "sine (piezo-like)", "triangle": "triangle (DAC2 → ADC5 self-test)"},
                     value="sine", label="fake waveform").props("dense outlined")
+                waveform_hint_lbl = ui.label().classes("text-xs text-amber-300")
                 sig_in = ui.number("fake signal, kHz (sine only)", value=100.0, min=0.1, max=20000.0, step=10).props("dense outlined")
                 amp_in = ui.number("amplitude, counts (pk, sine only)", value=1500.0, min=0.0, max=2000.0, step=50).props("dense outlined")
                 noise_in = ui.number("noise, counts (std dev, sets SNR)", value=6.0, min=0.0, max=500.0, step=1).props("dense outlined")
@@ -1677,6 +1678,14 @@ def main_gui(args):
             chip_pin_lbl.text = site[2] or site[1]
             needed, head, _sub = wire_hint(board_key, core, pinsel, unit)
             board_pin_lbl.text = site[1] + (f"   |   {head}" if head else "")
+            # A triangle needs a DAC running - on the board and in the
+            # stand-in alike, an idle DAC leaves the pin at whatever it
+            # floats to, which is a flat trace and looks like a bug.
+            any_dac_on = any(bool(c["on"].value) for c in dac_ui.values())
+            waveform_hint_lbl.text = (
+                "no DAC is on, so nothing drives the pin and the trace stays flat - "
+                "switch DAC1 or DAC2 on and press its apply button"
+                if (waveform_sel.value == "triangle" and not any_dac_on) else "")
             board_note_lbl.text = (
                 "Cyan = where the channel comes out. Grey pads carry another signal, dark pads are "
                 "power, ground or not on the device. Hover a pad for its device pin. Sources: DIM "
@@ -1715,6 +1724,7 @@ def main_gui(args):
 
     for sel in dac_ctrls:
         sel.on_value_change(on_dac_pick)
+    waveform_sel.on_value_change(lambda e: refresh_channel())
     for _u, _c in dac_ui.items():
         _c["on"].on_value_change(lambda e: refresh_channel())
     core_sel.on_value_change(lambda e: refresh_channel())
