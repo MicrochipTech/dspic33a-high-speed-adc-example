@@ -202,7 +202,8 @@ void __attribute__((interrupt, no_auto_psv)) _CLKFInterrupt(void)
  * (capture.c): its clock is set before it is enabled, as at boot, not
  * changed under a running core.
  * ------------------------------------------------------------------ */
-#define ADC_CLK_HZ        320000000u
+#define ADC_CLK_HZ        320000000u   /* PLL1 output as clock_init() sets it */
+#define FRC_HZ              8000000u   /* the internal FRC, PLL1 input        */
 #define DIVSW_WAIT_LIMIT  100000u     /* loop iterations, far above the switch */
 
 uint32_t clock_adc_set_div(uint32_t ratio_h)
@@ -283,6 +284,8 @@ const char *clock_adc_div_error(uint32_t rc)
     case CLKDIV_LOST:        return "CLK6DIV lost the value over the switch";
     case CLKDIV_ADC:         return "ADC core did not report ADRDY after the switch";
     case CLKDIV_INTDIV0:     return "ratio below 2 needs INTDIV 0, where FRACDIV does not work";
+    case CLKDIV_FOUTSWEN:    return "FOUTSWEN never cleared - PLL1 output dividers not applied";
+    case CLKDIV_PLLRDY:      return "PLL1 did not lock again";
     default:                 return "unknown";
     }
 }
@@ -331,9 +334,24 @@ void clock_dac_off(void)
     CLK7CONbits.ON = 0u;
 }
 
+/* PLL1's output as the registers say it is: FVCO = FRC * PLLFBDIV /
+ * PLLPRE, output = FVCO / (POSTDIV1 * POSTDIV2). Both CLKGEN6 (ADC) and
+ * CLKGEN7 (DAC) hang off it, so retuning the PLL for the sample rate
+ * moves the DAC's clock with it - which is why dactest.c asks for the
+ * period in nanoseconds rather than assuming one. */
+static uint32_t pll1_out_hz(void)
+{
+    const uint32_t pre = PLL1DIVbits.PLLPRE   ? PLL1DIVbits.PLLPRE   : 1u;
+    const uint32_t fb  = PLL1DIVbits.PLLFBDIV ? PLL1DIVbits.PLLFBDIV : 1u;
+    const uint32_t p1  = PLL1DIVbits.POSTDIV1 ? PLL1DIVbits.POSTDIV1 : 1u;
+    const uint32_t p2  = PLL1DIVbits.POSTDIV2 ? PLL1DIVbits.POSTDIV2 : 1u;
+    const uint64_t vco = (uint64_t)FRC_HZ * fb / pre;
+    return (uint32_t)(vco / ((uint64_t)p1 * p2));
+}
+
 uint32_t clock_dac_hz(void)
 {
-    return ADC_CLK_HZ;              /* PLL1 Fout, undivided              */
+    return pll1_out_hz();           /* CLKGEN7, CLK7DIV straight through */
 }
 
 uint32_t clock_adc_div(void)
@@ -345,9 +363,55 @@ uint32_t clock_adc_div(void)
     return (raw == 0u) ? 100u : (raw * 200u + 256u) / 512u;
 }
 
+uint32_t clock_adc_pll_postdiv1(void) { return PLL1DIVbits.POSTDIV1; }
+uint32_t clock_adc_pll_postdiv2(void) { return PLL1DIVbits.POSTDIV2; }
+
 uint32_t clock_adc_hz(void)
 {
-    return (uint32_t)(((uint64_t)ADC_CLK_HZ * 100u) / clock_adc_div());
+    /* Derived from the registers, not from a constant: FVCO = FRC *
+     * PLLFBDIV / PLLPRE, output = FVCO / (POSTDIV1 * POSTDIV2), then the
+     * CLKGEN6 divide ratio. A switch that did not take is then visible
+     * here instead of being papered over by an assumed 320 MHz. */
+    return (uint32_t)(((uint64_t)pll1_out_hz() * 100u) / clock_adc_div());
+}
+
+uint32_t clock_adc_set_pll(uint32_t postdiv1, uint32_t postdiv2)
+{
+    /* Both fields are three bits, and POSTDIV1 must not be smaller than
+     * POSTDIV2 (p778). 7/7 gives 32.65 MHz, just above the ADC's 32 MHz
+     * minimum (Table 16-1); 5/1 is the 320 MHz clock_init() sets up. */
+    if ((postdiv1 < 1u) || (postdiv1 > 7u) ||
+        (postdiv2 < 1u) || (postdiv2 > 7u) || (postdiv2 > postdiv1)) {
+        return CLKDIV_RANGE;
+    }
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+    return CLKDIV_OK;                  /* no PLL to retune                */
+#else
+    /* "The output dividers POSTDIV1 and POSTDIV2 should not be changed
+     * while the PLL is operating" (p778) - the caller has taken the ADC
+     * core down, which is what consumes this clock. The update itself is
+     * the same FOUTSWEN step clock_init() uses at boot, and that one
+     * demonstrably works: the board would not start otherwise. */
+    PLL1DIVbits.POSTDIV1 = postdiv1;
+    PLL1DIVbits.POSTDIV2 = postdiv2;
+    if ((PLL1DIVbits.POSTDIV1 != postdiv1) || (PLL1DIVbits.POSTDIV2 != postdiv2)) {
+        return CLKDIV_NOT_WRITTEN;
+    }
+    PLL1CONbits.FOUTSWEN = 1u;         /* apply the output dividers       */
+    uint32_t n = DIVSW_WAIT_LIMIT;
+    while (PLL1CONbits.FOUTSWEN && (--n != 0u)) { }
+    if (n == 0u) { return CLKDIV_FOUTSWEN; }
+    n = DIVSW_WAIT_LIMIT;
+    while (!OSCCTRLbits.PLL1RDY && (--n != 0u)) { }
+    if (n == 0u) { return CLKDIV_PLLRDY; }
+    n = DIVSW_WAIT_LIMIT;
+    while (!CLK6CONbits.CLKRDY && (--n != 0u)) { }
+    if (n == 0u) { return CLKDIV_CLKRDY; }
+    if ((PLL1DIVbits.POSTDIV1 != postdiv1) || (PLL1DIVbits.POSTDIV2 != postdiv2)) {
+        return CLKDIV_LOST;
+    }
+    return CLKDIV_OK;
+#endif
 }
 
 void clock_regs_dump(void)

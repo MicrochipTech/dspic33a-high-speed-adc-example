@@ -168,6 +168,12 @@ static uint32_t          clkdiv_cur     = ADC_CLKDIV;
  * every test calls first, re-arms it. */
 #define OVERRUN_LIMIT     500000u
 static volatile bool     overrun_abort  = false;
+/* The brake counts for itself, from zero at every capture_start().
+ * It must not use dma_overrun: that one is the measurement and only
+ * counters_clear() resets it, so after the brake had fired once the
+ * very first overrun of every later test tripped it again and every
+ * test reported "DMA channel disabled" (run 9). */
+static volatile uint32_t overrun_run    = 0;
 
 /* capture.h: the defined idle state every test starts from. */
 bool capture_settle(void)
@@ -287,14 +293,16 @@ void dma0_event(uint32_t st)
         /* Triggered while the previous transfer was still in progress
          * (p816): the bus did not keep up. This is the measurement. */
         dma_overrun++;
+        overrun_run++;
         dma0_clear(DMA0_OVERRUN);
-        if (dma_overrun >= OVERRUN_LIMIT) {
+        if (overrun_run >= OVERRUN_LIMIT) {
             /* The brake (see OVERRUN_LIMIT above). Masking the interrupt
              * and disabling the channel here, from inside the storm, is
              * what gives the main loop the CPU back. */
             dma0_halt();              /* IEC2.DMA0IE = 0, CHEN = 0      */
             run_enabled   = false;
             burst_active  = false;
+            dma_armed     = false;    /* the next start re-initialises   */
             overrun_abort = true;
             return;
         }
@@ -363,6 +371,8 @@ void capture_start(void)
     if (!dma_armed) {
         capture_init();               /* fresh DMA set-up for this run  */
     }
+    overrun_run = 0u;                 /* the brake counts per run       */
+    overrun_abort = false;
     run_enabled = true;
     if (!burst_active) {
         start_burst();
@@ -464,35 +474,43 @@ uint8_t capture_samc(void)   { return adc_samc(); }
  * 500 = 8 MSPS is the rate the customer's application needs; it is in
  * the ladder for that reason and for no other.
  * ------------------------------------------------------------------ */
-static const uint32_t sweep_ratios[] = {
-    1000u,  /* /10   32.0 MHz   4.00 MSPS  slowest the ADC may run       */
-     900u,  /* /9    35.6 MHz   4.44 MSPS  INTDIV 4, FRACDIV 256         */
-     800u,  /* /8    40.0 MHz   5.00 MSPS                                */
-     700u,  /* /7    45.7 MHz   5.71 MSPS  INTDIV 3, FRACDIV 256         */
-     600u,  /* /6    53.3 MHz   6.67 MSPS                                */
-     500u,  /* /5    64.0 MHz   8.00 MSPS  the customer's floor          */
-     450u,  /* /4.5  71.1 MHz   8.89 MSPS  INTDIV 2, FRACDIV 128         */
-     400u,  /* /4    80.0 MHz  10.00 MSPS                                */
-     350u,  /* /3.5  91.4 MHz  11.43 MSPS  INTDIV 1, FRACDIV 384         */
-     300u,  /* /3   106.7 MHz  13.33 MSPS  INTDIV 1, FRACDIV 256         */
-     250u,  /* /2.5 128.0 MHz  16.00 MSPS  INTDIV 1, FRACDIV 128         */
-     200u,  /* /2   160.0 MHz  20.00 MSPS  INTDIV 1, FRACDIV 0 - the
-             *      fastest the divider can do: anything between this and
-             *      undivided would need INTDIV 0, and FRACDIV does not
-             *      work then (12.4.2 4b)                                */
-     100u   /* /1   320.0 MHz  40.00 MSPS  undivided, both fields 0      */
+/* The rate ladder, slowest first. Each row is a pair of PLL1 output
+ * dividers; the ADC clock is 1600 MHz / (POSTDIV1 * POSTDIV2) and eight
+ * of those clocks make one back-to-back conversion.
+ *
+ * This replaced the CLKGEN6 divide ratios after run 9. Those were written,
+ * read back and confirmed by DIVSWEN and CLKRDY at every single ratio, with
+ * the generator switched off around the write and with it left running -
+ * and the ADC converted at 40 MSPS throughout (docs/HARDWARE-LOG.md runs 8
+ * and 9). The PLL's own output-divider switch is the one clock_init()
+ * performs at boot, so it is known to work on this silicon.
+ *
+ * POSTDIV1 must not be smaller than POSTDIV2 (p778), and 7/7 = 32.65 MHz
+ * is the slowest setting that still clears the ADC's 32 MHz minimum. */
+static const struct pll_step sweep_steps[] = {
+    { 7u, 7u },   /*  32.65 MHz   4.08 MSPS  slowest the ADC may run    */
+    { 7u, 6u },   /*  38.10 MHz   4.76 MSPS                             */
+    { 6u, 6u },   /*  44.44 MHz   5.56 MSPS                             */
+    { 7u, 5u },   /*  45.71 MHz   5.71 MSPS                             */
+    { 6u, 5u },   /*  53.33 MHz   6.67 MSPS                             */
+    { 7u, 4u },   /*  57.14 MHz   7.14 MSPS                             */
+    { 5u, 5u },   /*  64.00 MHz   8.00 MSPS  the customer's floor       */
+    { 6u, 4u },   /*  66.67 MHz   8.33 MSPS                             */
+    { 5u, 4u },   /*  80.00 MHz  10.00 MSPS                             */
+    { 6u, 3u },   /*  88.89 MHz  11.11 MSPS                             */
+    { 5u, 3u },   /* 106.67 MHz  13.33 MSPS                             */
+    { 6u, 2u },   /* 133.33 MHz  16.67 MSPS                             */
+    { 5u, 2u },   /* 160.00 MHz  20.00 MSPS                             */
+    { 5u, 1u }    /* 320.00 MHz  40.00 MSPS  undivided, the boot setting */
 };
+
 
 
 uint32_t capture_set_clkdiv(uint32_t ratio_h)
 {
-    /* The order the user asked for, and it is the boot order run
-     * backwards and forwards again: DMA channel down and ADC core off
-     * (capture_settle, adc_deinit), CLKGEN6 off, divider written, read
-     * back, generator on, DIVSWEN and CLKRDY awaited, fields read back
-     * once more (clock_adc_set_div), core on and ADRDY awaited
-     * (adc_reinit), DMA set up from scratch on the next capture_start().
-     * Nothing is reconfigured under a running clock or a running core. */
+    /* Kept for the record and for "clk": the CLKGEN6 divider does arrive
+     * in the register but does not change the conversion rate on this
+     * silicon (runs 8 and 9). The rate is set with capture_set_pll(). */
     const bool restart = capture_settle();      /* DMA down, burst ended */
     adc_deinit();                               /* core off              */
     const uint32_t rc    = clock_adc_set_div(ratio_h);
@@ -503,21 +521,39 @@ uint32_t capture_set_clkdiv(uint32_t ratio_h)
     return ready ? CLKDIV_OK : CLKDIV_ADC;
 }
 
+uint32_t capture_set_pll(uint32_t p1, uint32_t p2)
+{
+    /* Same order as the divider and as the boot: DMA channel down and
+     * burst finished, ADC core off (the PLL's output dividers must not
+     * move while something runs off them, p778), PLL retuned, core on
+     * with ADRDY, DMA set up from scratch on the next start. */
+    const bool restart = capture_settle();
+    adc_deinit();
+    const uint32_t rc    = clock_adc_set_pll(p1, p2);
+    const bool     ready = adc_reinit();
+    if (restart) { capture_start(); }
+    if (rc != CLKDIV_OK) { return rc; }
+    return ready ? CLKDIV_OK : CLKDIV_ADC;
+}
+
 uint32_t capture_clkdiv(void)        { return clock_adc_div(); }  /* hardware */
 uint32_t capture_clkdiv_wanted(void) { return clkdiv_cur; }       /* asked for */
 
 uint32_t capture_nominal_ksps(uint32_t ratio_h)
 {
-    /* 40 MSPS at ratio 1, and the ratio is in hundredths:
-     * 40 000 ksps * 100 / ratio_h. */
-    return (ratio_h == 0u) ? 0u : (4000000u / ratio_h);
+    (void)ratio_h;
+    /* Eight ADC clocks per back-to-back conversion, and the clock is read
+     * from the registers - so this is the rate the hardware is actually
+     * set up for, not the one that was asked for. */
+    return clock_adc_hz() / 8000u;
 }
 
-const uint32_t *capture_sweep_ratios(uint32_t *count)
+const struct pll_step *capture_sweep_steps(uint32_t *count)
 {
-    *count = sizeof sweep_ratios / sizeof sweep_ratios[0];
-    return sweep_ratios;
+    *count = sizeof sweep_steps / sizeof sweep_steps[0];
+    return sweep_steps;
 }
+
 
 const volatile uint16_t *capture_completed_half(void)
 {
@@ -527,6 +563,7 @@ const volatile uint16_t *capture_completed_half(void)
 void counters_clear(void)
 {
     overrun_abort = false;            /* re-arm the brake               */
+    overrun_run   = 0;
     dma_overrun = 0; dma_addr_err = 0; dma_bus_err = 0;
     late_service = 0; proc_missed = 0;
     /* Halves completed up to now are not "missed" from here on. Without
@@ -652,6 +689,40 @@ uint32_t capture_selftest(uint32_t *mean)
  * by the elapsed time. The judgement - does this rate match the ratio,
  * and did anything get lost - belongs to the caller, which prints it.
  * ------------------------------------------------------------------ */
+uint32_t capture_clkoff_probe(uint32_t halves)
+{
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+    (void)halves;
+    return 6u;
+#else
+    /* The control experiment for the question runs 8 and 9 raised: is the
+     * ADC really clocked from CLKGEN6? Table 16-1 says it is, and yet the
+     * generator's divider has no effect on the conversion rate. So take
+     * the core down, switch the generator OFF, bring the core back and
+     * try to convert.
+     *
+     * Returns 0 if halves still arrive - which would mean the ADC is not
+     * running off CLKGEN6 at all and explains everything at a stroke - or
+     * 6/8 if nothing arrives, which is the expected, boring answer. The
+     * generator and the core are restored either way. */
+    (void)capture_settle();
+    adc_deinit();
+    clock_adc_off();
+    const bool ready_off = adc_reinit();   /* does the core even come up? */
+    counters_clear();
+    const uint32_t target = blocks_done + halves;
+    capture_start();
+    const uint32_t rc = wait_for_blocks(target);
+    (void)capture_settle();
+
+    adc_deinit();                          /* restore, in the boot order  */
+    (void)clock_adc_on();
+    (void)adc_reinit();
+    console_kv("[clkoff]   ADC core reported ready with the generator off", ready_off ? 1u : 0u);
+    return rc;
+#endif
+}
+
 uint32_t capture_measure_rate(uint32_t halves, uint32_t *ksps)
 {
 #ifdef __MPLAB_DEBUGGER_SIMULATOR

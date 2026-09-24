@@ -608,3 +608,99 @@ going quiet. `counters_clear()` re-arms it, and every test calls that first.
 
 This does not make a flooding rate usable - it makes it survivable, so the run continues
 and the log gets written. The cure for the flood itself is the divider fix above.
+
+## 2026-09-24, run 9 - master 38e7a0c, build 12:23:31 - the brake holds, the divider still does nothing
+
+**The brake works and the board stays alive.** The whole `test all` ran to the end, and
+afterwards the console still answered - `help`, `test`, `test clock`, `test dac` all worked.
+At the undivided ratio all three loads aborted with STOPPED, which is the brake doing its
+job. No freeze, for the first time since run 6.
+
+**But the brake stays tripped - a defect, fixed after this run.** It compared the
+cumulative `dma_overrun`, which only `counters_clear()` resets, so once it had fired the
+very first overrun of every later test tripped it again: `test self` reported "DMA channel
+disabled" although everything had just worked. It has its own counter now, zeroed at every
+`capture_start()`, and it also clears `dma_armed` so the next start re-initialises the
+channel.
+
+**The divider still changes nothing.** All thirteen rows measured 39 750 to 40 791 ksps -
+ratio 1000 (4 MSPS asked for) and ratio 200 (20 MSPS asked for) alike:
+
+```
+postdiv/ratio 1000  nominal  4000  measured 39750   overrun 78730/187413/75638  missed 1960
+              900   nominal  4444  measured 40418   overrun 71734/78695/73985   missed 35
+              800   nominal  5000  measured 39797   overrun 78725/130000/78725  missed 15
+              700   nominal  5714  measured 40364   overrun 72426/159177/74830  missed 13
+              600   nominal  6666  measured 40781   overrun 69520/115816/79235  missed 11
+              500   nominal  8000  measured 40043   overrun 73070/142702/72706  missed 9
+              450   nominal  8888  measured 40706   overrun 69718/71807/69937   missed 1944
+              400   nominal 10000  measured 40663   overrun 68689/166827/68704  missed 7
+              350   nominal 11428  measured 40704   overrun 68271/68770/68318   missed 1924
+              300   nominal 13333  measured     0   overrun STOPPED/241619/62881
+              250   nominal 16000  measured 40791   overrun 65440/66444/64961   missed 1940
+              200   nominal 20000  measured 40712   overrun 66631/STOPPED/62008 missed 47
+              100   nominal 40000  measured     0   overrun STOPPED/STOPPED/STOPPED
+```
+
+That is now the second switching sequence with the same result. Run 8 switched CLKGEN6 off
+around the write, run 9 left it running exactly as Example 12-2 prescribes; in both the
+register took the value, `DIVSWEN` cleared, `CLKRDY` came, and the ADC converted at 40 MSPS
+throughout. **The conclusion is no longer "we switch it wrongly" but "the CLKGEN6 divider
+does not set the ADC conversion rate on this silicon."**
+
+Worth noting in the table: `missed` is bimodal - either about 1930 of 2000 or under 50 -
+and the rows where the main loop kept up are the rows where the `process` run shows roughly
+twice the overruns. Both follow from the CPU sitting on the tipping point of the interrupt
+load: if it tips, the main loop gets nothing; if it does not, the processing itself costs
+bus cycles and pushes the overrun count up. It is not a property of the rate, which never
+changed.
+
+**Changed in reaction (no board run yet): the rate comes from PLL1 now.**
+
+PLL1 feeds nothing but the ADC path - the CPU runs off PLL2 - so it can be retuned freely.
+FVCO is 1600 MHz and the output is FVCO / (POSTDIV1 * POSTDIV2), both fields 1..7 with
+POSTDIV1 >= POSTDIV2 (p778). The ladder, slowest first:
+
+```
+  7/7   32.65 MHz    4.08 MSPS   slowest that still clears the ADC minimum of 32 MHz
+  7/6   38.10 MHz    4.76 MSPS
+  6/6   44.44 MHz    5.56 MSPS
+  7/5   45.71 MHz    5.71 MSPS
+  6/5   53.33 MHz    6.67 MSPS
+  7/4   57.14 MHz    7.14 MSPS
+  5/5   64.00 MHz    8.00 MSPS   the customer's floor
+  6/4   66.67 MHz    8.33 MSPS
+  5/4   80.00 MHz   10.00 MSPS
+  6/3   88.89 MHz   11.11 MSPS
+  5/3  106.67 MHz   13.33 MSPS
+  6/2  133.33 MHz   16.67 MSPS
+  5/2  160.00 MHz   20.00 MSPS
+  5/1  320.00 MHz   40.00 MSPS   the boot setting of clock_init()
+```
+
+The decisive argument for this route: **the PLL's output-divider switch is the one
+`clock_init()` performs at every boot.** If it did not work the board would not come up at
+all, so unlike the CLKGEN6 divider it is known to work on this silicon. The sequence is the
+same as before - DMA channel down, ADC core off (p778: the output dividers must not move
+while the PLL is operating), PLL1DIV written and read back, FOUTSWEN awaited, PLL1RDY
+awaited, CLKGEN6 CLKRDY awaited, core on, DMA from scratch.
+
+`clock_adc_hz()` is derived from the registers now (PLLPRE, PLLFBDIV, POSTDIV1, POSTDIV2,
+then the CLKGEN6 ratio) instead of assuming 320 MHz, so a switch that did not take shows up
+in the number instead of being papered over. `clock_dac_hz()` uses the same PLL output -
+CLKGEN7 hangs off PLL1 too, so retuning for the sample rate moves the DAC's triangle with
+it, and `dactest` reads the period back live.
+
+**New: `test clkoff`.** Table 16-1 names CLKGEN6 as the ADC clock source, and its divider
+has no effect - so ask the board directly: take the core down, switch CLKGEN6 **off**,
+bring the core back and try to convert. If halves still arrive, the ADC is not running off
+that generator and the last two runs are explained at a stroke. If nothing arrives, the
+generator does feed it and the mystery stays with the divider. Either way it is one command
+and a few milliseconds. It runs as part of `test all`, after `test clock`.
+
+`test clock` keeps the CLKGEN6 ratios and now prints, under its PASS, that passing there
+only proves the register holds the value.
+
+Boot default is the slowest PLL setting (7/7), for the same reason the ladder starts there.
+New commands: `pll <p1> <p2>` for the rate, `clk` kept for the CLKGEN6 ratio with its
+warning. Both builds `-Wall -Wextra` clean; nothing of this has been on the board.

@@ -38,7 +38,31 @@
  * most likely to pass, and a failure there means the chain itself is
  * broken - not the rate. "clk <ratio>" changes it at run time. */
 #ifndef ADC_CLKDIV
-#define ADC_CLKDIV        1000u   /* /10 = 32 MHz ADC clock = 4 MSPS          */
+#define ADC_CLKDIV        100u    /* CLKGEN6 divider: straight through       */
+#endif
+
+/* The sample rate at boot, as PLL1's two output dividers: the ADC clock
+ * is 1600 MHz / (POSTDIV1 * POSTDIV2), and eight of those clocks make one
+ * back-to-back conversion. 7/7 = 32.65 MHz = 4.08 MSPS is the slowest
+ * setting that still clears the ADC's 32 MHz minimum; 5/5 = 64 MHz =
+ * 8 MSPS is what the customer's application needs; 5/1 = 320 MHz =
+ * 40 MSPS is the maximum and what clock_init() starts with.
+ *
+ * The slowest setting is the default on purpose: it is the one the DMA
+ * should manage comfortably, so the first test of a run is the one most
+ * likely to pass, and a failure there means the chain itself is broken -
+ * not the rate. "pll <p1> <p2>" changes it at run time.
+ *
+ * Why the PLL and not the CLKGEN6 divider: the divider does not work.
+ * Every ratio was written, read back and confirmed by DIVSWEN and CLKRDY,
+ * with the generator switched off around the write and with it left
+ * running, and the ADC converted at 40 MSPS at every one of them
+ * (docs/HARDWARE-LOG.md runs 8 and 9). */
+#ifndef ADC_PLL_POSTDIV1
+#define ADC_PLL_POSTDIV1  7u
+#endif
+#ifndef ADC_PLL_POSTDIV2
+#define ADC_PLL_POSTDIV2  7u
 #endif
 
 /* Boot chatter: with 1 every start-up step reports its registers on the

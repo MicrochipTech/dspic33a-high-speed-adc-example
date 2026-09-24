@@ -114,12 +114,13 @@ int main(void)
      * anyone runs is the one most likely to pass - and a failure there is
      * the chain itself, not the rate. "clk" changes it. */
     {
-        const uint32_t rc = capture_set_clkdiv(ADC_CLKDIV);
-        console_kv("[boot] adc clock divide ratio x100", capture_clkdiv());
+        const uint32_t rc = capture_set_pll(ADC_PLL_POSTDIV1, ADC_PLL_POSTDIV2);
+        console_kv("[boot] pll1 postdiv1", clock_adc_pll_postdiv1());
+        console_kv("[boot] pll1 postdiv2", clock_adc_pll_postdiv2());
         console_kv("[boot] adc clock Hz", clock_adc_hz());
-        console_kv("[boot] sample rate ksps (back-to-back)", capture_nominal_ksps(capture_clkdiv()));
+        console_kv("[boot] sample rate ksps (back-to-back)", capture_nominal_ksps(0u));
         if (rc != CLKDIV_OK) {
-            console_puts("[boot] WARNING the ADC clock divider did not switch: ");
+            console_puts("[boot] WARNING the ADC clock did not switch: ");
             console_puts(clock_adc_div_error(rc));
             console_puts("\r\n");
         }

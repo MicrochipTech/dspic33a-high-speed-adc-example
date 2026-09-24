@@ -45,13 +45,44 @@ uint32_t clock_cpu_hz(void);
 #define CLKDIV_LOST         5u
 #define CLKDIV_ADC          6u   /* capture.c: core did not come back */
 #define CLKDIV_INTDIV0      7u   /* ratio 1 < r < 2: FRACDIV alone does nothing */
+#define CLKDIV_FOUTSWEN     8u   /* PLL1 output divider switch never completed  */
+#define CLKDIV_PLLRDY       9u   /* PLL1 never locked again                     */
 uint32_t    clock_adc_set_div(uint32_t ratio_h);
 const char *clock_adc_div_error(uint32_t rc);
 /* CLKGEN6 off (the ADC has no clock then; the core must be off first) and
  * on again with the divider it had, CLKRDY awaited, bounded. */
+/* The ADC clock the other way round: PLL1's two output dividers.
+ *
+ * PLL1 feeds nothing but the ADC path (the CPU runs off PLL2), so it can
+ * be retuned without touching anything else. FVCO is 1600 MHz and the
+ * output is FVCO / (POSTDIV1 * POSTDIV2), both fields 1..7 and POSTDIV1
+ * >= POSTDIV2 (p778). That gives 320 down to 32.65 MHz, i.e. 40 down to
+ * 4.08 MSPS, and 5/5 = 64 MHz = 8 MSPS exactly.
+ *
+ * This exists because the CLKGEN6 divider does not work: through runs 8
+ * and 9 every ratio was written, read back and confirmed by DIVSWEN and
+ * CLKRDY, with the generator off and with it running, and the ADC kept
+ * converting at 40 MSPS at every one of them (docs/HARDWARE-LOG.md). The
+ * PLL's own switching sequence, in contrast, is the one clock_init()
+ * performs at every boot - if it did not work the board would not come
+ * up at all.
+ *
+ * "The output dividers POSTDIV1 and POSTDIV2 should not be changed while
+ * the PLL is operating" (p778), so the caller takes the ADC core down
+ * first, exactly as for the divider. Sequence: write PLL1DIV, FOUTSWEN,
+ * wait for it to clear, wait for PLL1RDY, wait for CLKGEN6's CLKRDY.
+ * Returns CLKDIV_OK or the step that failed. */
+uint32_t clock_adc_set_pll(uint32_t postdiv1, uint32_t postdiv2);
+uint32_t clock_adc_pll_postdiv1(void);
+uint32_t clock_adc_pll_postdiv2(void);
+
 void     clock_adc_off(void);
 bool     clock_adc_on(void);
 uint32_t clock_adc_div(void);
+/* The ADC input clock as the registers actually say it is: the FRC
+ * through PLL1 (PLLPRE, PLLFBDIV, POSTDIV1, POSTDIV2) and then the
+ * CLKGEN6 divider. Nothing is assumed - if a switch did not take, this
+ * number still reports what the hardware holds. */
 uint32_t clock_adc_hz(void);
 
 /* CLKGEN7 = DAC clock, from PLL1 (320 MHz; the datasheet's "400 MHz

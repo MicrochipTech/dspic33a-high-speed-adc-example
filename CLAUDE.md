@@ -117,13 +117,21 @@ timer sources delivered the unpaced rate, the two SCCP1 sources delivered no con
 at all (`docs/HARDWARE-LOG.md`, runs 4 to 7). `SAMC` does not change the rate either.
 Do not reintroduce them without a board run that shows one of them working.
 
-**The rate is the ADC clock, and nothing else.** `clock_adc_set_div()` (CLKGEN6, ratio
-in hundredths, 100..1000 = 40 ... 4 MSPS) is the only knob. The switch is done in the
-boot order and every step is checked: DMA channel down, ADC core off, generator off,
-divider written **and read back**, generator on, `DIVSWEN` awaited, `CLKRDY` awaited,
-fields read back again, core on, DMA set up from scratch. It returns `CLKDIV_OK` or the
-step that failed, because run 7 could not tell a divider that never switched from one
-that switched without changing the rate - the old code discarded that return value.
+**The rate comes from PLL1, not from the CLKGEN6 divider.** `capture_set_pll(p1, p2)`
+sets PLL1's two output dividers; the ADC clock is 1600 MHz / (p1*p2), p1 >= p2, both
+1..7, which is 40 down to 4.08 MSPS with 5/5 = 8 MSPS exactly. PLL1 feeds nothing but
+the ADC path, and its output-divider switch is what `clock_init()` does at every boot,
+so it is known to work on this silicon.
+
+The CLKGEN6 divider (`capture_set_clkdiv()`, the `clk` command) is kept for the record
+only. Through runs 8 and 9 every ratio was written, read back and confirmed by `DIVSWEN`
+and `CLKRDY` - with the generator switched off around the write and with it left running
+as Example 12-2 prescribes - and the ADC converted at 40 MSPS at every single one of
+them. **Do not build a rate on it.** `test clkoff` asks the remaining question: switch
+CLKGEN6 off entirely and see whether the ADC still converts.
+
+Both switches run in the boot order and report the step that failed rather than a bool:
+DMA channel down, ADC core off, clock changed and read back, core on, DMA from scratch.
 
 **Nothing runs by itself.** The firmware boots, brings the console up, sets the slowest
 rate and waits. Everything else is typed: `test` lists the parts, `test all` runs them

@@ -93,26 +93,36 @@ uint8_t capture_pinsel(void);
 uint8_t capture_samc(void);
 
 /* ---- The ADC clock: what sets the sample rate ----
- * The conversions run back-to-back and nothing paces them but the ADC
- * clock, so the CLKGEN6 divide ratio IS the sample rate. It is given in
- * hundredths, 100..1000 = 40 ... 4 MSPS, and 500 = 8 MSPS.
  *
- * capture_set_clkdiv() does the whole switch in the boot order - DMA
- * channel down, ADC core off, generator off, divider written and read
- * back, generator on, DIVSWEN and CLKRDY awaited, fields read back
- * again, core on, and the DMA set up from scratch on the next start.
- * It returns CLKDIV_OK or the step that failed (clock.h), so a switch
- * that never arrived can be told from one that arrived without changing
- * the rate - the distinction run 7 could not make.
+ * The conversions run back-to-back, so the rate is the ADC clock divided
+ * by the eight clocks one conversion takes. The clock comes from PLL1
+ * through CLKGEN6, and PLL1 feeds nothing else (the CPU is on PLL2).
  *
- * capture_clkdiv() is the hardware's answer, capture_clkdiv_wanted()
- * what was last asked for; the two differing is itself the finding.
- * capture_sweep_ratios() is the ladder, slowest rate first. */
+ * Two knobs exist and only one of them works:
+ *   capture_set_pll(p1, p2)  PLL1's output dividers, 1600 MHz / (p1*p2),
+ *                            p1 >= p2, both 1..7: 320 down to 32.65 MHz,
+ *                            i.e. 40 down to 4.08 MSPS, and 5/5 = 8 MSPS.
+ *                            THIS is the rate control.
+ *   capture_set_clkdiv(r)    the CLKGEN6 divide ratio in hundredths. It
+ *                            arrives in the register and is confirmed by
+ *                            DIVSWEN and CLKRDY - and does not change the
+ *                            conversion rate (HARDWARE-LOG runs 8 and 9).
+ *                            Kept for the record and for the "clk"
+ *                            command; do not build on it.
+ * Both return CLKDIV_OK or the step that failed (clock.h), and both do
+ * the switch in the boot order: DMA channel down, ADC core off, clock
+ * changed, core on, DMA set up from scratch on the next start.
+ *
+ * capture_nominal_ksps() is what the hardware is set up for, read back
+ * from the clock registers - not what was asked for. */
+struct pll_step { uint8_t p1, p2; };
+uint32_t capture_set_pll(uint32_t p1, uint32_t p2);
 uint32_t capture_set_clkdiv(uint32_t ratio_h);
 uint32_t capture_clkdiv(void);
 uint32_t capture_clkdiv_wanted(void);
-uint32_t capture_nominal_ksps(uint32_t ratio_h);
-const uint32_t *capture_sweep_ratios(uint32_t *count);
+uint32_t capture_nominal_ksps(uint32_t ignored);
+/* The rate ladder, slowest first. */
+const struct pll_step *capture_sweep_steps(uint32_t *count);
 
 /* Sample the ADC's internal 15/16 * VDD reference (ANx6) for a few halves
  * and compare the mean against the expected window. Blocking, bounded.
@@ -121,6 +131,13 @@ const uint32_t *capture_sweep_ratios(uint32_t *count);
  * selftest_mean and returned through *mean if non-NULL. Restores the
  * previous input afterwards. */
 uint32_t capture_selftest(uint32_t *mean);
+
+/* Switch CLKGEN6 off and try to convert anyway: the control experiment
+ * for "is the ADC really clocked from CLKGEN6?". 0 means halves still
+ * arrived with the generator off, anything else that nothing did. The
+ * generator and the ADC core are restored either way. Blocking, bounded.
+ * In the simulator it returns 6 without doing anything. */
+uint32_t capture_clkoff_probe(uint32_t halves);
 
 /* Run `halves` halves at whatever the divider is set to and return the
  * delivered rate in ksps, measured against Timer1. Blocking, bounded,
