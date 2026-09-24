@@ -117,6 +117,12 @@ uint8_t capture_samc(void);
  * from the clock registers - not what was asked for. */
 struct pll_step { uint8_t p1, p2; };
 uint32_t capture_set_pll(uint32_t p1, uint32_t p2);
+/* The same switch, but addressed by a rate instead of by divider
+ * settings: the closest combination of PLL1 output dividers and PLLFBDIV
+ * is chosen (clock.h), so the caller says 8000 and gets 8000. *got_ksps
+ * is what the hardware will deliver - always read it, the wish is not
+ * always reachable exactly. */
+uint32_t capture_set_rate(uint32_t want_ksps, uint32_t *got_ksps);
 uint32_t capture_set_clkdiv(uint32_t ratio_h);
 uint32_t capture_clkdiv(void);
 uint32_t capture_clkdiv_wanted(void);

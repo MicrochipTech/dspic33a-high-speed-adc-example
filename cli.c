@@ -683,17 +683,23 @@ CMD_DEFINE(stats, "stats", cmd_stats_fn, "stats - min/max/mean of the completed 
 
 static void cmd_dump_fn(int argc, char **argv)
 {
+    /* The WHOLE buffer, not one half. After "snap" the buffer holds one
+     * contiguous window that nothing is writing any more, and that is the
+     * only thing worth plotting or transforming - a half read out while
+     * the stream runs is torn, because at these rates the main loop is
+     * milliseconds behind the DMA (docs/HARDWARE-LOG.md run 11). */
+    const uint32_t total = 2u * capture_half_len();
     uint32_t count = 64u, offset = 0u;
     if ((argc > 3) ||
-        ((argc >= 2) && !arg_u32(argv[1], 1u, capture_half_len(), &count)) ||
-        ((argc == 3) && !arg_u32(argv[2], 0u, capture_half_len() - 1u, &offset))) {
-        usage("dump [count 1..1024] [offset 0..1023]");
+        ((argc >= 2) && !arg_u32(argv[1], 1u, total, &count)) ||
+        ((argc == 3) && !arg_u32(argv[2], 0u, total - 1u, &offset))) {
+        usage("dump [count 1..2048] [offset 0..2047]  (the whole buffer; use snap first)");
         return;
     }
-    if (offset + count > capture_half_len()) {
-        count = capture_half_len() - offset;
+    if ((offset + count) > total) {
+        count = total - offset;
     }
-    const volatile uint16_t *b = capture_completed_half();
+    const volatile uint16_t *b = capture_buffer();
     char line[80];
     for (uint32_t i = 0; i < count; i += 8u) {
         char *p = line;
@@ -710,7 +716,7 @@ static void cmd_dump_fn(int argc, char **argv)
         if (cmd_parser_aborted()) { return; }
     }
 }
-CMD_DEFINE(dump, "dump", cmd_dump_fn, "dump [count] [offset] - samples of the completed half");
+CMD_DEFINE(dump, "dump", cmd_dump_fn, "dump [count] [offset] - samples of the buffer (snap first)");
 
 static void cmd_clear_fn(int argc, char **argv)
 {
@@ -1333,6 +1339,59 @@ static void cmd_test_fn(int argc, char **argv)
 }
 CMD_DEFINE(test, "test", cmd_test_fn, "test [all|self|clock|clkoff|matrix|rate|sweep|dac] [halves]");
 
+static void cmd_snap_fn(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    /* One buffer, and the DMA interrupt ends the stream itself. This is
+     * the only way to get a coherent window at a rate where the main loop
+     * cannot keep up: "start, wait, stop, dump" reads a half that the DMA
+     * has overwritten a thousand times in the meantime, and at a rate
+     * with overruns the "stop" never even arrives, because the console's
+     * receive interrupt sits below the DMA channel. Afterwards the whole
+     * buffer stands still and "dump" can read all of it. */
+    const uint32_t n     = 2u * capture_half_len();
+    const uint32_t t0    = timebase_ticks();
+    const uint32_t rc    = capture_oneshot();
+    const uint32_t ticks = timebase_ticks() - t0;
+    (void)capture_settle();
+
+    if (rc != 0u) {
+        put_line(capture_overrun_aborted()
+                 ? "snap: stopped by the overrun brake - this rate floods the CPU"
+                 : "snap: no data");
+        cmd_parser_fail();
+        return;
+    }
+    const uint32_t window_ns = (uint32_t)(((uint64_t)ticks * 1000000000ull) / TIMEBASE_HZ);
+    put_kv("samples", n);
+    put_kv("window ns", window_ns);
+    put_kv("ksps measured", timebase_ksps(n, ticks));
+    put_kv("ksps nominal", capture_nominal_ksps(0u));
+    put_kv("overrun during the burst", dma_overrun);
+    put_kv("input", capture_pinsel());
+    put_kv("adc core", adc_core());
+}
+CMD_DEFINE(snap, "snap", cmd_snap_fn, "snap - fill the buffer once and stop; then dump it");
+
+static void cmd_rate_fn(int argc, char **argv)
+{
+    uint32_t want = 0u, got = 0u;
+    if ((argc != 2) || !arg_u32(argv[1], 4000u, 40000u, &want)) {
+        usage("rate <4000..40000 ksps>  (the closest the PLL can make; 'rate 8000' gives exactly 8000)");
+        return;
+    }
+    const uint32_t rc = capture_set_rate(want, &got);
+    put_kv("ksps asked for", want);
+    put_kv("ksps set", got);
+    put_kv("pll1 fbdiv", clock_pll1_fbdiv());
+    put_kv("pll1 postdiv1", clock_adc_pll_postdiv1());
+    put_kv("pll1 postdiv2", clock_adc_pll_postdiv2());
+    put_kv("adc clock Hz", clock_adc_hz());
+    put_line(clock_adc_div_error(rc));
+    if (rc != CLKDIV_OK) { cmd_parser_fail(); }
+}
+CMD_DEFINE(rate, "rate", cmd_rate_fn, "rate <ksps> - the sample rate, 4000..40000");
+
 static void cmd_reset_fn(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -1379,6 +1438,8 @@ void cli_init(void)
     (void)cmd_register(&cmd_buf);
     (void)cmd_register(&cmd_dac);
     (void)cmd_register(&cmd_dactest);
+    (void)cmd_register(&cmd_snap);
+    (void)cmd_register(&cmd_rate);
     (void)cmd_register(&cmd_reset);
 
     /* Banner, once at start-up. A human sees what is talking and which

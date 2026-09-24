@@ -549,6 +549,20 @@ uint32_t capture_set_pll(uint32_t p1, uint32_t p2)
     return ready ? CLKDIV_OK : CLKDIV_ADC;
 }
 
+uint32_t capture_set_rate(uint32_t want_ksps, uint32_t *got_ksps)
+{
+    /* Same order as every other clock change here, and the same reason:
+     * the DMA channel and the ADC core are what run off this clock, so
+     * they go down first and come back the way the boot brings them up. */
+    const bool restart = capture_settle();
+    adc_deinit();
+    const uint32_t rc    = clock_adc_set_rate(want_ksps, got_ksps);
+    const bool     ready = adc_reinit();
+    if (restart) { capture_start(); }
+    if (rc != CLKDIV_OK) { return rc; }
+    return ready ? CLKDIV_OK : CLKDIV_ADC;
+}
+
 uint32_t capture_clkdiv(void)        { return clock_adc_div(); }  /* hardware */
 uint32_t capture_clkdiv_wanted(void) { return clkdiv_cur; }       /* asked for */
 

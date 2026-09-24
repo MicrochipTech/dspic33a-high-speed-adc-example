@@ -73,6 +73,29 @@ const char *clock_adc_div_error(uint32_t rc);
  * wait for it to clear, wait for PLL1RDY, wait for CLKGEN6's CLKRDY.
  * Returns CLKDIV_OK or the step that failed. */
 uint32_t clock_adc_set_pll(uint32_t postdiv1, uint32_t postdiv2);
+/* The sample rate as a number, instead of as divider settings.
+ *
+ * The output dividers alone give only 21 rates between 4.08 and 40 MSPS,
+ * and the steps near the top are 14 to 17 % apart - too coarse to ask an
+ * application to live with. PLLFBDIV closes that: the rate is
+ *
+ *     rate [MSPS] = PLLFBDIV / (POSTDIV1 * POSTDIV2)
+ *
+ * with PLLFBDIV between 63 and 200, because the VCO must stay inside
+ * 500...1600 MHz at the 8 MHz input. The two output dividers then act as
+ * gears and PLLFBDIV as the fine adjustment: the step is 1/(p1*p2) MSPS,
+ * which is at worst 1.6 % and usually better, anywhere in the range.
+ *
+ * clock_adc_set_rate() searches the pairs for the combination closest to
+ * the wish, writes PLL1DIV in one go and applies it with PLLSWEN (input
+ * and feedback dividers) and FOUTSWEN (output dividers) - the same two
+ * steps clock_init() performs at every boot, which is the reason to
+ * trust them. *got_ksps returns what the hardware will actually deliver,
+ * which is the number to believe, not the wish. The ADC core must be off
+ * (p778: the output dividers must not move while the PLL operates);
+ * capture.c takes it down and brings it back. */
+uint32_t clock_adc_set_rate(uint32_t want_ksps, uint32_t *got_ksps);
+uint32_t clock_pll1_fbdiv(void);
 uint32_t clock_adc_pll_postdiv1(void);
 uint32_t clock_adc_pll_postdiv2(void);
 

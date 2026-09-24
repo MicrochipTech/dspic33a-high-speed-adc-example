@@ -55,19 +55,50 @@ BAUD = 115200
 # and back-to-back needs 8 ADC clocks per conversion: a conversion is
 # 2 TAD and TAD is 4 / f_adc (adc.c). Run 13 measured 3990 kSPS against a
 # nominal 4081, 2.2 % out, so the formula holds on silicon.
-PLL_VCO_HZ = 1600e6
+PLL_INPUT_HZ = 8e6          # the FRC feeding PLL1
+PLL_FBDIV_DEFAULT = 200     # PLL1DIV.PLLFBDIV as clock_init() leaves it
+PLL_VCO_HZ = PLL_INPUT_HZ * PLL_FBDIV_DEFAULT
 ADC_CLOCKS_PER_SAMPLE = 8
 PLL_POSTDIV_MIN, PLL_POSTDIV_MAX = 1, 7
 
 
-def adc_clock_hz(postdiv1: int, postdiv2: int) -> float:
+def adc_clock_hz(postdiv1: int, postdiv2: int, fbdiv: int = PLL_FBDIV_DEFAULT) -> float:
+    """The ADC input clock: 8 MHz * PLLFBDIV / (POSTDIV1 * POSTDIV2).
+
+    The post-dividers alone give only 21 rates and the steps near the top
+    are 14 to 17 % apart. PLLFBDIV is the fine adjustment the firmware's
+    'rate' command uses, so the clock is no longer a function of the two
+    post-dividers alone - read it back from 'status' rather than assuming
+    the boot value."""
     d = max(1, int(postdiv1)) * max(1, int(postdiv2))
-    return PLL_VCO_HZ / d
+    return PLL_INPUT_HZ * max(1, int(fbdiv)) / d
 
 
-def rate_ksps(postdiv1: int, postdiv2: int) -> float:
-    """Nominal sample rate for the PLL post-dividers, in kSPS."""
-    return adc_clock_hz(postdiv1, postdiv2) / ADC_CLOCKS_PER_SAMPLE / 1e3
+def rate_ksps(postdiv1: int, postdiv2: int, fbdiv: int = PLL_FBDIV_DEFAULT) -> float:
+    """Nominal sample rate for a PLL setting, in kSPS."""
+    return adc_clock_hz(postdiv1, postdiv2, fbdiv) / ADC_CLOCKS_PER_SAMPLE / 1e3
+
+
+def rate_options(step_pct: float = 2.0, lo_ksps: float = 4000.0, hi_ksps: float = 40000.0):
+    """The rates the firmware's 'rate' command can actually hit, thinned
+    out to about `step_pct` apart so a dropdown stays usable. Mirrors the
+    search in clock_adc_set_rate(): rate = PLLFBDIV / (p1*p2) MSPS with
+    PLLFBDIV 63..200 (the VCO limits) and p1 >= p2."""
+    seen = []
+    for p1 in range(PLL_POSTDIV_MIN, PLL_POSTDIV_MAX + 1):
+        for p2 in range(PLL_POSTDIV_MIN, p1 + 1):
+            p = p1 * p2
+            for fb in range(63, 201):
+                r = fb * 1000.0 / p
+                if lo_ksps <= r <= hi_ksps:
+                    seen.append(round(r, 3))
+    seen = sorted(set(seen))
+    out, last = [], 0.0
+    for r in seen:
+        if last == 0.0 or (r - last) / last * 100.0 >= step_pct:
+            out.append(r)
+            last = r
+    return out
 
 
 def pll_options():
@@ -894,6 +925,7 @@ class FakeTarget:
         self.on_log = on_log  # optional callable(str): the console transcript
         self.port = "fake"
         self.pll1, self.pll2 = 5, 1              # 320 MHz ADC clock = 40 MSPS
+        self.fbdiv = PLL_FBDIV_DEFAULT           # the "rate" command moves this too
         self.core = 3                            # ADC core 1..5, 'core'; 3+PINSEL 5 = mikroBUS A default
         self.samc, self.input = 0, 5
         # Both DACs, as dac.c has them: unit -> its triangle settings.
@@ -931,7 +963,7 @@ class FakeTarget:
         rate: back-to-back at the ADC clock, 8 clocks per conversion,
         the same formula the firmware uses since the rate became the PLL's
         job alone (cli.c 'pll')."""
-        return rate_ksps(self.pll1, self.pll2) * 1e3
+        return rate_ksps(self.pll1, self.pll2, self.fbdiv) * 1e3
 
     def _samples(self, n: int) -> np.ndarray:
         """A window of the last `n` samples of an ongoing background signal,
@@ -1066,7 +1098,7 @@ class FakeTarget:
                     return False, ["usage: clk <100..1000>"]
                 self.clkdiv = n
                 return True, [f"ratio asked for: {n}", f"ratio read back: {n}",
-                              f"adc clock Hz: {int(adc_clock_hz(self.pll1, self.pll2))}",
+                              f"adc clock Hz: {int(adc_clock_hz(self.pll1, self.pll2, self.fbdiv))}",
                               "ok (and the rate does not change)"]
             if c == "status":
                 self.counters["blocks"] += 17
@@ -1074,8 +1106,9 @@ class FakeTarget:
                               "overrun: 0", "late: 0", "missed: 0", "addr_err: 0", "bus_err: 0",
                               f"core: {self.core}", f"input: {self.input}", f"samc: {self.samc}",
                               f"postdiv1: {self.pll1}", f"postdiv2: {self.pll2}",
-                              f"adc clock Hz: {int(adc_clock_hz(self.pll1, self.pll2))}",
-                              f"ksps nominal: {int(rate_ksps(self.pll1, self.pll2))}",
+                              f"adc clock Hz: {int(adc_clock_hz(self.pll1, self.pll2, self.fbdiv))}",
+                              f"ksps nominal: {int(rate_ksps(self.pll1, self.pll2, self.fbdiv))}",
+                              f"pll1 fbdiv: {self.fbdiv}",
                               f"fs_hz: {round(self._fs_hz())}",
                               f"buf: {self.buf_size}", f"half: {self.buf_size // 2}",
                               f"clkdiv (x100, read back): {self.clkdiv}",
@@ -1087,14 +1120,56 @@ class FakeTarget:
             if c == "version":
                 return True, ["adc_dma_40msps (fake target)", "board: none, synthetic signal"]
             if c == "help":
-                return True, ["commands: start stop pll clk core samc input dac buf status version dump blk"]
+                return True, ["commands: start stop snap rate pll clk core samc input dac buf status version dump blk"]
+            if c == "snap":
+                # One buffer, and the DMA interrupt ends the stream. The
+                # window that follows is contiguous; that is the whole
+                # point of the command (see capture_cycle).
+                n = self.buf_size
+                fs = self._fs_hz()
+                window_ns = int(n / fs * 1e9) if fs > 0 else 0
+                self.running = False
+                return True, [f"samples: {n}", f"window ns: {window_ns}",
+                              f"ksps measured: {int(fs / 1e3)}",
+                              f"ksps nominal: {int(rate_ksps(self.pll1, self.pll2, self.fbdiv))}",
+                              "overrun during the burst: 0",
+                              f"input: {self.input}", f"adc core: {self.core}"]
+            if c == "rate":
+                # Mirrors clock_adc_set_rate(): the closest PLLFBDIV and
+                # post-divider pair, not a free number.
+                if not args:
+                    return False, ["usage: rate <4000..40000 ksps>"]
+                want = int(args[0])
+                if not (4000 <= want <= 40000):
+                    return False, ["usage: rate <4000..40000 ksps>"]
+                best = None
+                for p1 in range(1, 8):
+                    for p2 in range(1, p1 + 1):
+                        pp = p1 * p2
+                        fb = (want * pp + 500) // 1000
+                        if not (63 <= fb <= 200):
+                            continue
+                        got = fb * 1000 // pp
+                        if not (4000 <= got <= 40000):
+                            continue
+                        d = abs(got - want)
+                        if best is None or d < best[0]:
+                            best = (d, p1, p2, fb, got)
+                if best is None:
+                    return False, ["rate: nothing reachable"]
+                _, self.pll1, self.pll2, self.fbdiv, got = best
+                return True, [f"ksps asked for: {want}", f"ksps set: {got}",
+                              f"pll1 fbdiv: {self.fbdiv}",
+                              f"pll1 postdiv1: {self.pll1}", f"pll1 postdiv2: {self.pll2}",
+                              f"adc clock Hz: {int(adc_clock_hz(self.pll1, self.pll2, self.fbdiv))}",
+                              "the configuration arrived"]
             if c == "dump":
-                half = self.buf_size // 2
+                total = self.buf_size
                 count = int(args[0]) if args else 64
                 offset = int(args[1]) if len(args) > 1 else 0
-                if not (1 <= count <= half) or not (0 <= offset <= half - 1):
-                    return False, [f"usage: dump [count 1..{half}] [offset 0..{half - 1}]"]
-                count = min(count, half - offset)
+                if not (1 <= count <= total) or not (0 <= offset <= total - 1):
+                    return False, [f"usage: dump [count 1..{total}] [offset 0..{total - 1}]"]
+                count = min(count, total - offset)
                 v = self._samples(count)
                 lines = []
                 for i in range(0, count, 8):
@@ -1221,25 +1296,46 @@ def analyze_spectrum(f: np.ndarray, db: np.ndarray, n_harmonics: int = 5, exclud
 # One capture cycle: start, run a moment, stop, dump, status
 # ---------------------------------------------------------------------------
 def capture_cycle(target, count: int, settle_s: float = 0.02, blk: bool = False):
-    """One capture. Via 'blk' (binary, one contiguous fresh burst) when `blk`
-    is True; else the legacy 'dump' (text, last completed buffer half)."""
+    """One capture: 'snap' fills the buffer exactly once and the DMA
+    interrupt itself ends the stream, then 'dump' reads the window out.
+
+    It does NOT do start / wait / stop / dump any more, and that is not a
+    style question. At the rates this board runs, the main loop is tens of
+    milliseconds behind the DMA: the half being read has been overwritten
+    a thousand times in the meantime and the result is a mixture of old
+    and new data - 8552 halves missed between eight copies in run 11, with
+    single steps of 3126 counts in what should have been a smooth ramp. A
+    spectrum of that is meaningless and looks perfectly plausible. On top
+    of it, at a rate with overruns the 'stop' never arrives at all,
+    because the console's receive interrupt sits below the DMA channel in
+    priority and never gets the CPU.
+
+    After 'snap' the whole buffer stands still and nothing is writing it,
+    so the window is contiguous by construction. `settle_s` is kept for
+    call compatibility and is no longer used."""
+    del settle_s
     if blk:
         ok, samples, meta = target.blk(count)
         if not ok:
             raise RuntimeError("blk refused: " + meta.get("error", "unknown"))
         ok, st = target.cmd("status")
         return samples, parse_status(st) if ok else {}
-    ok, _ = target.cmd("start")
+    ok, snap_lines = target.cmd("snap", timeout=10.0)
     if not ok:
-        raise RuntimeError("start refused")
-    time.sleep(settle_s)
-    target.cmd("stop")
-    ok, lines = target.cmd(f"dump {count} 0", timeout=10.0)
+        raise RuntimeError("snap refused: " + " ".join(snap_lines))
+    ok, lines = target.cmd(f"dump {count} 0", timeout=20.0)
     if not ok:
         raise RuntimeError("dump refused: " + " ".join(lines))
     samples = parse_dump(lines)
     ok, st = target.cmd("status")
-    return samples, parse_status(st) if ok else {}
+    status = parse_status(st) if ok else {}
+    # 'snap' measures the window with Timer1, so it knows the delivered
+    # rate better than any nominal figure - carry it through.
+    for line in snap_lines:
+        k, _, v = line.partition(":")
+        if k.strip() == "ksps measured" and v.strip().isdigit():
+            status["ksps_measured"] = int(v.strip())
+    return samples, status
 
 
 def selftest() -> int:

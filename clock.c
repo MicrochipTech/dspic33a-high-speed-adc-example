@@ -407,6 +407,74 @@ uint32_t clock_adc_div(void)
     return (raw == 0u) ? 100u : (raw * 200u + 256u) / 512u;
 }
 
+uint32_t clock_pll1_fbdiv(void)       { return PLL1DIVbits.PLLFBDIV; }
+
+/* The rate this combination produces, in kSPS: PLLFBDIV / (p1*p2) MSPS,
+ * because eight ADC clocks make one conversion and the ADC clock is
+ * 8 MHz * PLLFBDIV / (p1*p2). */
+static uint32_t rate_of(uint32_t fb, uint32_t p)
+{
+    return (p != 0u) ? ((fb * 1000u) / p) : 0u;
+}
+
+uint32_t clock_adc_set_rate(uint32_t want_ksps, uint32_t *got_ksps)
+{
+    /* The reachable range, straight from the two constraints: the VCO
+     * needs PLLFBDIV 63..200, and the ADC wants 32...320 MHz in, which is
+     * the same 4000...40000 kSPS out. */
+    if ((want_ksps < 4000u) || (want_ksps > 40000u)) { return CLKDIV_RANGE; }
+
+    uint32_t best_p1 = 5u, best_p2 = 1u, best_fb = 200u, best_k = 40000u;
+    uint32_t best_d  = 0xFFFFFFFFu;
+    for (uint32_t p1 = 1u; p1 <= 7u; p1++) {
+        for (uint32_t p2 = 1u; p2 <= p1; p2++) {   /* POSTDIV1 >= POSTDIV2 */
+            const uint32_t p  = p1 * p2;
+            const uint32_t fb = ((want_ksps * p) + 500u) / 1000u;
+            if ((fb < 63u) || (fb > 200u)) { continue; }
+            const uint32_t k = rate_of(fb, p);
+            if ((k < 4000u) || (k > 40000u)) { continue; }
+            const uint32_t d = (k > want_ksps) ? (k - want_ksps) : (want_ksps - k);
+            if (d < best_d) {
+                best_d = d; best_p1 = p1; best_p2 = p2; best_fb = fb; best_k = k;
+            }
+        }
+    }
+    if (got_ksps != NULL) { *got_ksps = best_k; }
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+    /* No PLL to retune here; the search above still runs, so that the
+     * rate the caller is told is the one the board would pick. */
+    (void)best_p1; (void)best_p2; (void)best_fb;
+    return CLKDIV_OK;
+#else
+    /* One write, then the two update steps of clock_init(): PLLSWEN for
+     * the input and feedback dividers, FOUTSWEN for the output dividers.
+     * PLLPRE stays 1 - the 8 MHz input is already at the phase detector
+     * minimum and dividing it further would only shrink the VCO range. */
+    PLL1DIVbits.PLLFBDIV = best_fb;
+    PLL1DIVbits.POSTDIV1 = best_p1;
+    PLL1DIVbits.POSTDIV2 = best_p2;
+    if ((PLL1DIVbits.PLLFBDIV != best_fb) ||
+        (PLL1DIVbits.POSTDIV1 != best_p1) ||
+        (PLL1DIVbits.POSTDIV2 != best_p2)) {
+        return CLKDIV_NOT_WRITTEN;
+    }
+    PLL1CONbits.PLLSWEN = 1u;
+    uint32_t n = DIVSW_WAIT_LIMIT;
+    while (PLL1CONbits.PLLSWEN && (--n != 0u)) { }
+    if (n == 0u) { return CLKDIV_FOUTSWEN; }
+    PLL1CONbits.FOUTSWEN = 1u;
+    n = DIVSW_WAIT_LIMIT;
+    while (PLL1CONbits.FOUTSWEN && (--n != 0u)) { }
+    if (n == 0u) { return CLKDIV_FOUTSWEN; }
+    n = DIVSW_WAIT_LIMIT;
+    while (!OSCCTRLbits.PLL1RDY && (--n != 0u)) { }
+    if (n == 0u) { return CLKDIV_PLLRDY; }
+    n = DIVSW_WAIT_LIMIT;
+    while (!CLK6CONbits.CLKRDY && (--n != 0u)) { }
+    return (n != 0u) ? CLKDIV_OK : CLKDIV_CLKRDY;
+#endif
+}
+
 uint32_t clock_adc_pll_postdiv1(void) { return PLL1DIVbits.POSTDIV1; }
 uint32_t clock_adc_pll_postdiv2(void) { return PLL1DIVbits.POSTDIV2; }
 
