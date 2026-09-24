@@ -1254,3 +1254,36 @@ working tree in front of the board differs from the commit it names - the same t
 on 23.09. before run 2. Before the repeat: `git status` to see what is modified, then
 `git reset --hard` and `git pull`, and check that the banner afterwards reads the bare
 revision with no `+local changes`. Otherwise the next log is as hard to interpret as this one.
+
+## 2026-09-24, the repeat run is cancelled - the question stays open
+
+The sweep with the counters will not be run for now. It would have been the third board run
+asked of the colleague for the same question, and the user does not want to impose it - he is
+glad the earlier ones were done at all. That is his call and it is a reasonable one.
+
+**So this is the state the question rests in, and it should not be mistaken for an oversight
+later.** Whether `blocks_done` is inflated by the handler booking stale events, or the ADC
+really produces more DMA transfers than conversions, is **undecided**. The prediction written
+down for it stands unchanged, and the firmware to answer it is in place - `bursts`, `blocks`,
+`isr_entries`, `half_events`, `done_events` in every sweep row and in `status`, and the row
+selection criterion above. It needs one `test sweep` on a board carrying `553f378` or later.
+
+Runs 14 and 15 will therefore remain the newest board data for some time, and neither carries
+the counters. Any evaluation that expects a `bursts` column will find none in them; that is
+expected, not a broken log.
+
+**What this does not touch.** The two results the customer statement rests on are not affected,
+because neither depends on a counter:
+
+- The chain carries every sample, in the order it was converted. That is the DAC triangle in
+  run 14 - a known signal through the whole path, read out of a window nothing was writing.
+  It counts nothing.
+- The sample rate follows the PLL setting from 4 to 40 MSPS to better than half a per cent.
+  That is Timer1 against the configured divider across fourteen points in run 15.
+
+What stays open is the loss at a given rate, which is a refinement of the answer rather than
+the answer.
+
+**When it will be settled.** The user gets his own board around 01.10.2026 - CLAAS ordered an
+EV17P63A, which is what the `nano-board` branch exists for. On his own hardware this is one
+command and half a minute, with nobody to ask.
