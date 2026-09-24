@@ -154,6 +154,7 @@ SETTINGS_DEFAULTS = {
     "pll": {"postdiv1": 5, "postdiv2": 1},
     "buffer": {"size": 2048},
     "capture": {"count": 1024, "interval_ms": 500},
+    "sweep": {"halves": 2000, "half_len": 1024},
     "dac": {
         "1": {"on": False, "low": 0x100, "high": 0xF00, "slpdat": 8},
         "2": {"on": False, "low": 0x100, "high": 0xF00, "slpdat": 8},
@@ -1252,6 +1253,130 @@ def parse_dump(lines) -> np.ndarray:
     return out[min(vals):]
 
 
+# ---------------------------------------------------------------------------
+# The sweep log: fourteen rows that decide one question
+# ---------------------------------------------------------------------------
+# Each point of 'test sweep' ends when blocks_done reaches the configured
+# number of halves, and the 'loaded' column is the rate measured while it
+# ran. Those two give the point's duration, and the duration times the
+# SET rate gives how many bursts were really started:
+#
+#   duration      = halves * half_len / loaded_rate
+#   bursts honest = halves / 2                    (one burst = one buffer)
+#   bursts double = duration * nominal_rate / (2 * half_len)
+#
+# The two predictions part company by a factor of ten across the sweep, so
+# the measured 'bursts' column picks one of them with nothing left to read
+# into it. A flat line at halves/2 means the counters are honest and the
+# conversions really are that slow; a line climbing with the rate means the
+# handler books the same event more than once and the rate was fine.
+SWEEP_ROW_RE = re.compile(
+    r"\[sweep\]\s+postdiv\s+(\d+)/(\d+)\s+adc clock Hz\s+(\d+)\s+"
+    r"ksps nom\s+(\d+)\s+clean\s+(\d+)\s+loaded\s+(\d+)\s+"
+    r"overrun idle/process/sfr\s+(\S+)\s+late\s+(\d+)\s+missed\s+(\d+)")
+SWEEP_CNT_RE = re.compile(
+    r"\[sweep\]\s+isr\s+(\d+)\s+half\s+(\d+)\s+done\s+(\d+)\s+"
+    r"bursts\s+(\d+)\s+blocks\s+(\d+)")
+SWEEP_HALVES_RE = re.compile(r"\[sweep\] halves per point[:\s]+(\d+)")
+SWEEP_HALFLEN_RE = re.compile(r"\bhalf[:\s]+(\d+)")
+
+
+def parse_sweep_log(text: str) -> dict:
+    """Pull the sweep table out of a terminal log, whatever else is in it.
+
+    Returns {'rows': [...], 'halves': int|None, 'half_len': int|None}. A
+    counter line ('isr ... bursts ...') is attached to the row above it,
+    which is where the firmware prints it; older builds have no such line
+    and the row simply carries no measured burst count."""
+    rows, halves, half_len = [], None, None
+    for raw in text.splitlines():
+        line = raw.strip()
+        m = SWEEP_HALVES_RE.search(line)
+        if m:
+            halves = int(m.group(1))
+            continue
+        m = SWEEP_ROW_RE.search(line)
+        if m:
+            ov = m.group(7).split("/")
+            rows.append({
+                "postdiv": f"{m.group(1)}/{m.group(2)}",
+                "adc_clock_hz": int(m.group(3)),
+                "nom_ksps": int(m.group(4)),
+                "clean_ksps": int(m.group(5)),
+                "loaded_ksps": int(m.group(6)),
+                "overrun": ov, "late": int(m.group(8)), "missed": int(m.group(9)),
+                "isr": None, "half": None, "done": None,
+                "bursts": None, "blocks": None,
+            })
+            continue
+        m = SWEEP_CNT_RE.search(line)
+        if m and rows:
+            rows[-1].update(isr=int(m.group(1)), half=int(m.group(2)),
+                            done=int(m.group(3)), bursts=int(m.group(4)),
+                            blocks=int(m.group(5)))
+            continue
+        if half_len is None and not line.startswith("[sweep]"):
+            m = SWEEP_HALFLEN_RE.search(line)
+            if m:
+                half_len = int(m.group(1))
+    return {"rows": rows, "halves": halves, "half_len": half_len}
+
+
+def sweep_predict(rows, halves: int, half_len: int):
+    """Add duration and the two competing burst predictions to each row."""
+    out = []
+    for r in rows:
+        r = dict(r)
+        loaded = max(1, r["loaded_ksps"])
+        r["duration_ms"] = halves * half_len / (loaded * 1000.0) * 1000.0
+        r["bursts_honest"] = halves / 2.0
+        r["bursts_double"] = (r["duration_ms"] / 1000.0) * r["nom_ksps"] * 1000.0 \
+            / (2.0 * half_len)
+        out.append(r)
+    return out
+
+
+def sweep_verdict(rows):
+    """Which of the two predictions the measured bursts follow.
+
+    Compares the mean relative error of both models. Needs at least three
+    rows that carry a measured count, because the two models only separate
+    across a range of rates - at one point they can agree by accident."""
+    have = [r for r in rows if r.get("bursts")]
+    if len(have) < 3:
+        return ("grey", "no verdict",
+                "The log carries no 'bursts' column, or fewer than three rows of it. "
+                "That column comes from a firmware newer than the run that produced "
+                "this log.")
+    def err(key):
+        return sum(abs(r["bursts"] - r[key]) / max(1.0, r[key]) for r in have) / len(have)
+    e_honest, e_double = err("bursts_honest"), err("bursts_double")
+    lo, hi = have[0], have[-1]
+    span = hi["bursts"] / max(1.0, lo["bursts"])
+    if e_double < e_honest / 2.0:
+        return ("negative",
+                f"double-booked: bursts climb {span:.1f}x with the rate",
+                f"The measured bursts follow the rate, not the buffer count "
+                f"({lo['bursts']} at {lo['nom_ksps']/1000:.1f} MSPS up to {hi['bursts']} at "
+                f"{hi['nom_ksps']/1000:.1f}). One burst still fills one buffer, so the extra "
+                f"blocks are the handler counting the same event again - the rate was never "
+                f"the problem. Mean error: {e_double*100:.0f} % against this model, "
+                f"{e_honest*100:.0f} % against honest counting.")
+    if e_honest < e_double / 2.0:
+        return ("positive",
+                f"honest: bursts flat at {have[0]['bursts_honest']:.0f} whatever the rate",
+                f"The measured bursts stay at halves/2 across the whole sweep, so every "
+                f"counted block really was a buffer half filling up. The conversions are "
+                f"genuinely slower than the setting asks for, and the cause sits in the "
+                f"conversion chain, not in the interrupt handler. Mean error: "
+                f"{e_honest*100:.0f} % against this model, {e_double*100:.0f} % against "
+                f"double-booking.")
+    return ("warning", "neither model fits",
+            f"The measured bursts match neither prediction well ({e_honest*100:.0f} % against "
+            f"honest counting, {e_double*100:.0f} % against double-booking). Check that the "
+            f"halves per point and the samples per half below are the ones this run used.")
+
+
 def parse_status(lines) -> dict:
     """The firmware prints "key: value" pairs, and since the back-to-back
     rework the keys carry digits, spaces and a parenthesised note
@@ -1691,6 +1816,66 @@ def main_gui(args):
                 board_html = ui.html("").classes("w-full").style("max-width: 1100px; margin: 0 auto")
                 board_note_lbl = ui.label().classes("text-xs text-slate-400")
 
+            # ---- the sweep: fourteen rows that separate two explanations ----
+            with ui.card().classes("w-full rounded-xl p-3 gap-2"):
+                with ui.row().classes("w-full items-center gap-3 flex-wrap"):
+                    ui.label("sweep · are the counters honest?").classes("card-title")
+                    sw_verdict_chip = ui.chip("no log yet", color="grey-8").props("dense outline")
+                ui.label(
+                    "A sweep point ends after a fixed number of buffer halves, so its duration "
+                    "and the rate it was set to say how many bursts were really started. If the "
+                    "counters are honest that number is the same at every rate; if the handler "
+                    "books an event twice it follows the rate. Paste a 'test sweep' log, or run "
+                    "one on a connected target."
+                ).classes("text-xs text-slate-400")
+                with ui.row().classes("w-full items-end gap-3 flex-wrap"):
+                    sw_halves_in = ui.number("halves per point", value=2000, format="%d") \
+                        .props("dense outlined").classes("w-40")
+                    sw_halflen_in = ui.number("samples per half", value=1024, format="%d") \
+                        .props("dense outlined").classes("w-40")
+                    sw_parse_btn = ui.button("read the log below").props("dense outline")
+                    sw_run_btn = ui.button("run on target").props("dense outline")
+                    sw_msg_lbl = ui.label().classes("text-xs text-slate-400")
+                sw_text = ui.textarea(placeholder="paste the terminal log of a 'test sweep' here") \
+                    .props("dense outlined rows=5").classes("w-full font-mono") \
+                    .style("font-size: 11px")
+                sw_chart = ui.echart({
+                    "backgroundColor": "transparent", "animation": False,
+                    "title": {"text": "bursts started against the rate they were set to",
+                              "left": 16, "top": 8,
+                              "textStyle": {"color": "#e5e7eb", "fontSize": 14,
+                                            "fontWeight": "normal"}},
+                    "grid": {"left": 64, "right": 24, "top": 68, "bottom": 44},
+                    "legend": {"top": 34, "textStyle": {"color": DIM}},
+                    "tooltip": {"trigger": "axis", "backgroundColor": "#1f2937",
+                                "borderColor": "#374151", "textStyle": {"color": "#e5e7eb"}},
+                    "xAxis": {"type": "value", "name": "set rate MSPS", "min": 0,
+                              "nameTextStyle": {"color": DIM},
+                              "axisLine": {"lineStyle": {"color": "#374151"}},
+                              "axisLabel": {"color": DIM},
+                              "splitLine": {"lineStyle": {"color": "#1f2937"}}},
+                    "yAxis": {"type": "value", "name": "bursts", "min": 0,
+                              "nameTextStyle": {"color": DIM},
+                              "axisLine": {"lineStyle": {"color": "#374151"}},
+                              "axisLabel": {"color": DIM},
+                              "splitLine": {"lineStyle": {"color": "#1f2937"}}},
+                    "series": [],
+                }, theme="dark").classes("w-full h-80 rounded-xl")
+                sw_table = ui.table(columns=[
+                    {"name": "postdiv", "label": "postdiv", "field": "postdiv", "align": "left"},
+                    {"name": "nom", "label": "set MSPS", "field": "nom", "align": "right"},
+                    {"name": "clean", "label": "clean MSPS", "field": "clean", "align": "right"},
+                    {"name": "dur", "label": "point ms", "field": "dur", "align": "right"},
+                    {"name": "honest", "label": "bursts if honest", "field": "honest",
+                     "align": "right"},
+                    {"name": "double", "label": "bursts if double-booked", "field": "double",
+                     "align": "right"},
+                    {"name": "meas", "label": "bursts measured", "field": "meas", "align": "right"},
+                    {"name": "over", "label": "overrun idle/proc/sfr", "field": "over",
+                     "align": "right"},
+                    {"name": "missed", "label": "missed", "field": "missed", "align": "right"},
+                ], rows=[], row_key="postdiv").props("dense flat").classes("w-full")
+
     # ---- console: the CLI traffic with the target (real or fake) ----
     with ui.card().classes("w-full rounded-xl p-3 mx-4 mb-4"):
         ui.label("console").classes("card-title")
@@ -1817,6 +2002,8 @@ def main_gui(args):
             "pll": {"postdiv1": pll_values()[0], "postdiv2": pll_values()[1]},
             "buffer": {"size": int(buf_in.value or 2048)},
             "capture": {"count": int(count_sel.value), "interval_ms": int(interval_in.value or 500)},
+            "sweep": {"halves": int(sw_halves_in.value or 2000),
+                      "half_len": int(sw_halflen_in.value or 1024)},
             "dac": {str(u): {"on": bool(c["on"].value), "low": int(c["low"].value or 0),
                              "high": int(c["high"].value or 0), "slpdat": int(c["slp"].value or 0)}
                     for u, c in dac_ui.items()},
@@ -1845,6 +2032,9 @@ def main_gui(args):
         if int(cap.get("count", 1024)) in count_sel.options:
             count_sel.value = int(cap.get("count", 1024))
         interval_in.value = int(cap.get("interval_ms", 500))
+        swc = cfg.get("sweep", {})
+        sw_halves_in.value = int(swc.get("halves", 2000))
+        sw_halflen_in.value = int(swc.get("half_len", 1024))
         for unit, c in dac_ui.items():
             d = cfg.get("dac", {}).get(str(unit), {})
             c["on"].value = bool(d.get("on", False))
@@ -2021,6 +2211,76 @@ def main_gui(args):
         c = chips[name]
         c.text = f"{name} {value}"
         c.props(f'color={"positive" if value == 0 else "negative"}')
+
+    # ---- the sweep tile ----
+    def sweep_show(text):
+        """Parse a log, fill table and chart, and say which model it backs."""
+        got = parse_sweep_log(text or "")
+        if not got["rows"]:
+            sw_msg_lbl.text = "no '[sweep] postdiv ...' line in that text"
+            sw_table.rows = []
+            sw_chart.options["series"] = []
+            sw_chart.update()
+            sw_verdict_chip.text, = ("no log yet",)
+            sw_verdict_chip.props("color=grey-8")
+            return
+        # The log's own header wins over the fields: it is what the run used.
+        if got["halves"]:
+            sw_halves_in.value = got["halves"]
+        if got["half_len"]:
+            sw_halflen_in.value = got["half_len"]
+        halves = int(sw_halves_in.value or 2000)
+        half_len = int(sw_halflen_in.value or 1024)
+        rows = sweep_predict(got["rows"], halves, half_len)
+        sw_table.rows = [{
+            "postdiv": r["postdiv"],
+            "nom": f"{r['nom_ksps']/1000:.2f}",
+            "clean": f"{r['clean_ksps']/1000:.2f}",
+            "dur": f"{r['duration_ms']:.1f}",
+            "honest": f"{r['bursts_honest']:.0f}",
+            "double": f"{r['bursts_double']:.0f}",
+            "meas": "–" if r["bursts"] is None else str(r["bursts"]),
+            "over": "/".join(r["overrun"]),
+            "missed": str(r["missed"]),
+        } for r in rows]
+        xs = [r["nom_ksps"] / 1000.0 for r in rows]
+        def line(name, key, colour, dashed):
+            return {"type": "line", "name": name, "showSymbol": True, "symbolSize": 6,
+                    "data": [[x, round(r[key], 1)] for x, r in zip(xs, rows)],
+                    "lineStyle": {"width": 1.5, "color": colour,
+                                  "type": "dashed" if dashed else "solid"},
+                    "itemStyle": {"color": colour}}
+        series = [line("if honest", "bursts_honest", ACCENT, True),
+                  line("if double-booked", "bursts_double", ACCENT2, True)]
+        meas = [[x, r["bursts"]] for x, r in zip(xs, rows) if r["bursts"] is not None]
+        if meas:
+            series.append({"type": "line", "name": "measured", "showSymbol": True,
+                           "symbolSize": 9, "data": meas,
+                           "lineStyle": {"width": 2.5, "color": "#f59e0b"},
+                           "itemStyle": {"color": "#f59e0b"}})
+        sw_chart.options["series"] = series
+        sw_chart.update()
+        colour, headline, detail = sweep_verdict(rows)
+        sw_verdict_chip.text = headline
+        sw_verdict_chip.props(f"color={colour}")
+        sw_msg_lbl.text = f"{len(rows)} rows · {detail}"
+
+    sw_parse_btn.on_click(lambda: sweep_show(sw_text.value))
+
+    async def sweep_run():
+        t = state["target"]
+        if not t:
+            sw_msg_lbl.text = "not connected"
+            return
+        sw_msg_lbl.text = "running 'test sweep' on the target, this takes about a minute ..."
+        sw_run_btn.disable()
+        try:
+            _ok, lines = await run.io_bound(t.cmd, "test sweep", 240.0)
+        finally:
+            sw_run_btn.enable()
+        sw_text.value = "\n".join(lines)
+        sweep_show(sw_text.value)
+    sw_run_btn.on_click(sweep_run)
 
     # ---- connection ----
     def do_connect():
