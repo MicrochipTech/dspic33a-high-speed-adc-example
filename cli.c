@@ -1179,12 +1179,85 @@ static bool test_dac(uint32_t halves)
 #define MATRIX_POINTS   3u
 static const uint32_t matrix_ksps[MATRIX_POINTS] = { 4000u, 8000u, 20000u };
 #define MATRIX_TOL_PCT  10u
+/* The acceptance test's two points and its length. The slow one is where
+ * a variant has the best chance; 8000 is the rate the example is meant to
+ * be shown at. 2000 halves is half a second at 4 MSPS - long enough that
+ * a stream which only looks clean for a moment does not pass. */
+#define MATRIX_STREAM_SLOW    4000u
+#define MATRIX_STREAM_TARGET  8000u
+#define MATRIX_STREAM_HALVES  2000u
 
 struct matrix_result {
     bool converts;
     bool rate_follows;
-    bool checked;
+    bool streams;        /* THE question: a lasting stream, CPU keeping up */
+    bool checked;        /* data intact, from the DAC triangle            */
+    uint32_t stream_ksps;
 };
+
+/* ------------------------------------------------------------------ *
+ * The acceptance test of the example, and until now it was missing
+ *
+ * What this project is supposed to demonstrate is one sentence: at a
+ * rate you choose, samples stream into RAM through the DMA and the CPU
+ * processes them on the free half. The matrix measured around that -
+ * does it convert, does the rate follow, are the data intact - and never
+ * asked the sentence itself. So a variant could pass everything and
+ * still be useless for the example.
+ *
+ * This is the sentence as a test: run the stream for `halves` halves
+ * with capture_service() called the whole time, exactly as the main loop
+ * does, and require all three counters to stay at zero. Overrun means
+ * samples were lost. Late means the handler was more than one half
+ * behind. Missed means the CPU never saw a half - which is precisely the
+ * failure the example must not have, because processing on the free half
+ * is the entire point.
+ * ------------------------------------------------------------------ */
+static bool matrix_stream(capture_variant_t v, uint32_t want, uint32_t halves,
+                          uint32_t *got_ksps)
+{
+    if (got_ksps != NULL) { *got_ksps = 0u; }
+    if (!capture_select_variant(v, want)) { return false; }
+
+    (void)capture_settle();
+    counters_clear();
+    const uint32_t target = blocks_done + halves;
+    const uint32_t t0     = timebase_ticks();
+    capture_start();
+    uint32_t guard = SWEEP_WAIT_LIMIT;
+    while (blocks_done < target) {
+        (void)capture_service();          /* the main loop's own work    */
+        if (capture_overrun_aborted()) { break; }
+        if (--guard == 0u) { break; }
+    }
+    const uint32_t ticks = timebase_ticks() - t0;
+    const uint32_t ov = dma_overrun, la = late_service, mi = proc_missed;
+    const uint32_t done = blocks_done;
+    (void)capture_settle();
+
+    const uint32_t ksps = timebase_ksps(halves * capture_half_len(), ticks);
+    if (got_ksps != NULL) { *got_ksps = ksps; }
+
+    char line[176];
+    char *q = copy_str(line, "[matrix]   stream at ");  q = u32_to_str(q, want);
+    q = copy_str(q, " ksps: measured ");                q = u32_to_str(q, ksps);
+    q = copy_str(q, "  overrun ");                      q = u32_to_str(q, ov);
+    q = copy_str(q, "  late ");                         q = u32_to_str(q, la);
+    q = copy_str(q, "  missed ");                       q = u32_to_str(q, mi);
+    copy_str(q, "\r\n");
+    console_puts(line);
+
+    if (done < target) {
+        console_puts(capture_overrun_aborted()
+                     ? "[matrix]     stopped by the overrun brake - unusable\r\n"
+                     : "[matrix]     the stream did not deliver - unusable\r\n");
+        return false;
+    }
+    const bool clean = (ov == 0u) && (la == 0u) && (mi == 0u);
+    console_puts(clean ? "[matrix]     CLEAN - nothing lost and the CPU kept up\r\n"
+                       : "[matrix]     not clean - see the three counters\r\n");
+    return clean;
+}
 
 /* One rate point: select, run one clean burst, report. */
 static bool matrix_point(capture_variant_t v, uint32_t want, bool show_regs)
@@ -1247,7 +1320,9 @@ static void cmd_matrix(void)
     for (uint32_t v = 0; v < (uint32_t)CAP_VAR_COUNT; v++) {
         res[v].converts = false;
         res[v].rate_follows = false;
+        res[v].streams = false;
         res[v].checked = false;
+        res[v].stream_ksps = 0u;
 
         console_puts("\r\n[matrix] ");
         console_puts(capture_variant_name((capture_variant_t)v));
@@ -1264,11 +1339,34 @@ static void cmd_matrix(void)
                      : "[matrix]   VERDICT: not usable as a rate control\r\n");
     }
 
-    /* The data check, only for what survived - one DAC capture each, so
-     * the log stays readable. */
-    console_puts("\r\n[matrix] data check on the variants whose rate followed\r\n");
+    /* ---- the acceptance test: does it stream, with the CPU keeping up?
+     * Run for every variant that converted at all, not only for those
+     * whose rate followed - a variant could stream cleanly at a rate
+     * that is not the one asked for, and that is worth knowing. Two
+     * points: the slowest, where it is most likely to work, and 8 MSPS. */
+    console_puts("\r\n[matrix] THE ACCEPTANCE TEST: a lasting stream with the CPU processing\r\n"
+                 "[matrix] overrun, late and missed must all be zero - missed above zero means\r\n"
+                 "[matrix] the CPU never saw a half, which is the whole point of the example\r\n");
     for (uint32_t v = 0; v < (uint32_t)CAP_VAR_COUNT; v++) {
-        if (!res[v].rate_follows) { continue; }
+        if (!res[v].converts) { continue; }
+        console_puts("\r\n[matrix] ");
+        console_puts(capture_variant_name((capture_variant_t)v));
+        console_puts("\r\n");
+        uint32_t k = 0u;
+        const bool slow = matrix_stream((capture_variant_t)v, MATRIX_STREAM_SLOW,
+                                        MATRIX_STREAM_HALVES, &k);
+        uint32_t k8 = 0u;
+        const bool at8 = matrix_stream((capture_variant_t)v, MATRIX_STREAM_TARGET,
+                                       MATRIX_STREAM_HALVES, &k8);
+        res[v].streams     = slow || at8;
+        res[v].stream_ksps = at8 ? k8 : k;
+    }
+
+    /* The data check, only for what streams - a clean stream that
+     * carries the wrong samples would be the worst outcome of all. */
+    console_puts("\r\n[matrix] data check on the variants that streamed cleanly\r\n");
+    for (uint32_t v = 0; v < (uint32_t)CAP_VAR_COUNT; v++) {
+        if (!res[v].streams) { continue; }
         console_puts("[matrix] ");
         console_puts(capture_variant_name((capture_variant_t)v));
         console_puts("\r\n");
@@ -1277,15 +1375,30 @@ static void cmd_matrix(void)
         }
     }
 
-    console_puts("\r\n[matrix] SUMMARY\r\n");
+    console_puts("\r\n[matrix] SUMMARY - the last column is the one the example lives on\r\n");
+    uint32_t winner = (uint32_t)CAP_VAR_COUNT;
     for (uint32_t v = 0; v < (uint32_t)CAP_VAR_COUNT; v++) {
-        char line[160];
+        char line[176];
         char *q = copy_str(line, "[matrix]   ");
         q = copy_str(q, res[v].rate_follows ? "RATE OK  " : "         ");
         q = copy_str(q, res[v].checked      ? "DATA OK  " : "         ");
+        q = copy_str(q, res[v].streams      ? "STREAMS  " : "         ");
         q = copy_str(q, capture_variant_name((capture_variant_t)v));
         copy_str(q, "\r\n");
         console_puts(line);
+        if (res[v].streams && res[v].checked && (winner == (uint32_t)CAP_VAR_COUNT)) {
+            winner = v;
+        }
+    }
+    if (winner != (uint32_t)CAP_VAR_COUNT) {
+        console_puts("[matrix] USE THIS ONE: ");
+        console_puts(capture_variant_name((capture_variant_t)winner));
+        console_puts("\r\n[matrix]   it streams without losing a sample, the CPU keeps up,\r\n"
+                     "[matrix]   and the data arrive complete and in order\r\n");
+    } else {
+        console_puts("[matrix] NONE of the variants streams cleanly with the CPU keeping up.\r\n"
+                     "[matrix]   That is the example's central claim, so until one does, the\r\n"
+                     "[matrix]   example does not demonstrate what it says it demonstrates.\r\n");
     }
     /* Back to a known state: the boot setting. */
     (void)capture_select_variant(CAP_VAR_B2B, capture_nominal_ksps(0u));
