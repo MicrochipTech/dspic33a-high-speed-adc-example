@@ -1577,8 +1577,29 @@ def main_gui(args):
             with ui.row().classes("w-full items-center gap-2"):
                 cyc_lbl = ui.label("no capture yet").classes("text-slate-300 mono")
                 ui.space()
-                chips = {k: ui.chip(f"{k} –", color="grey-8").props("dense outline")
-                         for k in ("overrun", "late", "missed", "addr_err", "bus_err")}
+                COUNTER_TIPS = {
+                    "overrun": "The DMA was triggered again while the previous transfer was still "
+                               "running, so a result was lost. Read it as a LOWER BOUND, not a "
+                               "count of lost samples: OVERRUN is one bit in DMA0STAT and the "
+                               "handler counts one per entry that found it set, so three losses "
+                               "between two entries still move it by one.",
+                    "late": "Both HALF and DONE were pending at the same entry: the handler "
+                            "arrived more than a whole half late and the first half had already "
+                            "been overwritten.",
+                    "missed": "The main loop did not fetch a half before the DMA came round to it "
+                              "again. It says the CPU is behind, not that the DMA lost anything.",
+                    "addr_err": "The DMA tried to write outside the address window it was given, "
+                                "which is exactly the sample buffer. The hardware refuses the "
+                                "transfer and switches the channel off; anything but 0 is a bug "
+                                "in the set-up, not a rate problem.",
+                    "bus_err": "A bus error on the DMA's write. With RETEN left at 0 (an erratum) "
+                               "this effectively counts write errors only.",
+                }
+                chips = {}
+                for _k in ("overrun", "late", "missed", "addr_err", "bus_err"):
+                    chips[_k] = ui.chip(f"{_k} –", color="grey-8").props("dense outline")
+                    with chips[_k]:
+                        ui.tooltip(COUNTER_TIPS[_k]).style("font-size: 14px; max-width: 24rem;")
                 # A burst is CNT = 2 * half_len conversions, one whole
                 # buffer: HALF at the middle, DONE at the end. So blocks
                 # must be exactly twice the bursts - arithmetic, not an
@@ -1591,8 +1612,11 @@ def main_gui(args):
                                "one buffer, so it raises HALF once and DONE once: blocks must be "
                                "exactly 2 x bursts. More than that means an event was counted "
                                "again - the interrupt saw a flag that had not cleared, and that "
-                               "grows with the overrun rate while a clean burst stays at 1:2. "
-                               "Grey while the firmware does not report 'bursts' in status.")\
+                               "grows with the overrun rate. ONLY MEANINGFUL IN A FREE-RUNNING "
+                               "STREAM: a one-shot clears the counters and waits for exactly two "
+                               "blocks, so 2/1 there is arithmetic, not evidence - the chip stays "
+                               "grey for it. Grey too while the firmware does not report "
+                               "'bursts' in status.")\
                         .style("font-size: 14px; max-width: 24rem;")
                 with rate_chip:
                     ui.tooltip("What the burst really delivered, timed with Timer1 by 'snap', "
@@ -2151,11 +2175,16 @@ def main_gui(args):
                     set_chip(k, status[k])
             blocks = status.get("blocks")
             bursts = status.get("bursts", status.get("burst_starts"))
-            if blocks is not None and bursts:
+            if blocks is not None and bursts and bursts > 1:
                 clean = (blocks == 2 * bursts)
                 ratio_chip.text = (f"blocks/bursts {blocks}/{bursts}"
                                    + ("" if clean else f"  NOT 1:2 ({blocks / (2 * bursts):.1f}x)"))
                 ratio_chip.props(f'color={"positive" if clean else "negative"}')
+            elif blocks is not None and bursts:
+                # One burst, two blocks - what a one-shot produces by
+                # construction, whether or not the fault exists.
+                ratio_chip.text = f"blocks/bursts {blocks}/{bursts} (one-shot, says nothing)"
+                ratio_chip.props("color=grey-8")
             else:
                 ratio_chip.text = "blocks/bursts –"
                 ratio_chip.props("color=grey-8")
