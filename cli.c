@@ -1086,7 +1086,12 @@ static bool test_sweep(uint32_t halves)
 static bool test_dac(uint32_t halves)
 {
     console_puts("[test] dac: the DAC2 triangle through ADC, DMA and the ping-pong buffer\r\n");
-    if (!dac2_running() && !dac2_triangle_start(0x100u, 0xF00u, 8u)) {
+    /* SLPDAT is the step per DAC clock, so a LARGER value is a FASTER
+     * triangle. 8 leaves the signal almost standing still inside one
+     * captured buffer - run 12 measured a swing of 72 counts and the test
+     * could say nothing. 64 puts a full period in the window, which is
+     * what run 13 then showed as a triangle. */
+    if (!dac2_running() && !dac2_triangle_start(0x100u, 0xF00u, 64u)) {
         console_puts("[test]   CLKGEN7 did not come up - DAC2 is off\r\n[test] dac: FAIL\r\n");
         return false;
     }

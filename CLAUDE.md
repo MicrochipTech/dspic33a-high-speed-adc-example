@@ -149,21 +149,33 @@ halfway between its neighbours proves `FRACDIV` works, one that snaps to a neigh
 proves it is ignored. 500 = 8 MSPS is in the ladder because that is the rate the
 customer's application needs.
 
+## What the board has settled (24.09.2026, runs 8 to 13)
+
+- **The chain works.** Run 13 captured one buffer with the on-chip DAC's triangle on the
+  input and the triangle is in it: clean rise, one turning point, clean fall, largest step
+  113 counts out of a swing of 1440, no jump, no gap. Conversions are real, complete and
+  in order, across the half boundary and the burst restart.
+- **The rate follows the PLL.** One clean burst delivered 3990 kSPS against 4081 nominal.
+- **Every rate measured under load in runs 4 to 11 is wrong** by about a factor of ten -
+  it was taken by a CPU drowning in the overrun interrupt. The sweep measures a clean
+  single burst now and prints both columns.
+- **The console works.** `rx = 0` in runs 6 and 7 was the receive interrupt starving
+  behind the DMA interrupt, not the wiring.
+- **The CLKGEN6 divider does not reach the converter**, with either switching sequence,
+  and the ADC keeps converting with the generator switched off (`test clkoff`).
+
 ## Open questions (as of 24.09.2026)
 
-1. **Does a divider change reach the hardware at all?** Run 7 asked for ratio 8 and
-   measured the unpaced rate; the return value that would have said whether the switch
-   happened was discarded. `test clock` now answers it without measuring anything.
-2. **Does `FRACDIV` divide, or only `INTDIV`?** Ratio 1 is `INTDIV 0, FRACDIV 256` by the
-   formula, and that ran at full rate - which is also what an ignored `FRACDIV` would look
-   like. The fractional rows of the sweep settle it.
-3. ~~Why is `rx` 0?~~ **Answered in run 8:** the bytes do reach RD1. `help` and `test all`
-   worked from the idle boot, so `rx = 0` in runs 6 and 7 was the receive interrupt
-   (priority 1) starved behind the DMA interrupt (priority 4). Nothing to fix in the
-   wiring; the fix is not to measure at a rate that floods the CPU.
-4. **What stops the DAC test?** Run 7 stopped silently between the last header line and
-   the first result line, twice, with two different terminals. Every wait on that path is
-   bounded, so it is not an ordinary wait. `dactest.c` now traces and flushes each step.
+1. **Up to what rate does the chain stay lossless?** The sweep table from a board is the
+   one thing still missing, and it is the customer's question: `postdiv 5/5` is 8 MSPS.
+2. **Why does the ADC ignore CLKGEN6?** Table 16-1 names it as the clock source, its
+   divider has no effect in either switching sequence, and the converter keeps running
+   with the generator off. This is a question for the product line; the register evidence
+   is complete in the log.
+3. **`dac2_period_ns()` is wrong.** The computed triangle period is about eight times off
+   what a capture shows, and `DACLOW` is not reproduced - the upper end matches `DACDAT`
+   exactly, the lower end does not. Nothing is judged against it any more, but it should
+   be corrected.
 5. At 40 MSPS about 4 % of the samples are lost as OVERRUN, and every overrun raises the
    DMA interrupt - 1.6 million per second, one every 625 ns, against an interrupt entry
    that costs about as much. That is why runs 7 and 8 stopped dead with the console gone:
