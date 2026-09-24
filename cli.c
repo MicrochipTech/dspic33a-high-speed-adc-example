@@ -579,7 +579,7 @@ CMD_DEFINE(dac, "dac", cmd_dac_fn, "dac <on [slpdat]|off> - DAC2 triangle on RA8
  * the test on core 3 against RA8, which belongs to core 5, and measured
  * an open pin. The input in use is restored afterwards, so a "dactest"
  * from the console does not silently leave the measurement elsewhere. */
-static uint32_t run_dactest(uint32_t halves)
+static uint32_t run_dactest(uint32_t bursts)
 {
     const uint8_t pinsel_before = capture_pinsel();
     const uint8_t samc_before   = capture_samc();
@@ -595,7 +595,7 @@ static uint32_t run_dactest(uint32_t halves)
         uref_off();
         return 1u;
     }
-    const uint32_t rc = dactest_run(halves);
+    const uint32_t rc = dactest_run(bursts);
     (void)capture_set_input(pinsel_before, samc_before);
     uref_off();
     return rc;
@@ -1371,7 +1371,15 @@ static void cmd_matrix(void)
         console_puts(capture_variant_name((capture_variant_t)v));
         console_puts("\r\n");
         if (capture_select_variant((capture_variant_t)v, 8000u)) {
-            res[v].checked = (run_dactest(0u) == 0u);
+            /* Once as an isolated burst and once as the hundredth of a
+             * stream. The triangle's period cannot change, so period in
+             * samples divided by rate must agree; if it does not, the
+             * samples in the stream are repeats. */
+            console_puts("[matrix]   isolated burst:\r\n");
+            const bool one = (run_dactest(1u) == 0u);
+            console_puts("[matrix]   the 100th burst of a stream:\r\n");
+            const bool hundred = (run_dactest(100u) == 0u);
+            res[v].checked = one && hundred;
         }
     }
 
@@ -1406,6 +1414,61 @@ static void cmd_matrix(void)
     console_puts("[matrix] done - back at the boot setting\r\n");
 }
 
+/* ------------------------------------------------------------------ *
+ * "test bursts" - does the rate depend on how many bursts run?
+ *
+ * The single measurement that names the contradiction of run 16. One
+ * burst at a given setting delivers the rate that was asked for; a
+ * thousand bursts at the same setting delivered about 40 MSPS whatever
+ * the setting was. Nothing in between had ever been measured, so the two
+ * observations sat next to each other with no bridge.
+ *
+ * capture_oneshot_n() builds the bridge: it restarts each burst from the
+ * DMA interrupt exactly as continuous streaming does, and stops after
+ * the count given. Reading the rate at one, ten and a hundred bursts at
+ * the same clock setting says which of the two pictures a burst in a
+ * stream belongs to - and if the rate climbs with the count, it says how
+ * quickly.
+ * ------------------------------------------------------------------ */
+static void test_bursts(void)
+{
+    static const uint32_t counts[] = { 1u, 10u, 100u };
+    static const uint32_t rates[]  = { 4000u, 8000u, 20000u };
+
+    console_puts("[test] bursts: the same setting, measured over 1, 10 and 100 bursts\r\n"
+                 "[test]   each burst is restarted from the DMA interrupt, as streaming does\r\n"
+                 "[test]   a rate that climbs with the count is the bridge between run 16's\r\n"
+                 "[test]   single burst (the setting) and its thousand (40 MSPS regardless)\r\n");
+
+    for (uint32_t r = 0; r < (sizeof rates / sizeof rates[0]); r++) {
+        if (!capture_select_variant(CAP_VAR_B2B, rates[r])) { continue; }
+        const uint32_t nominal = capture_variant_ksps();
+        const uint32_t n       = 2u * capture_half_len();
+        console_kv("[test]   nominal ksps", nominal);
+        for (uint32_t c = 0; c < (sizeof counts / sizeof counts[0]); c++) {
+            const uint32_t rc = capture_oneshot_n(counts[c]);
+            const uint32_t tk = capture_oneshot_ticks();
+            (void)capture_settle();
+            char line[144];
+            char *q = copy_str(line, "[test]     bursts ");  q = u32_to_str(q, counts[c]);
+            q = copy_str(q, ": ");
+            if (rc != 0u) {
+                q = copy_str(q, "no data");
+            } else {
+                q = copy_str(q, "ksps ");
+                q = u32_to_str(q, timebase_ksps(counts[c] * n, tk));
+                q = copy_str(q, "  overrun ");
+                q = u32_to_str(q, dma_overrun);
+            }
+            copy_str(q, "\r\n");
+            console_puts(line);
+        }
+    }
+    console_puts("[test] bursts: done - equal rates mean a burst in a stream is an ordinary\r\n"
+                 "[test]   burst; a rising rate means it is not, and the single-burst figures\r\n"
+                 "[test]   measured so far describe a start-up rather than the stream\r\n");
+}
+
 static void test_list(void)
 {
     put_line("test all   [halves]  - self, clock, sweep, dac in that order");
@@ -1413,6 +1476,7 @@ static void test_list(void)
     put_line("test clock           - switch every CLKGEN6 ratio and read it back");
     put_line("test clkoff          - switch CLKGEN6 off: does the ADC still convert?");
     put_line("test matrix          - every way to set the rate, tried and measured");
+    put_line("test bursts          - does the rate depend on how many bursts run?");
     put_line("test rate  [halves]  - delivered rate at the ratio set now");
     put_line("test sweep [halves]  - the rate ladder, slowest first, with the counters");
     put_line("test dac   [halves]  - the DAC2 triangle: is everything there, in order?");
@@ -1424,9 +1488,9 @@ static void cmd_test_fn(int argc, char **argv)
 {
     uint32_t halves = 0u;                  /* 0 = the part's own default */
     if (argc == 1) { test_list(); return; }
-    if (argc > 3) { usage("test <all|self|clock|clkoff|matrix|rate|sweep|dac> [halves]"); return; }
+    if (argc > 3) { usage("test <all|self|clock|clkoff|bursts|matrix|rate|sweep|dac> [n]"); return; }
     if ((argc == 3) && !arg_u32(argv[2], 1u, 100000u, &halves)) {
-        usage("test <all|self|clock|clkoff|matrix|rate|sweep|dac> [halves]");
+        usage("test <all|self|clock|clkoff|bursts|matrix|rate|sweep|dac> [n]");
         return;
     }
     const char *what = argv[1];
@@ -1439,6 +1503,8 @@ static void cmd_test_fn(int argc, char **argv)
         if (!test_clkoff()) { cmd_parser_fail(); }
     } else if (strcmp(what, "matrix") == 0) {
         cmd_matrix();
+    } else if (strcmp(what, "bursts") == 0) {
+        test_bursts();
     } else if (strcmp(what, "rate") == 0) {
         if (!test_rate((halves != 0u) ? halves : TEST_RATE_HALVES)) { cmd_parser_fail(); }
     } else if (strcmp(what, "sweep") == 0) {
@@ -1458,8 +1524,14 @@ static void cmd_test_fn(int argc, char **argv)
         }
         const bool clock_ok = test_clock();
         (void)test_clkoff();
+        /* The bridge between one burst and a thousand, and then every
+         * variant with the acceptance test behind it. This is the run
+         * that is meant to answer everything at once, because a board
+         * run costs a person. */
+        test_bursts();
         (void)test_sweep((halves != 0u) ? halves : TEST_SWEEP_HALVES);
-        const bool dac_ok = test_dac(TEST_DAC_HALVES);
+        cmd_matrix();
+        const bool dac_ok = test_dac(1u);
         console_puts("\r\n[test] ALL DONE\r\n");
         console_puts(self_ok  ? "[test]   self:  PASS\r\n" : "[test]   self:  FAIL\r\n");
         console_puts(clock_ok ? "[test]   clock: PASS\r\n" : "[test]   clock: FAIL\r\n");
@@ -1471,7 +1543,7 @@ static void cmd_test_fn(int argc, char **argv)
         cmd_parser_fail();
     }
 }
-CMD_DEFINE(test, "test", cmd_test_fn, "test [all|self|clock|clkoff|matrix|rate|sweep|dac] [halves]");
+CMD_DEFINE(test, "test", cmd_test_fn, "test [all|self|clock|clkoff|bursts|matrix|rate|sweep|dac] [n]");
 
 static void cmd_reset_fn(int argc, char **argv)
 {
