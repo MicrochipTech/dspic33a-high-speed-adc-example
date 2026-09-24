@@ -144,6 +144,16 @@ volatile int32_t  proc_result   = 0;   /* output of process_buffer()       */
 volatile uint32_t isr_entries   = 0;   /* calls of dma0_event()            */
 volatile uint32_t half_events   = 0;   /* HALF seen set                    */
 volatile uint32_t done_events   = 0;   /* DONE seen set                    */
+/* The one that decides it. One burst is CNT = 2 * half_len conversions,
+ * which is exactly one buffer: HALF in the middle, DONE at the end. So in
+ * back-to-back streaming blocks_done MUST be exactly twice the number of
+ * bursts started - that is arithmetic, not an assumption about the
+ * silicon. If it is ten times that, the handler is booking the same event
+ * over and over and the fault is ours. If it holds while the rate still
+ * races, the transfers really are happening and it is the trigger defect
+ * Microchip acknowledges. Note that half_events + done_events == blocks
+ * by construction and therefore proves nothing on its own. */
+volatile uint32_t burst_starts  = 0;   /* calls of start_burst()           */
 
 /* Note 1: errata DS80001162E item 2 - BRERR is only set when RETEN = 1,
  * and RETEN also raises a trap. This example leaves RETEN = 0, so
@@ -229,6 +239,7 @@ static uint32_t         seen_blocks    = 0;
 /* A burst is in flight from here until the DMA DONE interrupt. */
 static void start_burst(void)
 {
+    burst_starts++;
     burst_active = true;
     {
         adc_start_burst();
@@ -604,7 +615,7 @@ void counters_clear(void)
 {
     overrun_abort = false;            /* re-arm the brake               */
     overrun_run   = 0;
-    isr_entries = 0; half_events = 0; done_events = 0;
+    isr_entries = 0; half_events = 0; done_events = 0; burst_starts = 0;
     dma_overrun = 0; dma_addr_err = 0; dma_bus_err = 0;
     late_service = 0; proc_missed = 0;
     /* Halves completed up to now are not "missed" from here on. Without

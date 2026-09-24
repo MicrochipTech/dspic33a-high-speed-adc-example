@@ -854,7 +854,9 @@ static bool sweep_row(struct pll_step st, uint32_t halves)
     char *q = copy_str(c2, "[sweep]   isr ");  q = u32_to_str(q, isr_entries);
     q = copy_str(q, "  half ");                q = u32_to_str(q, half_events);
     q = copy_str(q, "  done ");                q = u32_to_str(q, done_events);
-    q = copy_str(q, "  blocks ");              q = u32_to_str(q, blocks_done);
+    q = copy_str(q, "  bursts ");             q = u32_to_str(q, burst_starts);
+    q = copy_str(q, "  blocks ");             q = u32_to_str(q, blocks_done);
+    q = copy_str(q, " (must be 2x bursts)");
     copy_str(q, "\r\n");
     console_puts(c2);
     return ok[SWEEP_PROCESS] && (ov[SWEEP_PROCESS] == 0u) && (missed == 0u) && (late == 0u);

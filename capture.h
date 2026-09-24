@@ -37,6 +37,8 @@ extern volatile int32_t  proc_result;    /* output of process_buffer()     */
 extern volatile uint32_t isr_entries;    /* calls of dma0_event()          */
 extern volatile uint32_t half_events;    /* HALF seen set                  */
 extern volatile uint32_t done_events;    /* DONE seen set                  */
+extern volatile uint32_t burst_starts;   /* start_burst() calls - blocks_done
+                                          * must be exactly twice this      */
 
 /* DMA channel 0 from the ADC result into buf[], HALF/DONE interrupts
  * enabled. Nothing transfers until capture_start(). */
