@@ -879,6 +879,13 @@ void console_sweep(uint32_t halves, bool choose)
     const bool was_running = capture_running();
 
     console_kv("[sweep] halves per point", halves);
+    /* Without this the table cannot be read afterwards. Every rate and
+     * every duration derived from a sweep row is (halves x samples per
+     * half) divided by a rate, so an evaluation that assumes 1024 while
+     * the run used something else is wrong without looking wrong. "buf"
+     * can change it at run time, so it has to be in the log. */
+    console_kv("[sweep] samples per half", capture_half_len());
+    console_kv("[sweep] samples per point", halves * capture_half_len());
     console_puts("[sweep] back-to-back conversions; the rate is the ADC clock, PLL1 output dividers\r\n"
                  "[sweep] slowest rate first: the first row is the one the DMA should manage,\r\n"
                  "[sweep] so a failure there is the chain, not the rate\r\n"

@@ -1209,6 +1209,21 @@ postdiv   nominal   point takes   bursts if the handler books stale events   if 
 One hypothesis predicts a column that climbs from 100 to 952 in step with the rate; the other
 predicts 1000 fourteen times. There is nothing to interpret.
 
+**Which rows to trust when it comes in.** The two models separate far better at the bottom of
+the ladder than at the top: 100 against 1000 at 4 MSPS is a factor of ten, 952 against 1000 at
+40 MSPS is five per cent and within the noise of a single measurement. The slow rows decide
+the question almost on their own - and the slowest row is exactly the one that behaves oddly
+(`missed 19`, `process` overrun nearly double `idle`). So the verdict should rest on rows two
+to five, where the separation is still a factor of six to eight and no start-up effect is in
+play, and row one should be read separately. (Point made by the GUI session while building the
+evaluation into the tile.)
+
+**And the prediction rests on a number that was not in the output.** Every duration and every
+rate derived from a sweep row is (halves x samples per half) divided by a rate, so the
+evaluation above silently assumed 1024 samples per half - which `buf` can change at run time.
+An evaluation made against the wrong length would be wrong without looking wrong. Fixed: the
+sweep header now prints `samples per half` and `samples per point`.
+
 **Second: the overrun counts fall as the rate rises.** 70702 at 4 MSPS down to 48096 at
 40 MSPS - a third fewer at ten times the conversion rate. Read as a loss fraction that is
 absurd. Read as what it is - the number of handler entries that found the flag set - it fits:
