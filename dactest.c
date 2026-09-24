@@ -1,19 +1,46 @@
 /*
  * dactest.c - the DAC2 triangle seen through the ADC/DMA chain (dactest.h)
  *
- * The signal is known exactly (dac.c), so the judgement can be hard:
- *   min, max   within DACTEST_TOL of DACLOW / DACDAT (DAC and ADC are both
- *              12-bit and VDD-referred; DAC gain error up to 35 LSb,
- *              DA06, plus ADC errors - 150 LSb covers it)
- *   frequency  slope reversals / 2 over the captured time, against the
- *              period from the DAC settings, 10 %
- *   jumps      a step between two consecutive samples larger than four
- *              expected steps plus 64: a lost sample (DMA overrun) or a
- *              glitch. The expected step is 2 * (DACDAT - DACLOW) * f /
- *              Fs, from the nominal rate (40 MSPS assumed for B2B).
- * Each half is copied out of the DMA buffer right after it completes
- * (2 KB, a few microseconds) so that the evaluation never races the DMA
- * filling it again: at 40 MSPS a half lives 25.6 us.
+ * WHAT THIS TEST IS FOR, since 24.09.2026 (run 10)
+ *
+ * It is no longer a nice-to-have. It is the only test in this project
+ * that can say whether real conversions reach the buffer at all.
+ *
+ * Everything else measured so far is compatible with a DMA that copies a
+ * stale result register over and over: the self-test samples a DC
+ * reference, so a frozen value gives exactly the right mean; the counters
+ * count DMA events, not conversions; and the delivered "rate" followed
+ * neither the CLKGEN6 divider nor the PLL1 output dividers, came out
+ * ABOVE the datasheet's 40 MSPS, and did not stop when CLKGEN6 was
+ * switched off (docs/HARDWARE-LOG.md runs 8 to 10). A changing, known
+ * signal is the only thing that can tell the two apart.
+ *
+ * HOW IT WORKS, and why it is built this way
+ *
+ * Capture first, analyse afterwards. The halves are copied into RAM and
+ * nothing else happens while the stream runs; the judgement comes after
+ * capture_settle(). The earlier version analysed each half as it arrived,
+ * which at the full rate took so long under the overrun interrupt storm
+ * that half a million overruns piled up and the brake stopped the test
+ * after the first half (run 10). A memcpy of 2 KB costs about a thousand
+ * cycles and easily fits in the 24 us a half lasts, even with the storm
+ * stealing most of the CPU.
+ *
+ * Eight halves are 8192 samples, about 200 us at the rates seen so far.
+ * The DAC triangle has a 439 us period at the boot clock setting, so one
+ * slope lasts 220 us: the capture covers nearly a full slope, and what
+ * must appear in the buffer is a clean monotonic ramp of some 1600 counts.
+ *
+ * THE VERDICT
+ *   peak-to-peak     a frozen register gives 0, a real ramp some thousand
+ *                    counts. THIS is the question the test exists for.
+ *   reversals        a slope has at most one turning point in 200 us; many
+ *                    reversals mean the samples are not in order
+ *   gaps             halves that were completed but not copied - then the
+ *                    stored sequence is not contiguous and the ramp would
+ *                    show steps that are not the DAC's
+ *   raw dump         a few dozen values, so a human can see the ramp in
+ *                    the log instead of trusting the arithmetic
  */
 
 #include <xc.h>
@@ -28,11 +55,22 @@
 #include "diag.h"
 #include "sim.h"
 
-#define DACTEST_TOL       150u       /* LSb, min/max window               */
-#define DACTEST_HYST      96u        /* LSb, reversal detector hysteresis */
-#define DACTEST_FREQ_PCT  10u
+/* Halves kept in RAM. Eight of them are 16 KB of the 64 KB on the part -
+ * the DMA buffer is 4 KB and the rest of the program a few hundred bytes,
+ * so this fits with room to spare. More would buy a longer window and
+ * cost RAM that a real application would want. */
+#define DACTEST_STORE_HALVES  8u
 
-static uint16_t copy[SAMPLES_PER_HALF_MAX];
+/* A frozen result register gives a peak-to-peak of zero; noise on a real
+ * input gives a few counts. Anything below this means nothing is moving. */
+#define DACTEST_FLAT_PP       100u
+/* One slope of the triangle can turn over at most once in the captured
+ * window; a handful allows for noise at the turning point. */
+#define DACTEST_MAX_REVERSALS 4u
+#define DACTEST_HYST          96u     /* LSb, reversal detector hysteresis */
+#define DACTEST_TOL           150u    /* LSb, min/max window (DA06 + ADC)  */
+
+static uint16_t store[DACTEST_STORE_HALVES][SAMPLES_PER_HALF_MAX];
 
 uint32_t dactest_run(uint32_t halves)
 {
@@ -40,132 +78,150 @@ uint32_t dactest_run(uint32_t halves)
         console_puts("[dactest] DAC2 is off - nothing to test\r\n");
         return 1u;
     }
+    if (halves > DACTEST_STORE_HALVES) { halves = DACTEST_STORE_HALVES; }
+    if (halves < 2u)                   { halves = 2u; }
+
     const uint32_t low       = dac2_low();
     const uint32_t high      = dac2_high();
     const uint32_t period_ns = dac2_period_ns();
-    const uint32_t f_exp_hz  = (period_ns != 0u) ? (uint32_t)(1000000000ull / period_ns) : 0u;
-    const uint32_t half = capture_half_len();
-    /* The nominal rate of the divider setting in force: the expected
-     * step per sample follows from it. */
-    uint32_t ksps_nom = capture_nominal_ksps(capture_clkdiv());
-    if (ksps_nom == 0u) { ksps_nom = 40000u; }
-    /* expected step per sample, LSb: 2 * span * f / Fs */
-    uint32_t step_exp = (uint32_t)(((uint64_t)2u * (high - low) * f_exp_hz) / ((uint64_t)ksps_nom * 1000u));
-    if (step_exp == 0u) { step_exp = 1u; }
-    const uint32_t jump_limit = 4u * step_exp + 64u;
+    const uint32_t half      = capture_half_len();
 
-    console_puts("[dactest] DAC2 triangle (RA8) through the ADC/DMA chain\r\n");
+    console_puts("[dactest] DAC2 triangle through ADC, DMA and the ping-pong buffer\r\n"
+                 "[dactest] capture first, judge afterwards - nothing is computed while\r\n"
+                 "[dactest] the stream runs, so the overrun storm cannot stop the test\r\n");
     console_kv("[dactest]   ADC core", adc_core());
-    console_kv("[dactest]   halves", halves);
+    console_kv("[dactest]   input (PINSEL)", capture_pinsel());
+    console_kv("[dactest]   halves captured", halves);
     console_kv("[dactest]   samples per half", half);
     console_kv("[dactest]   expected min (DACLOW)", low);
     console_kv("[dactest]   expected max (DACDAT)", high);
-    console_kv("[dactest]   expected period ns", period_ns);
-    console_kv("[dactest]   expected frequency Hz", f_exp_hz);
-    console_kv("[dactest]   expected step per sample LSb", step_exp);
-    console_kv("[dactest]   jump limit LSb", jump_limit);
+    console_kv("[dactest]   triangle period ns", period_ns);
 
-    /* The defined start: stream stopped, DMA at the buffer start, no
-     * leftovers from the tests before (capture_settle).
-     *
-     * The steps are traced and flushed one by one because run 7
-     * (24.09.2026) stopped silently between the block above and the
-     * first result line - twice, with two different terminals, and with
-     * the console dead afterwards. Every wait on this path is bounded,
-     * so the stop is not an ordinary wait; the trace says which call
-     * swallows the CPU. Flushed after each line, otherwise the last one
-     * is still in the transmit FIFO when the CPU stops. */
+    /* ---- capture: copy and nothing else ---------------------------- */
     console_puts("[dactest] settling\r\n");
     console_flush();
     (void)capture_settle();
-    console_puts("[dactest] settled\r\n");
-    console_flush();
     counters_clear();
 
-    uint32_t mn = 0xFFFFu, mx = 0u, reversals = 0u, jumps = 0u;
-    uint32_t dir = 0u;                      /* 0 unknown, 1 up, 2 down   */
-    uint32_t ext = 0u;                      /* extreme since the reversal */
-    bool     first = true;
-    uint32_t prev = 0u;
+    uint32_t got  = 0u;
+    uint32_t gaps = 0u;
+    uint32_t last = blocks_done;
+    uint32_t n    = WAIT_LIMIT;
 
-    const uint32_t t0   = timebase_ticks();
-    uint32_t       last = blocks_done;
-    uint32_t       got  = 0u;
-    uint32_t       n    = WAIT_LIMIT;
-    console_puts("[dactest] starting the stream\r\n");
+    console_puts("[dactest] capturing\r\n");
     console_flush();
+    const uint32_t t0 = timebase_ticks();
     capture_start();
-    console_puts("[dactest] stream started, collecting\r\n");
-    console_flush();
     while (got < halves) {
         SIM_DMA_TICK();
         if (blocks_done == last) {
-            if (capture_overrun_aborted()) { (void)capture_settle(); console_puts("[dactest] stopped by the overrun brake - this rate floods the CPU with interrupts\r\n"); return 9u; }
-            if (!dma0_enabled()) { (void)capture_settle(); console_puts("[dactest] DMA channel switched itself off\r\n"); return 8u; }
-            if (--n == 0u)       { (void)capture_settle(); console_puts("[dactest] no data\r\n"); return 6u; }
+            if (capture_overrun_aborted()) {
+                (void)capture_settle();
+                console_puts("[dactest] stopped by the overrun brake\r\n");
+                return 9u;
+            }
+            if (!dma0_enabled()) {
+                (void)capture_settle();
+                console_puts("[dactest] the DMA channel switched itself off\r\n");
+                return 8u;
+            }
+            if (--n == 0u) {
+                (void)capture_settle();
+                console_puts("[dactest] no data\r\n");
+                return 6u;
+            }
             continue;
         }
+        /* More than one half completed since the last copy: the stored
+         * sequence has a hole and is not contiguous in time. */
+        if ((blocks_done - last) > 1u) { gaps += (blocks_done - last) - 1u; }
         last = blocks_done;
         n    = WAIT_LIMIT;
-        memcpy(copy, (const void *)capture_completed_half(), half * sizeof copy[0]);
+        memcpy(store[got], (const void *)capture_completed_half(), half * sizeof store[0][0]);
         got++;
-        if (got == 1u) {              /* data flows; the loop is running */
-            console_puts("[dactest] first half copied\r\n");
-            console_flush();
-        }
+    }
+    const uint32_t ticks = timebase_ticks() - t0;
+    (void)capture_settle();           /* stream down before anything else */
+
+    /* ---- judge, with the stream stopped ---------------------------- */
+    const uint32_t samples = got * half;
+    const uint32_t ksps    = timebase_ksps(samples, ticks);
+
+    uint32_t mn = 0xFFFFu, mx = 0u;
+    uint32_t reversals = 0u, maxstep = 0u;
+    uint32_t dir = 0u, ext = 0u, prev = 0u;
+    bool     first = true;
+
+    for (uint32_t h = 0; h < got; h++) {
         for (uint32_t i = 0; i < half; i++) {
-            const uint32_t v = copy[i];
+            const uint32_t v = store[h][i];
             if (v < mn) { mn = v; }
             if (v > mx) { mx = v; }
             if (first) { first = false; ext = v; prev = v; continue; }
-            const uint32_t d = (v > prev) ? v - prev : prev - v;
-            if (d > jump_limit) { jumps++; }
+            const uint32_t d = (v > prev) ? (v - prev) : (prev - v);
+            if (d > maxstep) { maxstep = d; }
             prev = v;
-            /* Reversal detector with hysteresis: a new extreme extends
-             * the current slope, a move of HYST against it is a turn. */
             if (dir == 1u) {
                 if (v > ext) { ext = v; }
-                else if (ext - v > DACTEST_HYST) { reversals++; dir = 2u; ext = v; }
+                else if ((ext - v) > DACTEST_HYST) { reversals++; dir = 2u; ext = v; }
             } else if (dir == 2u) {
                 if (v < ext) { ext = v; }
-                else if (v - ext > DACTEST_HYST) { reversals++; dir = 1u; ext = v; }
+                else if ((v - ext) > DACTEST_HYST) { reversals++; dir = 1u; ext = v; }
             } else {
-                if (v > ext + DACTEST_HYST)      { dir = 1u; ext = v; }
-                else if (v + DACTEST_HYST < ext) { dir = 2u; ext = v; }
+                if (v > (ext + DACTEST_HYST))      { dir = 1u; ext = v; }
+                else if ((v + DACTEST_HYST) < ext) { dir = 2u; ext = v; }
             }
         }
     }
-    const uint32_t ticks = timebase_ticks() - t0;
-    (void)capture_settle();                 /* test over: DMA down      */
+    const uint32_t pp = mx - mn;
 
-    const uint32_t samples = halves * half;
-    const uint32_t ksps    = timebase_ksps(samples, ticks);
-    /* f = reversals / 2 / (samples / Fs) = reversals * Fs / (2 * samples) */
-    const uint32_t f_meas  = (uint32_t)(((uint64_t)reversals * ksps * 1000u) / ((uint64_t)2u * samples));
-
-    console_kv("[dactest] samples", samples);
+    console_kv("[dactest] samples captured", samples);
     console_kv("[dactest] ksps measured", ksps);
+    console_kv("[dactest] halves missed between copies (gaps)", gaps);
     console_kv("[dactest] min", mn);
     console_kv("[dactest] max", mx);
-    console_kv("[dactest] reversals", reversals);
-    console_kv("[dactest] frequency Hz measured", f_meas);
-    console_kv("[dactest] jumps (> jump limit)", jumps);
-    console_kv("[dactest] overrun during the test", dma_overrun);
+    console_kv("[dactest] peak-to-peak", pp);
+    console_kv("[dactest] largest step between two samples", maxstep);
+    console_kv("[dactest] slope reversals", reversals);
+    console_kv("[dactest] overrun during the capture", dma_overrun);
 
-    bool ok = true;
-    const uint32_t dmin = (mn > low)  ? mn - low  : low - mn;
-    const uint32_t dmax = (mx > high) ? mx - high : high - mx;
-    if (dmin > DACTEST_TOL) { console_puts("[dactest]   FAIL: minimum not at DACLOW\r\n"); ok = false; }
-    if (dmax > DACTEST_TOL) { console_puts("[dactest]   FAIL: maximum not at DACDAT\r\n"); ok = false; }
-    if (f_exp_hz != 0u) {
-        const uint32_t df = (f_meas > f_exp_hz) ? f_meas - f_exp_hz : f_exp_hz - f_meas;
-        if (df > f_exp_hz * DACTEST_FREQ_PCT / 100u) {
-            console_puts("[dactest]   FAIL: frequency not the triangle's\r\n"); ok = false;
-        }
+    /* ---- the raw values, so the log shows the ramp itself ----------- */
+    console_puts("[dactest] first 16 samples (consecutive):\r\n");
+    for (uint32_t i = 0; i < 16u; i++) {
+        console_kv("[dactest]   ", store[0][i]);
     }
-    if (jumps != 0u) { console_puts("[dactest]   FAIL: jumps in the data (lost samples or glitches)\r\n"); ok = false; }
-    if (mx < mn + DACTEST_HYST) { console_puts("[dactest]   FAIL: no signal (flat)\r\n"); ok = false; }
-    console_puts(ok ? "[dactest] PASS: the DAC triangle arrives intact through ADC, DMA and the ping-pong buffer\r\n"
+    console_puts("[dactest] every 512th sample across the capture:\r\n");
+    for (uint32_t k = 0; k < samples; k += 512u) {
+        console_kv("[dactest]   ", store[k / half][k % half]);
+    }
+
+    /* ---- the verdict ------------------------------------------------ */
+    bool ok = true;
+    if (pp < DACTEST_FLAT_PP) {
+        console_puts("[dactest]   FAIL: THE BUFFER IS FLAT - no changing signal arrives.\r\n"
+                     "[dactest]     Either the DAC does not reach this input, or the DMA is\r\n"
+                     "[dactest]     copying a result register that never changes. In the\r\n"
+                     "[dactest]     second case no rate measured so far means anything.\r\n");
+        ok = false;
+    }
+    if (reversals > DACTEST_MAX_REVERSALS) {
+        console_puts("[dactest]   FAIL: too many slope reversals - the samples are not in order\r\n");
+        ok = false;
+    }
+    if (gaps != 0u) {
+        console_puts("[dactest]   FAIL: halves were completed but not copied - the captured\r\n"
+                     "[dactest]     sequence is not contiguous, so the shape cannot be judged\r\n");
+        ok = false;
+    }
+    if (mn < (low > DACTEST_TOL ? low - DACTEST_TOL : 0u)) {
+        console_puts("[dactest]   note: minimum below DACLOW - more than the DAC should emit\r\n");
+    }
+    if (mx > (high + DACTEST_TOL)) {
+        console_puts("[dactest]   note: maximum above DACDAT - more than the DAC should emit\r\n");
+    }
+    console_puts(ok ? "[dactest] PASS: a changing signal arrives in the buffer, in order and\r\n"
+                      "[dactest]   without gaps - the ADC really converts and the DMA really\r\n"
+                      "[dactest]   moves the results\r\n"
                     : "[dactest] FAIL\r\n");
     return ok ? 0u : 1u;
 }

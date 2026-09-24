@@ -74,6 +74,30 @@
 #define BOOT_VERBOSE      0
 #endif
 
+/* Where the DAC lands in the ADC, from the pinout table (DS70005591D
+ * Table 1, 100-pin and 128-pin columns):
+ *
+ *   PGC2/DACOUT1/AD5AN1/CVDAN1/CMP4D/RP2/RA1        DACOUT1 = AD5AN1
+ *   DACOUT2/AD5AN3/CVDAN8/CMP5A/IBIAS3/ISRC3/RA8    DACOUT2 = AD5AN3
+ *
+ * BOTH DAC OUTPUTS BELONG TO ADC CORE 5. The DAC test therefore has to
+ * switch the core, whatever core the rest of the run uses - run 10
+ * (24.09.2026) ran it on core 3, which cannot see RA8 at all, and
+ * measured the open mikroBUS pin instead of the triangle.
+ *
+ * DAC2 is the one to use: DAC1 shares its pin with PGC2, the second
+ * programming clock. On the EV74H48A, RA8 is DIM pin P44 and goes to
+ * capacitive touch pad 2 - the loop closes on the pin, no wire needed. */
+#define DAC_ADC_CORE      5u
+#define DAC_ADC_PINSEL    3u      /* AD5AN3 = RA8 = DACOUT2, the pin route   */
+
+/* The internal route, and the one the DAC test uses: UREFCON.INSEL = 7
+ * puts DAC2 on the chip's UREF line, and ADnAN7 is the UREF input of
+ * EVERY core (Table 16-2). So the ADC measures the DAC inside the chip -
+ * no pin, no wire, no core switch, and none of the loading the board's
+ * touch-pad network puts on RA8. */
+#define DAC_UREF_PINSEL   7u      /* ADnAN7 = UREF input, any core           */
+
 /* LED0 on the Curiosity Platform Development Board is RC8, DIM pin 28
  * (DIM info sheet DS70005563A, Table 1). The green LEDs are driven high
  * to light (user guide DS70005562D 2.5; Microchip's own example on this

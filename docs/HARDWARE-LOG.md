@@ -704,3 +704,76 @@ only proves the register holds the value.
 Boot default is the slowest PLL setting (7/7), for the same reason the ladder starts there.
 New commands: `pll <p1> <p2>` for the rate, `clk` kept for the CLKGEN6 ratio with its
 warning. Both builds `-Wall -Wextra` clean; nothing of this has been on the board.
+
+## 2026-09-24, run 10 - master 33118cc, build 12:41:01 - the ADC ignores its clock entirely
+
+Boot at PLL 7/7: `adc clock Hz 32653061`, `sample rate ksps 4081`. So the PLL switch itself
+does arrive - the registers report the clock the ladder asks for. Self-test 3832, PASS.
+
+**`test clkoff`: the ADC kept converting with CLKGEN6 switched off.** 260 halves after the
+generator was taken down, and the core still reported ADRDY. Table 16-1 names CLKGEN6 as the
+ADC clock source; the board disagrees.
+
+**And the PLL does not set the rate either.** Fourteen rows, the read-back clock rising
+cleanly from 32.65 to 320 MHz - a factor of ten - and the measured rate flat at 41 375 to
+44 231 ksps throughout:
+
+```
+postdiv 7/7   32.65 MHz   nominal  4081   measured 42516   overrun 56567/58489/57239
+postdiv 6/5   53.33 MHz   nominal  6666   measured 42408   overrun 54695/55042/54483
+postdiv 5/5   64.00 MHz   nominal  8000   measured 42242   overrun 53602/53599/53595
+postdiv 5/2  160.00 MHz   nominal 20000   measured 43334   overrun 42753/43211/43085
+postdiv 5/1  320.00 MHz   nominal 40000   measured 44231   overrun 32314/32625/32076
+```
+
+Note what the measured column is: **above the datasheet's 40 MSPS** at every setting, with a
+weak upward trend that follows the PLL by 4 % while the nominal rate spans a factor of ten.
+The overrun count falls as the PLL goes up, from 56 567 to 32 314.
+
+**The reading this forces, and it is bigger than a rate problem.** `blocks_done` counts DMA
+half-completions, not conversions. If the ADC's result-ready event stays asserted, the DMA
+copies the same result register over and over at its own speed - which would be independent
+of every ADC clock setting, would come out above the converter's specified maximum because
+it is not the converter's rate, would not stop when CLKGEN6 is switched off, and would show
+exactly this weak coupling to the PLL through the register interface.
+
+**The self-test cannot tell the difference.** It samples a DC reference, so a frozen register
+gives the same mean of 3832 that real conversions do. It has never proved that anything is
+converted - only that a plausible value lands in the buffer.
+
+**The DAC test is therefore the decisive measurement of this project**, and it has never once
+run correctly: in run 7 it stopped silently, in runs 9 and 10 the brake stopped it, and in
+run 10 it ran on **ADC core 3** while DACOUT2 is an input of core 5 - it was measuring an open
+pin. Rebuilt for this, no board run yet:
+
+- **The DAC is measured inside the chip.** `UREFCON.INSEL` puts one of DAC1..DAC8 on the
+  device's internal UREF line (ATDF value group `UREFCON_CON__INSEL`: 1 AVDD/2, 2 VDD/2,
+  3 VDDcore, 4 bandgap, 5 temperature sensor, 6..13 DAC1..DAC8, 14 AVSS, 15 AVDD), and
+  `ADnAN7` is the UREF input of **every** core (Table 16-2). So the test routes DAC2 to UREF
+  and samples AN7 on whatever core is in use: no pin, no wire, no core switch, and none of
+  the loading the board's touch-pad network puts on RA8. `uref_route_dac2()` in dac.c,
+  `UREFCON` added to the register dump. The pin route is documented in board.h for the
+  record: DACOUT1 = AD5AN1 = RA1 (shared with PGC2), DACOUT2 = AD5AN3 = RA8, both on core 5.
+- **Capture first, analyse afterwards.** Eight halves are copied into RAM and nothing is
+  computed while the stream runs; the judgement comes after the stream is down. The old
+  version analysed each half as it arrived, which under the overrun storm took long enough
+  for half a million overruns to pile up - that is why the brake stopped it after the first
+  half in run 10. A memcpy of 2 KB is about a thousand cycles and fits in the 24 us a half
+  lasts even with the storm stealing most of the CPU. 16 KB of the 64 KB go to the store;
+  the firmware now uses about 21 KB in total.
+- **The verdict is about data, not rate.** Peak-to-peak over the whole capture is the
+  question: a frozen register gives 0, a real ramp some thousand counts. Eight halves are
+  8192 samples, about 200 us at the rates seen, and one slope of the triangle lasts 220 us -
+  so a clean monotonic ramp of roughly 1600 counts must appear. Slope reversals show whether
+  the samples are in order, and gaps count halves that completed but were not copied, which
+  would break the continuity the shape is judged on. A few dozen raw values are printed, so
+  the ramp can be seen in the log instead of trusted from the arithmetic.
+
+If that capture shows a ramp, the chain is proven - conversions are real, complete and in
+order - and only the rate is open. If it shows a flat line, the DMA is moving a stale
+register and every rate measured in runs 4 to 10 is void.
+
+Worth taking to the product line either way: an ADC that ignores both its clock generator's
+divider and its PLL's output dividers, converts with the generator switched off, and delivers
+above its specified maximum is a question for the factory, and the register evidence for it
+is now complete.

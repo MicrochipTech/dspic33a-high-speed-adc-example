@@ -28,6 +28,15 @@ uint16_t dac2_high(void);
 uint16_t dac2_slpdat(void);
 uint32_t dac2_period_ns(void);         /* of the triangle, from the settings */
 
+/* Put DAC2 on the chip's internal UREF line (UREFCON.INSEL = 7), which
+ * every ADC core can sample as its AN7 input (Table 16-2). This is how
+ * the DAC test reaches the ADC: no pin, no wire, no core switch. Pass
+ * true to additionally drive UREF onto its external pin - the internal
+ * path should not need it. False if the register did not take. */
+bool     uref_route_dac2(bool drive_pin);
+void     uref_off(void);
+uint32_t uref_insel(void);
+
 void     dac_regs_dump(void);
 
 #endif /* DAC_H */

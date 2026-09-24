@@ -563,6 +563,34 @@ static void cmd_dac_fn(int argc, char **argv)
 }
 CMD_DEFINE(dac, "dac", cmd_dac_fn, "dac <on [slpdat]|off> - DAC2 triangle on RA8");
 
+/* The DAC test measures the DAC inside the chip: UREFCON puts DAC2 on
+ * the UREF line and the ADC samples it as AN7, which every core has
+ * (board.h). So no core is switched and no pin is involved - run 10 ran
+ * the test on core 3 against RA8, which belongs to core 5, and measured
+ * an open pin. The input in use is restored afterwards, so a "dactest"
+ * from the console does not silently leave the measurement elsewhere. */
+static uint32_t run_dactest(uint32_t halves)
+{
+    const uint8_t pinsel_before = capture_pinsel();
+    const uint8_t samc_before   = capture_samc();
+
+    if (!uref_route_dac2(false)) {
+        put_line("dactest: UREFCON did not take the DAC2 selection");
+        return 1u;
+    }
+    console_kv("[dactest] DAC2 routed to the internal UREF line, INSEL", uref_insel());
+    console_kv("[dactest]   measured on this core's AN7, ADC core", adc_core());
+    if (!capture_set_input(DAC_UREF_PINSEL, samc_before)) {
+        put_line("dactest: could not select the UREF input");
+        uref_off();
+        return 1u;
+    }
+    const uint32_t rc = dactest_run(halves);
+    (void)capture_set_input(pinsel_before, samc_before);
+    uref_off();
+    return rc;
+}
+
 static void cmd_dactest_fn(int argc, char **argv)
 {
     uint32_t halves = 64u;
@@ -570,7 +598,7 @@ static void cmd_dactest_fn(int argc, char **argv)
         usage("dactest [halves]  (capture and judge the DAC2 triangle, default 64 halves)");
         return;
     }
-    if (dactest_run(halves) != 0u) { cmd_parser_fail(); }
+    if (run_dactest(halves) != 0u) { cmd_parser_fail(); }
 }
 CMD_DEFINE(dactest, "dactest", cmd_dactest_fn, "dactest [halves] - judge the DAC2 triangle through the chain");
 
@@ -1040,7 +1068,7 @@ static bool test_dac(uint32_t halves)
         console_puts("[test]   CLKGEN7 did not come up - DAC2 is off\r\n[test] dac: FAIL\r\n");
         return false;
     }
-    const uint32_t rc = dactest_run(halves);
+    const uint32_t rc = run_dactest(halves);
     console_puts((rc == 0u) ? "[test] dac: PASS\r\n" : "[test] dac: FAIL\r\n");
     return rc == 0u;
 }
