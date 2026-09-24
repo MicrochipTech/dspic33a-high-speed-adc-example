@@ -1287,6 +1287,25 @@ SWEEP_SPP_RE = re.compile(r"\[sweep\] samples per point[:\s]+(\d+)")
 SWEEP_HALFLEN_RE = re.compile(r"\bhalf[:\s]+(\d+)")
 
 
+SWEEP_LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "..", "docs", "logs")
+
+
+def stored_sweep_logs():
+    """The board runs the repo keeps, newest name last.
+
+    A board run is rare - it needs the kit, and somebody in front of it -
+    so the few that exist are worth having at hand rather than pasted in
+    again from an e-mail. Returns [] when the directory is not there,
+    which is the case on a branch that has not taken the logs yet."""
+    try:
+        names = sorted(n for n in os.listdir(SWEEP_LOG_DIR)
+                       if n.endswith(".txt") and "sweep" in n)
+    except OSError:
+        return []
+    return [os.path.join(SWEEP_LOG_DIR, n) for n in names]
+
+
 def parse_sweep_log(text: str) -> dict:
     """Pull the sweep table out of a terminal log, whatever else is in it.
 
@@ -1400,9 +1419,11 @@ def sweep_verdict(rows):
     have, why = sweep_rows_that_decide(rows)
     if len(have) < 3:
         return ("grey", "no verdict",
-                "The log carries no 'bursts' column, or fewer than three rows of it. "
-                "That column comes from a firmware newer than the run that produced "
-                "this log.")
+                "The log carries no 'bursts' column, or fewer than three rows of it. That "
+                "column comes from a firmware newer than the run that produced this log, so "
+                "this is the expected state for every board run recorded so far - not a "
+                "fault in the log. The two predicted curves are drawn anyway: a run that "
+                "does carry the column will land on one of them.")
     def err(key):
         return sum(abs(r["bursts"] - r[key]) / max(1.0, r[key]) for r in have) / len(have)
     why = (why + ". ") if why else ""
@@ -1890,6 +1911,12 @@ def main_gui(args):
                     sw_halflen_in = ui.number("samples per half", value=1024, format="%d") \
                         .props("dense outlined").classes("w-40")
                     sw_parse_btn = ui.button("read the log below").props("dense outline")
+                    sw_stored = stored_sweep_logs()
+                    sw_stored_btn = ui.button(
+                        os.path.basename(sw_stored[-1]) if sw_stored else "no stored log"
+                    ).props("dense outline")
+                    if not sw_stored:
+                        sw_stored_btn.disable()
                     sw_run_btn = ui.button("run on target").props("dense outline")
                     sw_msg_lbl = ui.label().classes("text-xs text-slate-400")
                 sw_text = ui.textarea(placeholder="paste the terminal log of a 'test sweep' here") \
@@ -2348,6 +2375,24 @@ def main_gui(args):
         sw_text.value = "\n".join(lines)
         sweep_show(sw_text.value)
     sw_run_btn.on_click(sweep_run)
+
+    def sweep_load_stored():
+        if not sw_stored:
+            return False
+        try:
+            with open(sw_stored[-1], encoding="utf-8", errors="replace") as fh:
+                sw_text.value = fh.read()
+        except OSError as exc:
+            sw_msg_lbl.text = f"cannot read {sw_stored[-1]}: {exc}"
+            return False
+        sweep_show(sw_text.value)
+        return True
+    sw_stored_btn.on_click(sweep_load_stored)
+
+    # Open on the real run rather than on an empty box: the two predicted
+    # curves are worth seeing even where the measured one is still missing,
+    # and it shows at a glance what the tile wants to be fed.
+    sweep_load_stored()
 
     # ---- connection ----
     def do_connect():
