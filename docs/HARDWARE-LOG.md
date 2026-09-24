@@ -1085,3 +1085,47 @@ silicon. One more `test sweep` decides it.
 this device, the samples arrive complete and in the order they were converted, and the sample
 rate is settable over PLL1 from 4 to 40 MSPS to better than 1 %. What is still open is the
 loss at a given rate - the number that turns "it works" into "at 8 MSPS nothing is lost".
+
+## 2026-09-24, a correction to how every one of these logs reads `dma_overrun`
+
+Working out the prediction for the next sweep turned up something that changes the wording
+of a lot of what is written above.
+
+`OVERRUN` is **one bit** in `DMA0STAT`, and the handler counts it like this:
+
+```c
+if (st & DMA0_OVERRUN) { dma_overrun++; dma0_clear(DMA0_OVERRUN); }
+```
+
+`st` is a single read of `DMA0STAT` taken when the handler is entered. So `dma_overrun` is
+incremented **once per handler entry in which the bit was found set** - not once per lost
+sample. If three samples are lost between two entries, the bit is set once and the counter
+moves by one.
+
+**`dma_overrun` is therefore a lower bound on the samples lost, not a count of them.** Every
+sentence of the form "about 4 % of the samples are lost as overruns" - in earlier entries
+here and in the README - should be read as "the overrun bit was seen set in as many handler
+entries as 4 % of the sample count". The true loss is that or worse, and how much worse
+depends on how often the handler runs, which at these rates is exactly what is in dispute.
+
+This does not change any conclusion drawn so far: the chain is proven by the DAC triangle,
+which counts nothing and simply shows the samples arriving in order, and the rate is proven
+by Timer1 against the PLL setting. It does change what can be promised about loss at a given
+rate, which is the one number still outstanding for the customer - and it is a further reason
+why the next run matters.
+
+A cleaner measure exists and costs nothing: **`blocks_done` against `burst_starts`**. One
+burst is a whole buffer, so blocks must be exactly twice bursts; no sampling of a flag is
+involved. That relation is now in `status` and in every sweep row.
+
+**The prediction for the next sweep, written down before the run.** A sweep point stops when
+`blocks_done` reaches its target, so blocks is fixed at 2000 by construction and the effect
+shows in the *time* and in `bursts`:
+
+- If the handler books stale events (our fault), `bursts` comes out far below `blocks/2`.
+  Run 14's loaded column was a factor of 10.2 too fast, so a 2000-block point would show
+  roughly 98 bursts instead of 1000.
+- If the counting is honest, `bursts` is 1000 and the discrepancy has to be real transfers -
+  the trigger defect Microchip acknowledges.
+
+The two are not subtle: 98 against 1000.

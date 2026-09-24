@@ -76,7 +76,9 @@ the following is proven on silicon, not argued from the datasheet:
   3990 kSPS against 4081 nominal — 2.2 % off (run 13).
 
 **What is not settled.** How far up that stays true. At the undivided clock the DMA
-loses about 4 % of the samples as overruns, and because every overrun raises the DMA
+loses samples to overruns - `dma_overrun` reaches about 4 % of the sample count, and
+that is a lower bound, because the counter moves once per handler entry that finds the
+flag set and not once per lost sample - and because every overrun raises the DMA
 interrupt — 1.6 million per second, one every 625 ns — the CPU stops coming back to the
 main loop at all. The rate at which the chain stays lossless is exactly what the sweep
 is for, and the table from a board is still outstanding.
@@ -320,7 +322,7 @@ exists.
 | `blocks_done` | increasing while a test runs a stream |
 | `selftest_mean` | ≈ 3840 |
 | `last_sample` | changing once a signal is connected; noise around some level on an open pin |
-| `dma_overrun` | **0** at a usable rate; at the undivided clock it is about 4 % of the samples |
+| `dma_overrun` | **0** at a usable rate. Above that it is a *lower bound* on the samples lost: `OVERRUN` is one bit and the counter moves once per handler entry that finds it set, so several losses between two entries count as one. `blocks_done` against `burst_starts` is the exact relation - one burst is a whole buffer, so blocks must be twice bursts |
 | `dma_addr_err` | **0** — non-zero means the DMA address window is wrong |
 | `late_service`, `proc_missed` | **0** |
 | `fail_code` | 0 |
