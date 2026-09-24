@@ -1369,3 +1369,48 @@ The second outcome would mean the rate is not settable in continuous operation o
 silicon, which is the opposite of what the last two entries concluded. Written down here before
 the run, as the previous prediction was - that one turned out wrong, and it should be visible
 that it did.
+
+## 2026-09-25, the chain test is ready - nothing of it has run on the board yet
+
+`chain all` implements ANALYSIS.md C.8 to C.12 as one run of under a minute:
+SCCP1 -> ADC core 5 in Single Conversion mode -> DMA0 Repeated Continuous ->
+ping-pong -> CPU, DAC2 on RA8 as the signal, stages S0 to S9
+(`docs/CHAIN-TEST-PLAN.md`). Built clean for the board (`tools/build.bat`, and
+the IDE configuration through `tools/_test_mplabx.bat`) and for the simulator,
+where it only prints SKIP. Interrupt vectors checked on the ELF: IRQ 51
+`_CCT1Interrupt`, 52 `_CCP1Interrupt`, 241 `_AD5CH0Interrupt`.
+
+Changed on the way, each a correction that applies to every earlier run as well:
+
+- DAC clock 320 -> 400 MHz (PLL1 VCO divider, `VCO1DIV.INTDIV = 2`); SCCP1 clock
+  320 -> 160 MHz (`CLK13DIV.INTDIV = 1`). Both were out of Table 40-24.
+- `DAC2CON.UPDTRG = 11`: the DAC's data registers had never been given an update
+  trigger (p1409).
+- `dac2_period_ns()` returned one slope as the period (factor 2).
+- `CCP1RB` is written in timer mode too.
+- SCCP1 has two interrupts: the timer period raises `CCT1` (IRQ 51), not `CCP1`.
+
+Found by testing the triangle evaluator on the host before the run (synthetic
+windows with DNL +-5, noise, a modelled DAC filter): judging single steps at 14 LSB
+per sample gave false "repeated" and "lost" samples on clean data, and a partial
+last segment put a turning point 0.7 samples off. The evaluator now judges the
+"slip" over two periods between full slopes, steps only from 40 LSB per sample.
+
+**Predictions, written before the run:**
+
+- S0: the clock monitor reads CLKGEN6 at 320 MHz, the VCO divider and CLKGEN7 at
+  400 MHz, the PLL2 VCO divider at 500 MHz. If the monitor counts nothing, the
+  monitor is misconfigured - not the clocks.
+- S1: SCCP1 at 160 MHz. 320 MHz would mean the CLKGEN13 divider does not divide -
+  which would reopen C.3 for every CLKGEN divider.
+- S2: one ADC result per SCCP1 event, in timer mode, at every low rate. This is the
+  first run of the triggered path with the three corrections of 24.09.2026; a zero
+  here would mean a fourth error in the trigger path.
+- S4: clean up to 16 or 20 MSPS; overrun or a transfer deficit from 26.7 MSPS on
+  (the DMA ceiling of about 33 M transfers/s from support); 40 MSPS fails because a
+  conversion takes 31 ns against a period of 25 ns.
+- S5: the slope in samples within a few per cent of the model now that the DAC is in
+  spec and takes its data - if not, open question 4 has a cause not yet named.
+- S6: the placeholder processing (a sum over the half) needs about 4 to 5 CPU cycles
+  per sample, so the CPU keeps up to about 20 MSPS and misses halves at 40.
+- S8: CLKGEN6 divides as documented (160 and 80 MHz at ratios 2 and 4).

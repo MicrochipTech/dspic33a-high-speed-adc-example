@@ -337,6 +337,53 @@ is the other half: every run on this board, dated, with what the log said and wh
 changed because of it. If something here surprises you, it has probably surprised us
 first and is written down there.
 
+## The chain test - one command, one board run
+
+The firmware carries a test of the chain the example is about - SCCP1 as the
+sample clock, the ADC converting once per trigger, the DMA moving every result
+into the ping-pong buffer, the CPU processing each half - with the on-chip DAC2
+as the signal, on RA8 (DACOUT2 = AD5AN3, ADC core 5). It checks every link on
+its own at low rates first, then every rate from 100 kSPS to 40 MSPS, and ends
+with an attempt at the real thing. What each stage checks and why:
+`docs/CHAIN-TEST-PLAN.md`.
+
+**For the person at the board:**
+
+```
+git pull
+MPLAB X: configuration EV74H48A_Curiosity_Platform_MPS512, build, program
+terminal on the MCP2221A COM port, 115200 8N1, logging to a file
+wait for "[boot] READY", then type:   chain all
+wait for "@END" (under a minute), send the log file back
+```
+
+If it stops without `@END`, reset the board and send the log including the new
+boot banner: the next boot prints the stage the run was in
+(`[boot] WARNING the last 'chain' run ended without @END, in stage S...`), and
+`chain from <stage>` continues from there.
+
+Other forms: `chain <n>` runs one stage (0..9), `chain run <ksps> [seconds]`
+runs the chain at a chosen rate (the nearest 160 MHz / N) for as long as asked,
+with one status line per second, printed after the stream so that printing does
+not disturb it.
+
+**The log** is one line per result, `@S<stage>.<n> key=value ... -> PASS|FAIL|SKIP|INFO`,
+about 170 lines when everything passes; a window that fails the grid check is
+added as a `@DUMP` of its samples. `python tools/eval_chain.py <log>` re-judges
+every line from its fields, re-evaluates every dumped window and lists what the
+run says about the open questions (`--png DIR` plots the dumped windows).
+`python tools/eval_chain.py --selftest` checks the evaluator itself.
+
+**Stages:** S0 preconditions (Timer1, every clock measured by the chip's clock
+monitor, core 5, RA8) - S1 SCCP1 alone - S2 SCCP1 -> ADC at 1..100 kHz with both
+ends counted and the DAC stepped by the CPU - S3 ADC -> DMA -> buffer at
+100 kHz - S4 triggers against transfers at every rate - S5 the DAC triangle in
+the data, turning points to a fraction of a sample - S6 one second of stream
+with the CPU processing, per rate - S7 start, stop, restart, rate change - S8
+the old open questions (CLKGEN6 divider and CLKGEN6 off measured at the clock
+itself, back-to-back repeats) - S9 the attempt, 15 s at the best rate and at
+8 MSPS, and the registers the chain ran with.
+
 ## How it works
 
 ### 1. Clock tree

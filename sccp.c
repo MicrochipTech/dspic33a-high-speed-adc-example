@@ -36,15 +36,18 @@ bool sccp1_start(uint32_t ticks, sccp_clk_t clk, sccp_mode_t mode, sccp_event_t 
 
     CCP1CON1bits.CLKSEL = (uint32_t)clk;
     CCP1CON1bits.T32    = 1u;         /* 32-bit timer and compare        */
+    /* The compare point inside the period, written in BOTH modes. Half
+     * way, so an event there is as far from both period edges as it can
+     * be - if the event and the rollover were to coincide, a synchroniser
+     * could swallow one of them. Until 25.09.2026 it was written in OC
+     * mode only, so a timer-mode start after an OC run with a longer
+     * period inherited a CCP1RB beyond the new CCP1PR: a compare that
+     * never matches. */
+    CCP1RA = 0u;
+    CCP1RB = ticks / 2u;
     if (mode == SCCP_MODE_OC) {
         CCP1CON1bits.CCSEL = 0u;      /* output compare, not capture     */
         CCP1CON1bits.MOD   = 1u;      /* 32-bit single edge, high        */
-        /* The compare point inside the period. Half way, so the event is
-         * as far from both period edges as it can be - if the event and
-         * the rollover were to coincide, a synchroniser could swallow
-         * one of them. */
-        CCP1RA = 0u;
-        CCP1RB = ticks / 2u;
     } else {
         CCP1CON1bits.CCSEL = 0u;
         CCP1CON1bits.MOD   = 0u;      /* 16/32-bit timer                 */
@@ -72,6 +75,56 @@ bool sccp1_start(uint32_t ticks, sccp_clk_t clk, sccp_mode_t mode, sccp_event_t 
 void sccp1_stop(void)
 {
     CCP1CON1bits.ON = 0u;
+}
+
+uint32_t sccp1_tmr(void) { return CCP1TMR; }
+
+/* ------------------------------------------------------------------ *
+ * Counting the module's events with the CPU (low rates only)
+ *
+ * SCCP1 has two interrupts (DS70005591D interrupt vector table, "CCP 1
+ * Timer" and "CCP 1 Input"): _CCT1Interrupt, IRQ 51, IFS1/IEC1 bit 19,
+ * priority IPC6[14:12] - the timer period event; and _CCP1Interrupt,
+ * IRQ 52, bit 20, IPC6[18:16] - the capture/compare event. Timer mode
+ * raises the first, output-compare mode the second, so both are counted
+ * and reported apart. Which of them coincides with the special event
+ * the ADC listens to is exactly what the chain test's S2 compares
+ * against the number of ADC results.
+ *
+ * Priority 3: above the console's receive interrupt (1), inside which
+ * every test runs, below the DMA (4). At 100 kHz each entry costs well
+ * under a microsecond.
+ * ------------------------------------------------------------------ */
+#define SCCP1_COUNT_PRIORITY  3u
+volatile uint32_t sccp1_timer_events = 0;
+volatile uint32_t sccp1_cmp_events   = 0;
+
+void sccp1_count(bool on)
+{
+    IEC1bits.CCT1IE = 0u;
+    IEC1bits.CCP1IE = 0u;
+    IFS1bits.CCT1IF = 0u;
+    IFS1bits.CCP1IF = 0u;
+    sccp1_timer_events = 0u;
+    sccp1_cmp_events   = 0u;
+    if (on) {
+        IPC6bits.CCT1IP = SCCP1_COUNT_PRIORITY;
+        IPC6bits.CCP1IP = SCCP1_COUNT_PRIORITY;
+        IEC1bits.CCT1IE = 1u;
+        IEC1bits.CCP1IE = 1u;
+    }
+}
+
+void __attribute__((interrupt, no_auto_psv)) _CCT1Interrupt(void)
+{
+    IFS1bits.CCT1IF = 0u;             /* first, see dma.c                */
+    sccp1_timer_events++;
+}
+
+void __attribute__((interrupt, no_auto_psv)) _CCP1Interrupt(void)
+{
+    IFS1bits.CCP1IF = 0u;
+    sccp1_cmp_events++;
 }
 
 uint32_t sccp1_hz(void)
@@ -110,6 +163,8 @@ void sccp1_regs_dump(void)
     console_kv("AUXOUT (1 rollover, 2 special event)", CCP1CON2bits.AUXOUT);
     console_kv("CCP1TMR (first read)", t1);
     console_kv("CCP1TMR (second read)", t2);
+    console_kv_hex("CCP1RA", CCP1RA);
+    console_kv_hex("CCP1RB", CCP1RB);
     console_kv("module clock Hz", sccp1_hz());
     console_kv("nominal ksps", sccp1_nominal_ksps());
 }

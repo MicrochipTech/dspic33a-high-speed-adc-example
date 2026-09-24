@@ -1,7 +1,8 @@
 # Implementation plan: the chain test
 
-Status: plan, 25.09.2026. Nothing in here is implemented yet. Basis: `docs/ANALYSIS.md`
-sections C.8 to C.12.
+Status: implemented 25.09.2026 (`chaintest.c`, `tools/eval_chain.py`), not yet run on
+the board. Basis: `docs/ANALYSIS.md` sections C.8 to C.12. Section 9 lists where the
+implementation departs from this plan and why.
 
 ## 1. What is being built
 
@@ -269,3 +270,34 @@ If it stops without @END: reset the board, send the log including the new boot b
 | RA8 touch-pad load | Amplitude errors read as grid errors | S2 characterises it at low rate; UREF as the comparison route. |
 | `SWTRG` is written by the old path in single mode | An extra conversion at the start | The triggered stream never calls `start_burst()`. |
 | A hang at a high rate | Rest of the log lost | Order safe to risky, boot record, `chain from`. |
+
+## 9. Where the implementation departs from the plan (25.09.2026)
+
+- **No DMA1 trigger counter.** A second DMA channel on the SCCP1 event would add one
+  transfer per sample and double the DMA load the test is trying to measure - at
+  20 MSPS it alone would reach the 33 M transfers/s the support figure names. The
+  expected number of triggers is computed from Timer1 instead: both clocks come from
+  the FRC, so their ratio is exact, and the count is right to +-3 Timer1 ticks (a few
+  triggers at 40 MSPS). A single lost or repeated sample is caught by S5 instead.
+- **The grid criterion is "slip", not single slopes or single steps.** Host tests of
+  the evaluator (synthetic windows with DNL +-5, noise, a modelled DAC filter) showed
+  that step checks at 14 LSB per sample give false alarms on clean data, and that a
+  lost sample moves the slope it sits in by only half a sample. A lost or repeated
+  sample shifts every later turning point by one; four turning points around it
+  carry the whole shift. Only turning points between two full slopes count. Steps
+  are judged from 40 LSB per sample on. Result on 2100 clean windows: no false alarm;
+  a single fault found in 96-100 % of windows.
+- **Slopes of about 128 samples**, not 300: more turning points per window and
+  steeper slopes. SLPDAT is not limited to 50 - with a range fitted to it the triangle
+  can go much faster; 87 at 40 MSPS.
+- **Low-rate stages at 100 kHz** where the plan had 10 kHz (S3), 8 DAC levels instead
+  of 16 (S2): the one-minute budget.
+- **DAC cross-check on the PLL2 VCO divider (500 MHz)**, not on the FRC: the FRC's
+  8 MHz is far below the DAC's 400 MHz minimum. It is not independent of the ADC's
+  clock (same FRC), so it checks the model's scaling rather than common errors;
+  Timer1 remains the independent check of the absolute rate.
+- **Found while building, fixed in the firmware:** the DAC's data registers never had
+  an update trigger (`UPDTRG`, p1409); `CCP1RB` was written in OC mode only; SCCP1's
+  timer period raises `CCT1`, not `CCP1`.
+- **Status lines of `chain run` and S9 are printed after the stream**, not during it:
+  printing blocks for milliseconds, which at 40 MSPS is hundreds of halves.

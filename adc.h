@@ -44,6 +44,7 @@ bool     adc_select(uint8_t core);
 uint8_t  adc_core(void);
 uint8_t  adc_dma_trigger(void);              /* DMA_SEL code of the active core */
 const volatile void *adc_dma_source(void);   /* &ADxCH0RES of the active core   */
+const volatile void *adc_dma_source_data(void); /* &ADxCH0DATA (IRQSEL = 1)     */
 bool     adc_ch0_flag(void);                 /* its CH0 interrupt flag          */
 /* Leftovers of a stopped stream: CH0RDY (cleared by reading CH0DATA) and
  * the core's event flags. Between tests, with the core idle. */
@@ -81,6 +82,21 @@ uint8_t adc_trg1(void);
 uint8_t adc_trg2(void);
 uint8_t adc_accnum(void);
 uint8_t adc_period(void);
+/* IRQSEL of channel 0: 0 = event per conversion, result in RES; 1 = event
+ * per sequence, result in DATA (the same in Single mode, p1323). */
+void    adc_set_irqsel(uint8_t irqsel);
+uint8_t adc_irqsel(void);
+/* ACALEN | CALREQ | CALRATE of ADnCON: 0 means no periodic calibration. */
+uint32_t adc_cal_bits(void);
+/* Channels 1..15 of core 5 with a trigger source (must be 0 for the
+ * chain); 0xFF on any other core. */
+uint32_t adc_other_channels_armed(void);
+/* Core 5's channel-0 interrupt as an event counter (chain test, low
+ * rates): adc_ch0_event() is called from it, priority 3, with the result
+ * if read_res (DMA off) or 0 (DMA on the channel). Implemented by the
+ * chain test. */
+void    adc_ch0_irq(bool on, bool read_res);
+void    adc_ch0_event(uint16_t result);
 
 /* Take the core down and bring it back. The clock of a running core is
  * not changed: the caller calls adc_deinit(), changes CLKGEN6, calls

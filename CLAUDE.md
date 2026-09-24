@@ -31,17 +31,18 @@ come from. That convention is kept.
 | `main.c` | start-up order, main loop | everything below |
 | `board.h` | pins, ADC core/input, `ADC_PLL_POSTDIV1/2` (the boot rate, 7/7 = slowest), the DAC route constants | - |
 | `config_bits.c` | every configuration word, with reasons | - |
-| `clock.c/.h` | PLLs, clock generators, clock-fail interrupt, `clock_cpu_on_pll()`, `clock_adc_set_pll()`, `clock_adc_set_rate()`, the CLKGEN6 divider `clock_adc_set_div()` with its result codes, CLKGEN13 for the trigger | console, diag |
-| `adc.c/.h` | the ADC core: init, burst trigger, PINSEL/SAMC, the trigger-source registers | console, diag |
+| `clock.c/.h` | PLLs, clock generators, clock-fail interrupt, `clock_cpu_on_pll()`, `clock_adc_set_pll()`, `clock_adc_set_rate()`, the CLKGEN6 divider `clock_adc_set_div()` with its result codes, CLKGEN13 for the trigger (PLL1 out / 2 = 160 MHz), CLKGEN7 for the DAC (PLL1 VCO divider, 400 MHz), `clock_monitor_hz()` (clock monitor 4 as a frequency meter) | console, diag, chaintest |
+| `adc.c/.h` | the ADC core: init, burst trigger, PINSEL/SAMC, the trigger-source registers, IRQSEL, calibration bits, core 5's CH0 interrupt as a counter (`adc_ch0_event()` in chaintest.c) | console, diag, chaintest |
 | `dma.c/.h` | DMA channel 0: window = the buffer, HALF/DONE interrupt shell, status flags | console, diag; calls `dma0_event()` in capture.c |
 | `sim_dma.c` | replaces `dma.c` in the simulator build; implements `dma.h` without a DMA | adc, capture, console |
-| `capture.c/.h` | the measurement: the DMA buffer (private, with guard words), `dma0_event()`, the counters, start/stop/input, self-test, per-half processing, the variant table | adc, dma, sccp, led, console, diag |
-| `sccp.c/.h` | SCCP1 as a trigger source, with clock source, mode and event as parameters | capture |
+| `capture.c/.h` | the measurement: the DMA buffer (private, with guard words), `dma0_event()`, the counters, start/stop/input, self-test, per-half processing and its cost, the variant table, the triggered stream `capture_chain_*()` | adc, dma, sccp, led, console, diag |
+| `sccp.c/.h` | SCCP1 as a trigger source, with clock source, mode and event as parameters; its timer and compare interrupts as event counters | capture, chaintest |
 | `led.c/.h` | LED0 | - |
 | `timebase.c/.h` | Timer1 as a stopwatch (12.5 MHz) for measuring the delivered rate. It sits on the CPU branch (PLL2) while the ADC is on PLL1, so it cannot flatter the ADC. Not involved in producing the rate. | - |
 | `dac.c/.h` | DAC2 Triangle Wave mode, CLKGEN7 as its clock; the known signal | - |
 | `dactest.c/.h` | captures N bursts and judges the last one against the DAC settings (min/max, reversals, largest step, period in samples) | capture, dac |
-| `diag.c/.h` | `fail()` codes, trap handler, boot record in persistent RAM, `RCON` report, `regs_dump()` | every module's `*_regs_dump()` |
+| `chaintest.c/.h` | the chain test `chain all` (S0..S9), the triangle evaluator (turning points by line fits, "slip"), the `@` log format, `chain run` | capture, adc, sccp, dac, clock, dma (register dumps), diag |
+| `diag.c/.h` | `fail()` codes, trap handler, boot record in persistent RAM (including `chain_mark`, the chain test's stage), `RCON` report, `regs_dump()` | every module's `*_regs_dump()` |
 | `cli.c`, `console.h` | UART2, the commands, the `sweep`, the `test` suite, the variant matrix | clock, capture, dactest, led, diag |
 | `sim.h` | the hooks the simulator build needs; all empty on silicon | - |
 | `cmd_parser.c/.h` | the command parser, unchanged from github.com/zabooh/cmd_parser (Apache 2.0) - do not edit | - |
@@ -201,6 +202,17 @@ because a board run costs a person:
 | `test matrix` | every variant: does it convert, does the rate follow, **does it stream** (the acceptance test), are the data intact |
 | `test dac` | the DAC triangle through the internal UREF route |
 
+**The chain test (`chain all`, since 25.09.2026) is the run the colleague makes.**
+It tests the target architecture of ANALYSIS.md C.8 - SCCP1 -> ADC core 5 in Single
+mode -> DMA0 -> ping-pong -> CPU, DAC2 on RA8 as the signal - in stages S0..S9 within a
+minute, and `tools/eval_chain.py` evaluates the log it sends back. Plan, stages and
+the decisions behind them: `docs/CHAIN-TEST-PLAN.md`. Its triangle evaluator was
+tested on the host before any board run (gcc on the code extracted from chaintest.c,
+synthetic windows with DNL, noise and a modelled DAC filter): no false alarm in 2100
+clean windows, a single lost or repeated sample found in 96-100 % of windows; the
+Python port in eval_chain.py gives identical results on the same data. The `test ...`
+suite below is the older back-to-back instrument and stays as it is.
+
 `matrix_stream()` in `cli.c` is the acceptance test and it is the one that matters: the
 stream runs for `MATRIX_STREAM_HALVES` halves with `capture_service()` called throughout,
 exactly as the main loop does, and it passes only when `overrun`, `late` and `missed` are
@@ -228,8 +240,15 @@ converter never sped up.
 - **The counters are honest.** Run 16: `half + done = 2 x bursts` in every row. There is
   no double booking.
 - **The console works.** `rx = 0` in runs 6 and 7 was interrupt starvation.
-- **The CLKGEN6 divider does not reach the converter**, with either switching sequence,
-  and the ADC keeps converting with the generator switched off.
+- ~~The CLKGEN6 divider does not reach the converter~~ - **withdrawn** (ANALYSIS.md C.3):
+  both observations behind it were made with instruments later found void. Every
+  document names CLKGEN6 as the ADC clock. The chain test's S8 measures it at the
+  generator itself with the clock monitor.
+- **Two clocks ran out of specification until 25.09.2026** (Table 40-24, p2016): the DAC
+  at 320 MHz (minimum 400) and SCCP1 at 320 MHz (maximum 200). Now DAC on the PLL1 VCO
+  divider at 400 MHz, SCCP1 on CLKGEN13 = PLL1 out / 2 = 160 MHz. And the DAC's data
+  registers need an update trigger (`UPDTRG`, p1409) that was never set; it is now 11
+  (every write taken at once).
 - **Every rate measured under load in runs 4 to 11 is wrong** by about a factor of ten -
   it was taken by a CPU drowning in the overrun interrupt. Do not quote those numbers.
 - **`dma_overrun` is a lower bound, not a count of lost samples.** `OVERRUN` is one bit

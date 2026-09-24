@@ -39,6 +39,7 @@ bool adc_select(uint8_t core)
 uint8_t adc_core(void)                    { return adc_cur->core; }
 uint8_t adc_dma_trigger(void)             { return adc_cur->dma_trigger; }
 const volatile void *adc_dma_source(void) { return adc_cur->CH0RES; }
+const volatile void *adc_dma_source_data(void) { return adc_cur->CH0DATA; }
 bool adc_ch0_flag(void)                   { return (*adc_cur->IFS & adc_cur->ch0_mask) != 0u; }
 
 void adc_clear_events(void)
@@ -173,6 +174,76 @@ void adc_set_mode_oversample(uint8_t accnum)
 }
 
 void adc_set_trg2(uint8_t trg2src) { ADCBITS(CH0CON1).TRG2SRC = trg2src; }
+
+/* IRQSEL (p1266): 0 = the channel event after every single conversion,
+ * result in CHxRES; 1 = after the channel's "sequence", which in Single
+ * Conversion mode is again every conversion (16.4.7, p1323), with the
+ * result in CHxDATA. The chain test tries 1 as the variant that does not
+ * hang the DMA trigger on RES's ready flag (ANALYSIS.md C.10 point 2). */
+void    adc_set_irqsel(uint8_t irqsel) { ADCBITS(CH0CON1).IRQSEL = irqsel ? 1u : 0u; }
+uint8_t adc_irqsel(void)               { return (uint8_t)ADCBITS(CH0CON1).IRQSEL; }
+
+/* Periodic offset calibration (16.4.13, p1326): ACALEN, CALREQ and
+ * CALRATE of ADnCON (ATDF masks 0x10000000, 0x20000000, 0x0C000000). A
+ * calibration that starts in the idle time between two triggers could
+ * delay the next one, undocumented; the chain needs all of them 0. */
+uint32_t adc_cal_bits(void)
+{
+    return ADCREG(CON) & (_AD5CON_ACALEN_MASK | _AD5CON_CALREQ_MASK |
+                          _AD5CON_CALRATE_MASK);
+}
+
+/* Channels 1..15 of core 5 that have a trigger source. The fixed priority
+ * scheme (16.4.1, p1319) delays higher channels behind lower ones, and a
+ * forgotten channel with a trigger would shift the grid. Only core 5 is
+ * listed (the chain's core); 0xFF for any other. */
+static volatile uint32_t *const ad5_chcon1[15] = {
+    &AD5CH1CON1,  &AD5CH2CON1,  &AD5CH3CON1,  &AD5CH4CON1,  &AD5CH5CON1,
+    &AD5CH6CON1,  &AD5CH7CON1,  &AD5CH8CON1,  &AD5CH9CON1,  &AD5CH10CON1,
+    &AD5CH11CON1, &AD5CH12CON1, &AD5CH13CON1, &AD5CH14CON1, &AD5CH15CON1,
+};
+
+uint32_t adc_other_channels_armed(void)
+{
+    if (adc_cur->core != 5u) { return 0xFFu; }
+    uint32_t n = 0u;
+    for (uint32_t i = 0; i < 15u; i++) {
+        if ((*ad5_chcon1[i] & 0x3Fu) != 0u) { n++; }  /* TRG1SRC[5:0] */
+    }
+    return n;
+}
+
+/* ------------------------------------------------------------------ *
+ * The channel-0 interrupt of core 5 as a counter, for the chain test's
+ * low rates: IRQ 241, IEC7/IFS7 bit 17, priority IPC30[6:4] (interrupt
+ * vector table "ADC 5 Data", _AD5CH0Interrupt). The same channel event
+ * also triggers the DMA; enabling it towards the CPU does not take it
+ * away from the DMA.
+ *
+ * read_res: the handler reads AD5CH0RES and passes the value on. Only
+ * while the DMA is NOT on the channel - the read clears CHxRRDY (p1262),
+ * and whether the DMA trigger hangs on that flag is one of the open
+ * questions; with the DMA on, the handler passes 0 and reads nothing.
+ * ------------------------------------------------------------------ */
+#define ADC_COUNT_PRIORITY  3u
+static volatile bool ch0_read_res = false;
+
+void adc_ch0_irq(bool on, bool read_res)
+{
+    IEC7bits.AD5CH0IE = 0u;
+    IFS7bits.AD5CH0IF = 0u;
+    ch0_read_res = read_res;
+    if (on) {
+        IPC30bits.AD5CH0IP = ADC_COUNT_PRIORITY;
+        IEC7bits.AD5CH0IE  = 1u;
+    }
+}
+
+void __attribute__((interrupt, no_auto_psv)) _AD5CH0Interrupt(void)
+{
+    IFS7bits.AD5CH0IF = 0u;           /* first, see dma.c                */
+    adc_ch0_event(ch0_read_res ? (uint16_t)(AD5CH0RES & 0xFFFu) : 0u);
+}
 void adc_set_period(uint8_t rptcnt) { ADCBITS(CON).RPTCNT = rptcnt; }
 
 uint8_t adc_mode(void)   { return (uint8_t)ADCBITS(CH0CON1).MODE; }
@@ -229,6 +300,7 @@ void adc_regs_dump(void)
     console_kv_hex("ADxCH0CNT", ADCREG(CH0CNT));
     console_kv_hex("ADxCH0RES", ADCREG(CH0RES));
     console_kv_hex("ADxCH0DATA", ADCREG(CH0DATA));
+    console_kv_hex("cal bits (ACALEN|CALREQ|CALRATE)", adc_cal_bits());
     console_kv_hex("IECx (this core's word)", *adc_cur->IEC);
     console_kv_hex("IFSx (this core's word)", *adc_cur->IFS);
     console_kv_hex("CH0 IRQ mask in it", adc_cur->ch0_mask);

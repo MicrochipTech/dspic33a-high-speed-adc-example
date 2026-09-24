@@ -98,6 +98,14 @@ int main(void)
         trap_seen = 0u;          /* reported once; the next trap re-arms it */
     }
 
+    /* A chain run that never reached its @END: say in which stage it
+     * was, so that the log of the next boot carries it. */
+    if ((chain_mark & 0xFFFF0000u) == CHAIN_MARK_MAGIC) {
+        console_kv("[boot] WARNING the last 'chain' run ended without @END, in stage S", chain_mark & 0xFFu);
+        console_puts("[boot] 'chain from <stage>' continues after it\r\n");
+    }
+    chain_mark = 0u;
+
     boot_mark(3u);
     clock_init();
     boot_mark(4u);

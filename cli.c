@@ -50,6 +50,8 @@
  *   clear                      zero the error counters
  *   led on|off|auto            LED0
  *   sweep [halves]             overrun vs sample rate, 1.25..40 MSPS, one table
+ *   chain all|from n|n|run     the chain test SCCP1 -> ADC -> DMA -> CPU
+ *                              (chaintest.c, docs/CHAIN-TEST-PLAN.md)
  *   reset                      software reset
  *
  * Every command ends its output with a newline and calls
@@ -70,6 +72,7 @@
 #include "adc.h"
 #include "dac.h"
 #include "dactest.h"
+#include "chaintest.h"
 #include "led.h"
 #include "diag.h"
 #include "console.h"
@@ -567,7 +570,7 @@ static void cmd_dac_fn(int argc, char **argv)
         usage("dac <on [slpdat]|off>  (DAC2 triangle 0x100..0xF00 on RA8; slpdat = counts per DAC clock, 8 = 22 kHz)");
         return;
     }
-    if (!dac2_triangle_start(0x100u, 0xF00u, (uint16_t)slp)) { put_line("dac: CLKGEN7 did not come up"); cmd_parser_fail(); return; }
+    if (!dac2_triangle_start(0x100u, 0xF00u, (uint16_t)slp)) { put_line("dac: refused - SLPDAT above 50 breaks the 0xCD+SLPDAT..0xF32-SLPDAT limits, or CLKGEN7 did not come up"); cmd_parser_fail(); return; }
     put_kv("dac slpdat", slp);
     put_kv("dac period ns", dac2_period_ns());
 }
@@ -1545,6 +1548,28 @@ static void cmd_test_fn(int argc, char **argv)
 }
 CMD_DEFINE(test, "test", cmd_test_fn, "test [all|self|clock|clkoff|bursts|matrix|rate|sweep|dac] [n]");
 
+/* The chain test (chaintest.c). "chain all" is the one command the
+ * person at the board types; the rest is for repeating a part. */
+static void cmd_chain_fn(int argc, char **argv)
+{
+    static const char use[] = "chain all | chain <0..9> | chain from <0..9> | chain run <ksps> [seconds]";
+    uint32_t a = 0u, b = 0u;
+    if ((argc == 2) && (strcmp(argv[1], "all") == 0)) {
+        chain_all(0u, 9u);
+    } else if ((argc == 3) && (strcmp(argv[1], "from") == 0) && arg_u32(argv[2], 0u, 9u, &a)) {
+        chain_all(a, 9u);
+    } else if ((argc == 2) && arg_u32(argv[1], 0u, 9u, &a)) {
+        chain_all(a, a);
+    } else if (((argc == 3) || (argc == 4)) && (strcmp(argv[1], "run") == 0) &&
+               arg_u32(argv[2], 1u, 40000u, &a) &&
+               ((argc == 3) || arg_u32(argv[3], 1u, 3600u, &b))) {
+        chain_run(a, (argc == 4) ? b : 10u);
+    } else {
+        usage(use);
+    }
+}
+CMD_DEFINE(chain, "chain", cmd_chain_fn, "chain all|<n>|from <n>|run <ksps> [s] - the chain test");
+
 static void cmd_reset_fn(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -1591,6 +1616,7 @@ void cli_init(void)
     (void)cmd_register(&cmd_buf);
     (void)cmd_register(&cmd_dac);
     (void)cmd_register(&cmd_dactest);
+    (void)cmd_register(&cmd_chain);
     (void)cmd_register(&cmd_reset);
 
     /* Banner, once at start-up. A human sees what is talking and which

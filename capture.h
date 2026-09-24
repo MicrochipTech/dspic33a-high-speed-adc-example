@@ -223,6 +223,42 @@ uint32_t capture_oneshot_ticks(void);
 /* The whole buffer. Only meaningful with the stream stopped. */
 const volatile uint16_t *capture_buffer(void);
 
+/* ---- The triggered stream: the chain of the example ----
+ *
+ * SCCP1 on CLKGEN13 paces channel 0 in Single Conversion mode (the
+ * caller has put the ADC in that mode), one DMA transfer per conversion,
+ * Repeated Continuous, no burst and no restart. See capture.c.
+ *
+ * capture_chain_start()  settle, counters cleared, DMA armed (source
+ *                        CH0DATA if src_data, else CH0RES), then SCCP1
+ *                        started last with period `ticks` of its clock
+ *                        in sccp_mode (sccp_mode_t). stop_after_done > 0:
+ *                        the DMA ISR stops the trigger at that DONE, and
+ *                        the buffer holds exactly the last block.
+ * capture_chain_wait()   until that stop, bounded in Timer1 ticks: 0, 6
+ *                        (timeout) or 8 (DMA switched itself off).
+ * capture_chain_stop()   trigger off first, the last transfer awaited,
+ *                        then settled. Returns the transfers counted.
+ * capture_transfers()    transfers so far: DONE blocks and DMA0CNT.
+ * capture_chain_window_ticks()  Timer1 from trigger start to stop.
+ * capture_fill()         the whole buffer to one value (a sentinel the
+ *                        ADC cannot produce), only with the DMA idle. */
+bool     capture_chain_start(uint32_t ticks, uint32_t sccp_mode,
+                             uint32_t stop_after_done, bool src_data);
+bool     capture_chain_active(void);
+uint32_t capture_chain_wait(uint32_t max_ticks);
+uint64_t capture_chain_stop(void);
+uint64_t capture_transfers(void);
+/* The guard words behind the buffer intact? (capture_service() stops in
+ * fail(11) instead; this one only reports.) */
+bool     capture_guard_ok(void);
+uint32_t capture_chain_window_ticks(void);
+void     capture_fill(uint16_t v);
+/* Processing cost of a half in Timer1 ticks, since counters_clear(). */
+extern volatile uint32_t proc_ticks_max;
+extern volatile uint32_t proc_ticks_sum;
+extern volatile uint32_t proc_count;
+
 /* Pointer to the half that completed last. */
 const volatile uint16_t *capture_completed_half(void);
 

@@ -104,6 +104,11 @@ void dma0_init(uint32_t trigger, const volatile void *src,
     console_puts("[dma] simulator stand-in armed: halves come from sim_dma_tick()\r\n");
 }
 
+uint32_t dma0_remaining(void)
+{
+    return 2u * sim_half_len;             /* always at a block boundary  */
+}
+
 bool dma0_enabled(void)
 {
     return sim_enabled;

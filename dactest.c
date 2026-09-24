@@ -156,7 +156,7 @@ uint32_t dactest_run(uint32_t bursts)
             uint64_t sl = (uint64_t)2u * 64u * 513280u * 32653061u;
             sl /= ((uint64_t)win_ns * f_dac);
             if (sl < 1u)   { sl = 1u; }
-            if (sl > 255u) { sl = 255u; }
+            if (sl > 50u)  { sl = 50u; }    /* 0x100..0xF00 within 0xCD+SLPDAT..0xF32-SLPDAT */
             console_kv("[dactest]   window ns expected", win_ns);
             console_kv("[dactest]   triangle slpdat chosen for it", (uint32_t)sl);
             if (!dac2_triangle_start(0x100u, 0xF00u, (uint16_t)sl)) {

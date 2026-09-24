@@ -117,6 +117,11 @@ void dma0_init(uint32_t trigger, const volatile void *src,
     console_trace_kv_hex("[dma] DMAHIGH", DMAHIGH);
 }
 
+uint32_t dma0_remaining(void)
+{
+    return DMA0CNT;                   /* transactions left in the block */
+}
+
 bool dma0_enabled(void)
 {
     return DMA0CHbits.CHEN != 0u;

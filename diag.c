@@ -31,6 +31,10 @@ volatile uint32_t boot_stage __attribute__((persistent));
 volatile uint32_t trap_seen  __attribute__((persistent));
 volatile uint32_t trap_vec   __attribute__((persistent));
 volatile uint32_t trap_stage __attribute__((persistent));
+/* The chain test's stage, same idea: set before each stage, cleared at
+ * its @END. CHAIN_MARK_MAGIC in the upper half says the word is ours and
+ * not the random content of RAM after power-up. */
+volatile uint32_t chain_mark __attribute__((persistent));
 
 /* ------------------------------------------------------------------ *
  * Stop here and say why - with the LED, because at this point there
