@@ -1213,10 +1213,17 @@ predicts 1000 fourteen times. There is nothing to interpret.
 the ladder than at the top: 100 against 1000 at 4 MSPS is a factor of ten, 952 against 1000 at
 40 MSPS is five per cent and within the noise of a single measurement. The slow rows decide
 the question almost on their own - and the slowest row is exactly the one that behaves oddly
-(`missed 19`, `process` overrun nearly double `idle`). So the verdict should rest on rows two
-to five, where the separation is still a factor of six to eight and no start-up effect is in
-play, and row one should be read separately. (Point made by the GUI session while building the
-evaluation into the tile.)
+(`missed 19`, `process` overrun nearly double `idle`).
+
+The rule, stated as the criterion rather than as positions: **use every row in which the two
+predictions differ by at least a factor of two, and drop the first row of the sweep.** The two
+exclusions have two different reasons - the first row is a cold start, the fast rows have no
+discriminating power - and naming the reasons keeps the rule right for a ladder with different
+steps. For run 15's ladder that is rows two to thirteen, twelve usable rows rather than the
+four a positional "rows two to five" would have kept. Row one stays in the table and gets its
+own comparison, just not as evidence. (First raised and then sharpened by the session building
+the evaluation into the GUI; the criterion form is theirs and is better than the positional
+one written here first.)
 
 **And the prediction rests on a number that was not in the output.** Every duration and every
 rate derived from a sweep row is (halves x samples per half) divided by a rate, so the
