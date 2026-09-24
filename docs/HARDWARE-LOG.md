@@ -1067,6 +1067,14 @@ Two explanations fit and they need separating:
   clear and every later entry sees it again - and at full rate there are 1.6 million entries
   a second, one per overrun. That would be our bug, and fixable.
 
+**How the next run separates them, and it is sharper than a guess.** The two explanations
+scale with different things: booking the same event twice scales with the number of
+interrupt entries, and therefore with the OVERRUN count; several transfers per conversion
+scales with the CONVERSION count. At 4 MSPS with 3.5 % overrun those are very different
+predictions - 140 000 entries per second against 3906 halves per second - so one sweep at a
+low rate and one at a high rate pin it down even if both effects run at once. (The
+observation is from the parallel session working on the GUI.)
+
 Built in reaction (no board run yet): three counters, `isr_entries`, `half_events` and
 `done_events`, printed per sweep row next to `blocks`. If `half_events` is of the order of
 the overrun count, the flags are not clearing and it is us. If it stays at one per 1024

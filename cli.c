@@ -444,6 +444,16 @@ static void cmd_status_fn(int argc, char **argv)
     put_kv("overrun", dma_overrun);
     put_kv("late", late_service);
     put_kv("missed", proc_missed);
+    /* The relation that decides where the lost samples come from: one
+     * burst is a whole buffer, so HALF fires once and DONE once, and
+     * blocks must be exactly twice bursts. A larger factor means the
+     * handler books the same event repeatedly; the factor itself is the
+     * measurement. Read per capture, no sweep needed. */
+    put_kv("bursts", burst_starts);
+    put_kv("blocks (must be 2x bursts)", blocks_done);
+    put_kv("isr_entries", isr_entries);
+    put_kv("half_events", half_events);
+    put_kv("done_events", done_events);
     put_kv("addr_err", dma_addr_err);
     put_kv("bus_err", dma_bus_err);
     put_kv("input", capture_pinsel());
