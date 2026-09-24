@@ -1287,3 +1287,85 @@ the answer.
 **When it will be settled.** The user gets his own board around 01.10.2026 - CLAAS ordered an
 EV17P63A, which is what the `nano-board` branch exists for. On his own hardware this is one
 command and half a minute, with nobody to ask.
+
+## 2026-09-24, run 16 - the counters answer, and the answer is not the one predicted
+
+`test sweep` on `e52701e`, the first build carrying the counters. Full text in
+`docs/logs/run16-test-sweep.txt`. The `+local changes` in the banner is `configurations.xml`,
+which MPLAB X rewrites, plus untracked build leftovers - nothing that touches the firmware,
+and `git log --oneline -1` confirmed `e52701e`.
+
+**The prediction was wrong. The handler counts honestly.**
+
+```
+postdiv   half + done   2 x bursts      isr      overrun
+  7/7        2019          2002        69792      69592
+  7/6        2016          2016        66416      66192
+  6/6        2014          2002        64134      63882
+  5/5        2014          2014        64600      64325
+  5/2        2010          2010        57285      56682
+  5/1        2004          2004        48429      47761
+```
+
+One HALF and one DONE per burst, in every row, with the few extra counts belonging to the
+clean one-shot that precedes each point. **There is no double booking.** The hypothesis that
+the sweep's tenfold rate was our own arithmetic is dead, and with it the comfortable ending in
+which the table was fine all along.
+
+**A defect of my own instrumentation, and it nearly hid the result.** The line printed
+`blocks (must be 2x bursts)` against values like 6078 and 85011, which looks like a factor of
+three and then of forty. `blocks_done` is **not** reset by `counters_clear()` - it is free
+running by design, because `seen_blocks` uses it - while every counter beside it is per point.
+A total was being compared with a sample. The relation only appears when the per-point delta
+is taken: 6070 per row, three sweep points of 2000 blocks each plus the one-shot. Fixed: the
+line now prints `half+done` beside `bursts`, which are the two quantities that belong together.
+
+**What the numbers leave standing is a sharper contradiction than before.**
+
+With the counting honest, each loaded point moved 2000 blocks - 1000 bursts of 2048
+conversions - and the `loaded` column says how long that took:
+
+```
+postdiv   nominal   clean (1 burst)   loaded    point took   conversions/s implied
+  7/7       4081         4044          40197      50.9 ms         40.2 M
+  5/5       8000         7872          40315      50.8 ms         40.3 M
+  5/2      20000        19161          40903      50.1 ms         40.9 M
+  5/1      40000        36728          41813      49.0 ms         41.8 M
+```
+
+**A single burst delivers the rate the PLL was set to. A thousand bursts deliver 40 MSPS
+whatever the PLL is set to.** Same registers, same board, one second apart. And the interrupt
+rate agrees with the second figure and not the first: 1.0 to 1.4 million entries per second in
+every row, which a converter running at 4 MSPS could not produce.
+
+The clean column is internally sound, which is what makes this hard to dismiss. After the
+timing fix of `f3143a3` its residual offset is a constant 4.2 to 5.3 us across the whole
+ladder - down from 11.3 - so a single burst really does take 2048 conversions divided by the
+configured rate.
+
+**Consequence for what may be claimed.** The statement "the sample rate follows the PLL
+setting" holds for **one isolated burst**. For continuous streaming - which is what a
+ping-pong application does and what the customer asked about - the measurement says the
+opposite. That is a walk-back of what run 15 was read to mean here, and it has to be said
+plainly rather than left in a footnote.
+
+Unaffected: the DAC triangle of run 14. It counts nothing and shows a known signal arriving
+complete and in order. The chain carries what the ADC converts; what is in dispute is how fast
+the ADC converts when it is not left alone.
+
+**Built in reaction, and it is one number that decides it.** `capture_oneshot_n(bursts)` runs
+N bursts back to back - the ISR restarts each one exactly as continuous streaming does - and
+times the lot. The sweep now measures the rate over **one** burst and over **ten** and prints
+both as `clean1` and `clean10`:
+
+- `clean10` equals `clean1`: bursts in a stream behave like an isolated one, and the
+  difference is created by something in continuous operation itself.
+- `clean10` jumps towards 40 MSPS: the **first** burst is the odd one, and every "clean" rate
+  measured so far describes a start-up rather than the stream. In that case the PLL setting
+  never influenced the streaming rate at all, and the agreement of run 15's clean column with
+  the setting was an artefact of measuring exactly one burst each time.
+
+The second outcome would mean the rate is not settable in continuous operation on this
+silicon, which is the opposite of what the last two entries concluded. Written down here before
+the run, as the previous prediction was - that one turned out wrong, and it should be visible
+that it did.

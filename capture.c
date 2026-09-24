@@ -209,7 +209,7 @@ static volatile bool     overrun_abort  = false;
  * test reported "DMA channel disabled" (run 9). */
 static volatile uint32_t overrun_run    = 0;
 /* One burst and then stop, decided in the ISR (capture_oneshot). */
-static volatile bool     oneshot        = false;
+static volatile uint32_t oneshot_left   = 0u;  /* bursts still to run */
 static volatile uint32_t oneshot_ticks  = 0;   /* of the burst alone */
 
 /* capture.h: the defined idle state every test starts from. */
@@ -382,16 +382,24 @@ void dma0_event(uint32_t st)
             adc_set_input(pinsel_next, samc_next);
             switch_pending = false;
         }
-        if (oneshot) {
+        if (oneshot_left != 0u) {
             /* One buffer and no more, decided here rather than by the
              * main loop: at the full rate the main loop can be tens of
              * milliseconds behind, and by the time it asked for a stop
              * the buffer would have been overwritten a thousand times
              * over. Stopping from the ISR leaves exactly the 2 * half_len
              * samples of this burst standing, contiguous and unmolested. */
-            oneshot      = false;
-            run_enabled  = false;
-            burst_active = false;
+            /* One burst less to go. Only the last one ends the run;
+             * the others restart immediately, exactly as continuous
+             * streaming does - which is the point of measuring more than
+             * one (run 16). */
+            oneshot_left--;
+            if (oneshot_left != 0u) {
+                start_burst();
+            } else {
+                run_enabled  = false;
+                burst_active = false;
+            }
         } else if (run_enabled) {
             start_burst();            /* next 2 * half_len samples      */
         } else {
@@ -947,6 +955,12 @@ void capture_variant_regs(void)
 
 uint32_t capture_oneshot(void)
 {
+    return capture_oneshot_n(1u);
+}
+
+uint32_t capture_oneshot_n(uint32_t bursts)
+{
+    if (bursts == 0u) { bursts = 1u; }
     /* Fill the buffer exactly once and stop. The ADC burst is CNT =
      * 2 * half_len conversions, so one burst is one full buffer: HALF at
      * the middle, DONE at the end, and the ISR does not restart it. The
@@ -955,8 +969,8 @@ uint32_t capture_oneshot(void)
      * where the main loop cannot keep up (run 11). */
     (void)capture_settle();
     counters_clear();
-    const uint32_t target = blocks_done + 2u;   /* HALF and DONE        */
-    oneshot = true;
+    const uint32_t target = blocks_done + (2u * bursts);  /* HALF and DONE each */
+    oneshot_left = bursts;
     capture_start();
     /* The clock starts HERE, not before capture_settle(): taking the DMA
      * channel down and setting it up again costs a fixed 11.3 us, and
@@ -967,7 +981,7 @@ uint32_t capture_oneshot(void)
     const uint32_t t0 = timebase_ticks();
     const uint32_t rc = wait_for_blocks(target);
     oneshot_ticks = timebase_ticks() - t0;
-    oneshot = false;
+    oneshot_left  = 0u;
     capture_stop();
     return rc;
 }

@@ -812,9 +812,17 @@ static bool sweep_row(struct pll_step st, uint32_t halves)
      * 42 MSPS everywhere, while a clean burst at the same setting
      * measured 3990 ksps against 4081 nominal - run 13). Both are printed,
      * because the difference is the artefact. */
-    uint32_t clean_ksps = 0u;
+    uint32_t clean_ksps = 0u, clean10_ksps = 0u;
     {
         const uint32_t nn = 2u * capture_half_len();
+        /* Ten bursts as well as one. In run 16 a single burst delivered
+         * the rate the PLL was set to and a thousand delivered 40 MSPS at
+         * every setting; ten bursts sit between the two and say which of
+         * them a burst in a stream resembles. */
+        if (capture_oneshot_n(10u) == 0u) {
+            clean10_ksps = timebase_ksps(10u * nn, capture_oneshot_ticks());
+        }
+        (void)capture_settle();
         if (capture_oneshot() == 0u) {
             /* The burst alone - capture_oneshot_ticks() excludes the DMA
              * teardown and setup, whose fixed 11.3 us used to make every
@@ -841,7 +849,8 @@ static bool sweep_row(struct pll_step st, uint32_t halves)
     *p++ = '/';                                p = u32_to_str(p, st.p2);
     p = copy_str(p, "  adc clock Hz ");        p = u32_to_str(p, clock_adc_hz());
     p = copy_str(p, "  ksps nom ");            p = u32_to_str(p, capture_nominal_ksps(0u));
-    p = copy_str(p, " clean ");                p = u32_to_str(p, clean_ksps);
+    p = copy_str(p, " clean1 ");               p = u32_to_str(p, clean_ksps);
+    p = copy_str(p, " clean10 ");              p = u32_to_str(p, clean10_ksps);
     p = copy_str(p, " loaded ");               p = u32_to_str(p, meas_ksps);
     p = copy_str(p, "  overrun idle/process/sfr ");
     for (int l = 0; l < 3; l++) {
@@ -860,12 +869,16 @@ static bool sweep_row(struct pll_step st, uint32_t halves)
      * of the overrun count instead, the status flags are not clearing and
      * the handler is booking the same event over and over - our bug, not
      * the silicon's. */
-    char c2[128];
+    /* blocks_done is NOT reset by counters_clear() - it is free running,
+     * so printing it raw next to per-point counters compared a total
+     * against a sample and made the relation unreadable (run 16). The
+     * delta over this point is what belongs beside them. */
+    char c2[144];
     char *q = copy_str(c2, "[sweep]   isr ");  q = u32_to_str(q, isr_entries);
     q = copy_str(q, "  half ");                q = u32_to_str(q, half_events);
     q = copy_str(q, "  done ");                q = u32_to_str(q, done_events);
     q = copy_str(q, "  bursts ");             q = u32_to_str(q, burst_starts);
-    q = copy_str(q, "  blocks ");             q = u32_to_str(q, blocks_done);
+    q = copy_str(q, "  half+done ");          q = u32_to_str(q, half_events + done_events);
     q = copy_str(q, " (must be 2x bursts)");
     copy_str(q, "\r\n");
     console_puts(c2);
@@ -892,7 +905,8 @@ void console_sweep(uint32_t halves, bool choose)
                  "[sweep] idle = CPU polls RAM only, process = main-loop processing, sfr = CPU polls an SFR\r\n"
                  "[sweep] overrun must be 0 for a usable rate; late/missed are from the process run\r\n"
                  "[sweep] postdiv = PLL1 POSTDIV1/POSTDIV2; the adc clock is read back from the registers\r\n"
-                 "[sweep] clean = rate of one burst with nothing else running; loaded = rate while\r\n"
+                 "[sweep] clean1/clean10 = rate over one burst and over ten, nothing else running;\r\n"
+                 "[sweep] loaded = rate while the three runs below are going\r\n"
                  "[sweep] the three runs below are going. Trust clean: the loaded figure is\r\n"
                  "[sweep] measured by a CPU drowning in overrun interrupts\r\n");
 

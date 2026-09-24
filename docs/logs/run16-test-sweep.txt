@@ -1,0 +1,87 @@
+Run 16, 2026-09-24 - "test sweep" on the EV74H48A, the run with the counters.
+Build banner: adc_dma_40msps Sep 24 2026 20:01:35 git e52701e+local changes (master)
+
+git status before the run showed only adc_dma_40msps.X/nbproject/configurations.xml
+modified (MPLAB X rewrites languageToolchainVersion) plus untracked build leftovers
+(cleanup.bat, defmplabxtrace.log, .inx) - nothing that affects the firmware. Hence
+the "+local changes" in the banner. git log --oneline -1 reported e52701e, which is
+the commit carrying the counters.
+
+Relayed by the user; the terminal wrapped long lines and the wraps were undone.
+
+-------------------------------------------------------------------------------
+
+[boot] uart up on FRC, 115200 8N1
+
+##############################################################
+##   ADC/DMA TEST LOG  -  START OF RUN  (copy from here)    ##
+##############################################################
+
+[boot] adc_dma_40msps Sep 24 2026 20:01:35 git e52701e+local changes (master)
+[boot] RCON: 0x00000080
+[boot] reset cause: EXTR
+
+adc_dma_40msps - ADC at 40 MSPS into RAM via DMA
+board: EV74H48A, dsPIC33AK512MPS512 GP DIM
+build: adc_dma_40msps Sep 24 2026 20:01:35 git e52701e+local changes (master)
+type 'help' for the commands
+please log this terminal from power-up and send it back
+> [boot] pll1 postdiv1: 7
+[boot] pll1 postdiv2: 7
+[boot] adc clock Hz: 32653061
+[boot] sample rate ksps (back-to-back): 4081
+
+[boot] READY - nothing is converting, the console has the CPU
+[boot] type 'help' for all commands, 'test' for the parts of a run,
+[boot] 'test all' for the whole thing. Please log this terminal from
+[boot] power-up and send it back.
+
+test sweep
+[test] sweep: the ladder from the slowest rate up
+[sweep] halves per point: 2000
+[sweep] samples per half: 1024
+[sweep] samples per point: 2048000
+[sweep] back-to-back conversions; the rate is the ADC clock, PLL1 output dividers
+[sweep] slowest rate first: the first row is the one the DMA should manage,
+[sweep] so a failure there is the chain, not the rate
+[sweep] idle = CPU polls RAM only, process = main-loop processing, sfr = CPU polls an SFR
+[sweep] overrun must be 0 for a usable rate; late/missed are from the process run
+[sweep] postdiv = PLL1 POSTDIV1/POSTDIV2; the adc clock is read back from the registers
+[sweep] clean = rate of one burst with nothing else running; loaded = rate while
+[sweep] the three runs below are going. Trust clean: the loaded figure is
+[sweep] measured by a CPU drowning in overrun interrupts
+[sweep] timer check, ticks per 100 ms (expect 1250000): 1250001
+[sweep] postdiv 7/7  adc clock Hz 32653061  ksps nom 4081 clean 4044 loaded 40197  overrun idle/process/sfr 69592/69575/69592  late 0  missed 1614
+[sweep]   isr 69792  half 1010  done 1009  bursts 1001  blocks 6078 (must be 2x bursts)
+[sweep] postdiv 7/6  adc clock Hz 38095238  ksps nom 4761 clean 4703 loaded 40197  overrun idle/process/sfr 66192/67374/66192  late 0  missed 1940
+[sweep]   isr 66416  half 1008  done 1008  bursts 1008  blocks 12180 (must be 2x bursts)
+[sweep] postdiv 6/6  adc clock Hz 44444444  ksps nom 5555 clean 5487 loaded 40587  overrun idle/process/sfr 63882/64892/63882  late 0  missed 1949
+[sweep]   isr 64134  half 1007  done 1007  bursts 1001  blocks 18271 (must be 2x bursts)
+[sweep] postdiv 7/5  adc clock Hz 45714285  ksps nom 5714 clean 5644 loaded 41039  overrun idle/process/sfr 61994/62976/61994  late 0  missed 1957
+[sweep]   isr 62370  half 1007  done 1007  bursts 1001  blocks 24362 (must be 2x bursts)
+[sweep] postdiv 6/5  adc clock Hz 53333333  ksps nom 6666 clean 6569 loaded 40933  overrun idle/process/sfr 60346/60760/60346  late 0  missed 1925
+[sweep]   isr 60774  half 1001  done 1001  bursts 1001  blocks 30395 (must be 2x bursts)
+[sweep] postdiv 7/4  adc clock Hz 57142857  ksps nom 7142 clean 7031 loaded 40328  overrun idle/process/sfr 65798/66586/65798  late 0  missed 1910
+[sweep]   isr 66131  half 1002  done 1002  bursts 1002  blocks 36443 (must be 2x bursts)
+[sweep] postdiv 5/5  adc clock Hz 64000000  ksps nom 8000 clean 7872 loaded 40315  overrun idle/process/sfr 64325/64678/64325  late 0  missed 1931
+[sweep]   isr 64600  half 1007  done 1007  bursts 1007  blocks 42510 (must be 2x bursts)
+[sweep] postdiv 6/4  adc clock Hz 66666666  ksps nom 8333 clean 8186 loaded 40249  overrun idle/process/sfr 67938/73337/67939  late 0  missed 1977
+[sweep]   isr 68339  half 1005  done 1004  bursts 1001  blocks 48709 (must be 2x bursts)
+[sweep] postdiv 5/4  adc clock Hz 80000000  ksps nom 10000 clean 9789 loaded 40539  overrun idle/process/sfr 62775/64178/63056  late 0  missed 1952
+[sweep]   isr 63280  half 1008  done 1008  bursts 1008  blocks 54794 (must be 2x bursts)
+[sweep] postdiv 6/3  adc clock Hz 88888888  ksps nom 11111 clean 10852 loaded 40596  overrun idle/process/sfr 63754/65527/63754  late 0  missed 1966
+[sweep]   isr 64005  half 1004  done 1004  bursts 1004  blocks 60882 (must be 2x bursts)
+[sweep] postdiv 5/3  adc clock Hz 106666666  ksps nom 13333 clean 12981 loaded 41215  overrun idle/process/sfr 60489/61335/60489  late 0  missed 1940
+[sweep]   isr 60775  half 1001  done 1001  bursts 1001  blocks 66923 (must be 2x bursts)
+[sweep] postdiv 6/2  adc clock Hz 133333333  ksps nom 16666 clean 15990 loaded 40671  overrun idle/process/sfr 56780/56945/56780  late 0  missed 1914
+[sweep]   isr 57448  half 1002  done 1002  bursts 1002  blocks 72947 (must be 2x bursts)
+[sweep] postdiv 5/2  adc clock Hz 160000000  ksps nom 20000 clean 19161 loaded 40903  overrun idle/process/sfr 56682/56675/56682  late 0  missed 1915
+[sweep]   isr 57285  half 1005  done 1005  bursts 1005  blocks 78984 (must be 2x bursts)
+[sweep] postdiv 5/1  adc clock Hz 320000000  ksps nom 40000 clean 36728 loaded 41813  overrun idle/process/sfr 47761/48047/47761  late 0  missed 1887
+[sweep]   isr 48429  half 1002  done 1002  bursts 1002  blocks 85011 (must be 2x bursts)
+[sweep] rows: 14
+[sweep] rows with overrun 0, late 0 and missed 0: 0
+[sweep] NO CLEAN RATE - every row lost samples or halves
+[sweep] done: counters cleared
+[test] sweep: done - read the table, there is no single verdict
+>

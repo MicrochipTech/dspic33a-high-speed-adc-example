@@ -205,6 +205,16 @@ bool capture_service(void);
  * rate where the main loop runs tens of milliseconds behind the DMA.
  * Returns 0, or 6/8 from the wait. */
 uint32_t capture_oneshot(void);
+/* The same, but `bursts` bursts back to back before it stops - the ISR
+ * restarts each one exactly as continuous streaming does, and only the
+ * last ends the run. It exists to answer the contradiction of run 16: a
+ * single burst delivers the rate the PLL was set to, while a run of a
+ * thousand delivers about 40 MSPS whatever the setting. If the rate
+ * measured over ten bursts equals the rate over one, the first burst is
+ * ordinary and the difference lies in continuous operation; if it jumps,
+ * the first burst is the odd one and every "clean" rate measured so far
+ * describes a start-up, not the stream. */
+uint32_t capture_oneshot_n(uint32_t bursts);
 /* Timer1 ticks of the last one-shot, the BURST ALONE - the DMA channel
  * being taken down and set up again costs a fixed 11.3 us and used to sit
  * inside the measured window, which made every rate read low (run 14).
