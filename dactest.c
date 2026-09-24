@@ -147,9 +147,8 @@ uint32_t dactest_run(uint32_t halves)
     }
 
     /* ---- one buffer, then the ISR stops ---------------------------- */
-    const uint32_t t0 = timebase_ticks();
-    const uint32_t rc = capture_oneshot();
-    const uint32_t ticks = timebase_ticks() - t0;
+    const uint32_t rc    = capture_oneshot();
+    const uint32_t ticks = capture_oneshot_ticks();   /* the burst alone */
     if (rc != 0u) {
         console_puts((rc == 8u) ? "[dactest] the DMA channel switched itself off\r\n"
                                 : "[dactest] no data\r\n");

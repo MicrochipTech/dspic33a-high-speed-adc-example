@@ -1000,3 +1000,80 @@ gains CLKGEN13 on PLL1 and a derived peripheral-clock figure. `adc.c` gains the 
 the matrix needs back (single conversion, oversampling, TRG2 and RPTCNT setters).
 
 Both builds `-Wall -Wextra` clean; RAM about 9 KB of 64 KB.
+
+## 2026-09-24, run 14 - master 7a9331a, build 18:20:43 - THE RATE FOLLOWS THE SETTING
+
+`test all`. Self-test 3825, DAC test PASS, and the sweep answers the question the project
+was built for.
+
+**The rate control works across the whole ladder.** The `clean` column - one burst, nothing
+else running, timed with Timer1 - follows the setting over a factor of ten:
+
+```
+postdiv  adc clock Hz  nominal   clean    postdiv  adc clock Hz  nominal   clean
+  7/7      32653061      4081     3991      5/4       80000000    10000     9492
+  7/6      38095238      4761     4641      6/3       88888888    11111    10474
+  6/6      44444444      5555     5392      5/3      106666666    13333    12421
+  7/5      45714285      5714     5537      6/2      133333333    16666    15229
+  6/5      53333333      6666     6433      5/2      160000000    20000    18053
+  7/4      57142857      7142     6876      5/1      320000000    40000    32862
+  5/5      64000000      8000     7660
+  6/4      66666666      8333     7965
+```
+
+**The shortfall is ours, and it is a constant.** It grows from 2.2 % at the bottom to 17.8 %
+at the top, which looks like a rate-dependent error and is not. Converted to window
+durations, every row shows the same offset:
+
+```
+  7/7   should 501.8 us   measured 513.2 us   +11.4 us
+  5/5   should 256.0 us   measured 267.4 us   +11.4 us
+  5/2   should 102.4 us   measured 113.4 us   +11.0 us
+  5/1   should  51.2 us   measured  62.3 us   +11.1 us
+```
+
+Eleven microseconds, independent of the rate: `capture_oneshot()` started the clock before
+`capture_settle()`, so taking the DMA channel down and setting it up again sat inside the
+measured window. The same fixed cost is 2 % of a 500 us burst and 18 % of a 51 us one.
+**Corrected, the delivered rate matches the setting to better than 1 % at every point** -
+5/1 works out at 40157 against 40000 nominal. Fixed after this run: the clock starts after
+`capture_start()` and `capture_oneshot_ticks()` reports the burst alone.
+
+**The DAC test passes on its own merits**, with the ramp visible in the dump: 3728 falling
+monotonically to 629 across the window, no reversal, largest step 90 counts out of a swing
+of 3240, against a step limit of 405. Complete and in order.
+
+**`test clkoff` unchanged:** 390 halves with CLKGEN6 switched off. The ADC does not run on
+that generator, whatever Table 16-1 says.
+
+**And one contradiction is left, sharper than before.**
+
+The `loaded` column reads about 41 000 kSPS at *every* setting - including the rows where a
+clean burst at the same configuration measures 3991. A factor of ten, same registers, same
+board, seconds apart. That finally settles that every rate figure from runs 4 to 11 was an
+artefact; it also asks how the stream can count ten times as many halves under load.
+
+Together with the second oddity: there are overruns **at 4 MSPS** - 70 702 of 2 048 000
+samples in the idle run, 3.5 %, and 702 in the DAC test's single burst. At 4 MSPS the DMA
+has eight times the headroom it needs against the 33 M transfers/s Microchip quotes. That is
+not bandwidth.
+
+Two explanations fit and they need separating:
+
+- **One conversion produces several DMA transfers.** Microchip acknowledges exactly this for
+  this silicon: *"ADC triggers for DMA on this device have an issue. A few transfers are
+  possible per one trigger. We are working to fix this problem in the next device revision."*
+- **The handler books the same HALF or DONE more than once**, because the status flag did not
+  clear and every later entry sees it again - and at full rate there are 1.6 million entries
+  a second, one per overrun. That would be our bug, and fixable.
+
+Built in reaction (no board run yet): three counters, `isr_entries`, `half_events` and
+`done_events`, printed per sweep row next to `blocks`. If `half_events` is of the order of
+the overrun count, the flags are not clearing and it is us. If it stays at one per 1024
+transfers while the counts still race, the transfers really are happening and it is the
+silicon. One more `test sweep` decides it.
+
+**What can be said to the customer already:** ADC to DMA to RAM with a double buffer works on
+this device, the samples arrive complete and in the order they were converted, and the sample
+rate is settable over PLL1 from 4 to 40 MSPS to better than 1 %. What is still open is the
+loss at a given rate - the number that turns "it works" into "at 8 MSPS nothing is lost".

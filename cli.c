@@ -805,10 +805,11 @@ static bool sweep_row(struct pll_step st, uint32_t halves)
     uint32_t clean_ksps = 0u;
     {
         const uint32_t nn = 2u * capture_half_len();
-        const uint32_t t0 = timebase_ticks();
         if (capture_oneshot() == 0u) {
-            const uint32_t dt = timebase_ticks() - t0;
-            clean_ksps = timebase_ksps(nn, dt);
+            /* The burst alone - capture_oneshot_ticks() excludes the DMA
+             * teardown and setup, whose fixed 11.3 us used to make every
+             * rate read low, by 2.2 % at 4 MSPS and 17.8 % at 40 (run 14). */
+            clean_ksps = timebase_ksps(nn, capture_oneshot_ticks());
         }
         (void)capture_settle();
     }
@@ -841,6 +842,21 @@ static bool sweep_row(struct pll_step st, uint32_t halves)
     p = copy_str(p, "  missed ");             p = u32_to_str(p, missed);
     copy_str(p, "\r\n");
     console_puts(line);               /* blocking: works from main() too */
+
+    /* The three numbers that answer why there are overruns at 4 MSPS,
+     * where the DMA has eight times the headroom it needs, and why the
+     * loaded rate reads ten times the clean one. From the process run.
+     * half + done must equal the halves counted; if half is of the order
+     * of the overrun count instead, the status flags are not clearing and
+     * the handler is booking the same event over and over - our bug, not
+     * the silicon's. */
+    char c2[128];
+    char *q = copy_str(c2, "[sweep]   isr ");  q = u32_to_str(q, isr_entries);
+    q = copy_str(q, "  half ");                q = u32_to_str(q, half_events);
+    q = copy_str(q, "  done ");                q = u32_to_str(q, done_events);
+    q = copy_str(q, "  blocks ");              q = u32_to_str(q, blocks_done);
+    copy_str(q, "\r\n");
+    console_puts(c2);
     return ok[SWEEP_PROCESS] && (ov[SWEEP_PROCESS] == 0u) && (missed == 0u) && (late == 0u);
 }
 
@@ -1147,10 +1163,9 @@ static bool matrix_point(capture_variant_t v, uint32_t want, bool show_regs)
     if (show_regs) { capture_variant_regs(); }
 
     const uint32_t nominal = capture_variant_ksps();
-    const uint32_t n       = 2u * capture_half_len();
-    const uint32_t t0      = timebase_ticks();
-    const uint32_t rc      = capture_oneshot();
-    const uint32_t ticks   = timebase_ticks() - t0;
+    const uint32_t n     = 2u * capture_half_len();
+    const uint32_t rc    = capture_oneshot();
+    const uint32_t ticks = capture_oneshot_ticks();   /* the burst alone */
     (void)capture_settle();
 
     if (rc != 0u) {

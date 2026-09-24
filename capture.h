@@ -32,6 +32,11 @@ extern volatile uint16_t last_sample;    /* last value of the completed half */
 extern volatile uint32_t ready_half;     /* 0 or 1: which half is complete */
 extern volatile uint32_t selftest_mean;  /* last self-test result (~3840)  */
 extern volatile int32_t  proc_result;    /* output of process_buffer()     */
+/* Why these exist: see capture.c. They separate "one conversion causes
+ * several DMA transfers" from "the handler counts the same event twice". */
+extern volatile uint32_t isr_entries;    /* calls of dma0_event()          */
+extern volatile uint32_t half_events;    /* HALF seen set                  */
+extern volatile uint32_t done_events;    /* DONE seen set                  */
 
 /* DMA channel 0 from the ADC result into buf[], HALF/DONE interrupts
  * enabled. Nothing transfers until capture_start(). */
@@ -198,6 +203,11 @@ bool capture_service(void);
  * rate where the main loop runs tens of milliseconds behind the DMA.
  * Returns 0, or 6/8 from the wait. */
 uint32_t capture_oneshot(void);
+/* Timer1 ticks of the last one-shot, the BURST ALONE - the DMA channel
+ * being taken down and set up again costs a fixed 11.3 us and used to sit
+ * inside the measured window, which made every rate read low (run 14).
+ * Use this instead of timing around capture_oneshot(). */
+uint32_t capture_oneshot_ticks(void);
 /* The whole buffer. Only meaningful with the stream stopped. */
 const volatile uint16_t *capture_buffer(void);
 

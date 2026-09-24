@@ -122,6 +122,29 @@ volatile uint32_t ready_half    = 0;   /* 0 = buf[0..], 1 = buf[1024..]    */
 volatile uint32_t selftest_mean = 0;   /* mean seen on ADxAN6, ~3840       */
 volatile int32_t  proc_result   = 0;   /* output of process_buffer()       */
 
+/* Three counters that exist for one question, raised by run 14: the
+ * sweep reported overruns at 4 MSPS, where the DMA has eight times the
+ * headroom it needs, and its loaded rate column read ten times the rate
+ * a clean burst measures at the same setting. Two explanations fit and
+ * they need separating.
+ *
+ *   (a) one conversion produces several DMA transfers. Microchip
+ *       acknowledges exactly that for this silicon: "ADC triggers for DMA
+ *       on this device have an issue. A few transfers are possible per
+ *       one trigger."
+ *   (b) the handler books the same HALF or DONE more than once, because
+ *       the status flag did not clear and every later entry - and at full
+ *       rate there are 1.6 million of them a second, one per overrun -
+ *       sees it again. That would be our bug, and fixable.
+ *
+ * The three numbers tell them apart. If half_events is of the order of
+ * the overrun count, the flags are not clearing: (b). If they stay at one
+ * per 1024 transfers while the counts still race, the transfers really
+ * are happening: (a). */
+volatile uint32_t isr_entries   = 0;   /* calls of dma0_event()            */
+volatile uint32_t half_events   = 0;   /* HALF seen set                    */
+volatile uint32_t done_events   = 0;   /* DONE seen set                    */
+
 /* Note 1: errata DS80001162E item 2 - BRERR is only set when RETEN = 1,
  * and RETEN also raises a trap. This example leaves RETEN = 0, so
  * dma_bus_err effectively counts write errors (BWERR) only. */
@@ -177,6 +200,7 @@ static volatile bool     overrun_abort  = false;
 static volatile uint32_t overrun_run    = 0;
 /* One burst and then stop, decided in the ISR (capture_oneshot). */
 static volatile bool     oneshot        = false;
+static volatile uint32_t oneshot_ticks  = 0;   /* of the burst alone */
 
 /* capture.h: the defined idle state every test starts from. */
 bool capture_settle(void)
@@ -292,6 +316,7 @@ void capture_halt(void)
  * ------------------------------------------------------------------ */
 void dma0_event(uint32_t st)
 {
+    isr_entries++;
     if (st & DMA0_OVERRUN) {
         /* Triggered while the previous transfer was still in progress
          * (p816): the bus did not keep up. This is the measurement. */
@@ -327,12 +352,14 @@ void dma0_event(uint32_t st)
     }
 
     if (st & DMA0_HALF) {
+        half_events++;
         dma0_clear(DMA0_HALF);
         ready_half  = 0u;
         last_sample = buf[half_len - 1u];
         blocks_done++;
     }
     if (st & DMA0_DONE) {
+        done_events++;
         dma0_clear(DMA0_DONE);
         ready_half  = 1u;
         last_sample = buf[2u * half_len - 1u];
@@ -577,6 +604,7 @@ void counters_clear(void)
 {
     overrun_abort = false;            /* re-arm the brake               */
     overrun_run   = 0;
+    isr_entries = 0; half_events = 0; done_events = 0;
     dma_overrun = 0; dma_addr_err = 0; dma_bus_err = 0;
     late_service = 0; proc_missed = 0;
     /* Halves completed up to now are not "missed" from here on. Without
@@ -919,10 +947,23 @@ uint32_t capture_oneshot(void)
     const uint32_t target = blocks_done + 2u;   /* HALF and DONE        */
     oneshot = true;
     capture_start();
+    /* The clock starts HERE, not before capture_settle(): taking the DMA
+     * channel down and setting it up again costs a fixed 11.3 us, and
+     * with it inside the window every rate came out low - by 2.2 % at
+     * 4 MSPS and 17.8 % at 40, purely because the same 11.3 us is a
+     * different share of a shorter burst (run 14). Corrected, the
+     * delivered rate matches the setting to better than 1 % everywhere. */
+    const uint32_t t0 = timebase_ticks();
     const uint32_t rc = wait_for_blocks(target);
+    oneshot_ticks = timebase_ticks() - t0;
     oneshot = false;
     capture_stop();
     return rc;
+}
+
+uint32_t capture_oneshot_ticks(void)
+{
+    return oneshot_ticks;
 }
 
 const volatile uint16_t *capture_buffer(void)
