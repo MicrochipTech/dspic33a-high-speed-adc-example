@@ -943,3 +943,75 @@ Changed in reaction (no board run yet):
   table.
 
 Both builds `-Wall -Wextra` clean.
+
+## 2026-09-24, the SCCP path was never actually tested - three errors, all ours
+
+Two AI analyses of Microchip's internal support cases, plus the device pack's ATDF, between
+them explain every SCCP failure in runs 5 to 7. The path was never a test of the hardware.
+
+**1. The trigger number selected the wrong module.** Datasheet Table 16-4 lists `100010` = 34
+as "SCCP1 trigger" and 32 as "PTG trigger 12", and on 23.09. this code was "fixed" from 32 to
+34 on the strength of it. The ATDF names what each number selects (value group
+`AD_CH_CON1__TRG1SRC`): `0x20` = 32 is **"SCCP1 OC/IC Event"**, 0x21 SCCP2, **0x22 = 34 is
+SCCP3**, and PTG is 0x1e = 30. So the ADC was told to listen to SCCP3 while SCCP1 was being
+configured. The original 32 was right; the "fix" was the regression.
+
+**2. The auxiliary output carried the wrong signal.** ATDF value group
+`CCP_CCP1CON2__AUXOUT`: 0 disabled, **1 = "Timer Base Reset/Rollover"** - what this code used -
+**2 = "Special Event Trigger" / "OC Event"**, 3 = no output / OC signal. Microchip's knowledge
+base says the same in words: the special event trigger is what the ADC listens for, the
+rollover is not. And it is available in timer mode, so the mode was never the problem.
+
+**3. The trigger module ran off the wrong clock.** `CCP1CON1.CLKSEL` has two values: 0 is the
+standard-speed peripheral clock, which comes from PLL2, and **1 is Clock Generator 13**. The
+ADC runs off PLL1. From a support case: "ADC triggers go through synchronizers. If the trigger
+source is clocked from a different clock source than the ADC, trigger timing can be jittery.
+To avoid this the ADC trigger source module must be clocked from the same clock source used
+for ADC." The same case describes a working setup with CLKGEN6 and CLKGEN13 both on PLL1.
+
+Any one of the three was enough for "no conversion at all".
+
+**Also from the support cases, and it answers the customer's question:**
+
+> "The total all DMAs transfers rate is 33.3MHz (transfers per second). It means that
+> interleaving of DMAs will not help."
+> "CPU is only way to store the 40MSPS ADC result."
+> "20 MSPS confirmed PASS." / "Stable PASS was achieved only at effective 20 MSPS interleave."
+> "ADC triggers for DMA on this device have an issue. A few transfers are possible per one
+> trigger. We are working to fix this problem in the next device revision."
+
+One of those cases is titled "DMA cannot keep up with 40msps ADC - DSPIC33AK512MPS512", the
+same device. 8 MSPS sits at a quarter of the stated ceiling and below a rate others have
+confirmed stable. The trigger issue is a caveat that belongs in any customer statement.
+
+**Built in reaction: `test matrix` (no board run yet).**
+
+Every documented way to set the rate, asked of the board rather than reasoned about, each at
+three rate points (4, 8 and 20 MSPS):
+
+```
+  back-to-back, rate from PLL1
+  SCCP1 timer + special event, peripheral clock      | the 2x2 over the two
+  SCCP1 timer + special event, CLKGEN13              | suspected mistakes:
+  SCCP1 output compare, peripheral clock             | event type and clock
+  SCCP1 output compare, CLKGEN13                     | source
+  SCCP1 as in runs 5-7 (trigger 34, rollover)   - must fail, confirms the diagnosis
+  SCCP1 special event as TRG2 inside a burst
+  ADC repeat timer (RPTCNT)                     - for the record
+  oversampling, ACCNUM divides the event rate
+  CLKGEN6 divider                               - for the record
+```
+
+Four questions per variant, each with an instrument that has earned trust: does it convert at
+all (bounded, so a dead variant costs milliseconds); does the rate follow, measured on **one
+clean burst** with Timer1 and never under load; how many **DMA transfers per trigger**
+(2048 / (window / trigger period) - the direct measurement of the acknowledged issue); and are
+the data intact, from the DAC triangle, run only for the variants that got that far so the log
+stays readable. A summary table at the end names what passed.
+
+New: `sccp.c/.h` with clock source, mode and event as parameters rather than fixed values -
+the documentation has been wrong about this module twice, so the board decides. `clock.c`
+gains CLKGEN13 on PLL1 and a derived peripheral-clock figure. `adc.c` gains the channel modes
+the matrix needs back (single conversion, oversampling, TRG2 and RPTCNT setters).
+
+Both builds `-Wall -Wextra` clean; RAM about 9 KB of 64 KB.

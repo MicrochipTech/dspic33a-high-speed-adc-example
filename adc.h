@@ -71,6 +71,24 @@ void    adc_set_input(uint8_t pinsel, uint8_t samc);
 uint8_t adc_pinsel(void);
 uint8_t adc_samc(void);
 
+/* ---- Channel mode and trigger, for the variant matrix ----
+ * Only while no burst is in flight; capture.c takes the stream down
+ * first. Trigger codes come from the ATDF, which names what each number
+ * selects - see sccp.h for why that matters here.
+ *   burst        Integration, software start, back-to-back inside
+ *   single       one conversion per TRG1 trigger, no burst
+ *   oversample   Integration of ACCNUM conversions per ready event */
+void    adc_set_mode_burst(void);
+void    adc_set_mode_single(uint8_t trg1src);
+void    adc_set_mode_oversample(uint8_t accnum);
+void    adc_set_trg2(uint8_t trg2src);
+void    adc_set_period(uint8_t rptcnt);    /* RPTCNT, the repeat timer */
+uint8_t adc_mode(void);
+uint8_t adc_trg1(void);
+uint8_t adc_trg2(void);
+uint8_t adc_accnum(void);
+uint8_t adc_period(void);
+
 /* Take the core down and bring it back. The clock of a running core is
  * not changed: the caller calls adc_deinit(), changes CLKGEN6, calls
  * adc_reinit() and gets ADRDY back (bounded wait; false on timeout, and

@@ -349,6 +349,50 @@ static uint32_t pll1_out_hz(void)
     return (uint32_t)(vco / ((uint64_t)p1 * p2));
 }
 
+bool clock_trig_on(void)
+{
+    /* Same source and same sequence as CLKGEN6, so that the ADC and the
+     * module that triggers it are fed from one clock. No divider: the
+     * rate is set by the SCCP's own period register, which is 32 bits
+     * wide and reaches far lower than any divider here would. */
+    CLK13CON = 0x29500u;              /* NOSC = PLL1 out, ON            */
+    CLK13DIV = 0u;                    /* straight through               */
+    CLK13CONbits.OSWEN = 1u;
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+    return true;
+#else
+    uint32_t n = DIVSW_WAIT_LIMIT;
+    while (CLK13CONbits.OSWEN && (--n != 0u)) { }
+    if (n == 0u) { return false; }
+    n = DIVSW_WAIT_LIMIT;
+    while (!CLK13CONbits.CLKRDY && (--n != 0u)) { }
+    return n != 0u;
+#endif
+}
+
+void clock_trig_off(void)
+{
+    CLK13CONbits.ON = 0u;
+}
+
+uint32_t clock_trig_hz(void)
+{
+    /* Whatever PLL1 puts out, divided by CLK13DIV - derived, like the ADC
+     * clock, so a generator that did not switch shows up in the number. */
+    const uint32_t raw = CLK13DIVbits.INTDIV * 512u + CLK13DIVbits.FRACDIV;
+    const uint32_t div = (raw == 0u) ? 100u : ((raw * 200u + 256u) / 512u);
+    return (uint32_t)(((uint64_t)pll1_out_hz() * 100u) / div);
+}
+
+uint32_t clock_periph_hz(void)
+{
+    /* CLKGEN1 feeds the system clock and the peripheral clock; the
+     * standard-speed peripheral clock is half the CPU clock (Timer1 at
+     * 12.5 MHz with its 1:8 prescaler confirms it, and the timer check
+     * reports 1 250 001 ticks per 100 ms against 1 250 000 expected). */
+    return clock_cpu_hz() / 2u;
+}
+
 uint32_t clock_dac_hz(void)
 {
     return pll1_out_hz();           /* CLKGEN7, CLK7DIV straight through */

@@ -9,6 +9,7 @@
       <itemPath>../adc.h</itemPath>
       <itemPath>../dma.h</itemPath>
       <itemPath>../capture.h</itemPath>
+      <itemPath>../sccp.h</itemPath>
       <itemPath>../led.h</itemPath>
       <itemPath>../diag.h</itemPath>
       <itemPath>../console.h</itemPath>
@@ -37,6 +38,7 @@
       <itemPath>../dma.c</itemPath>
       <itemPath>../sim_dma.c</itemPath>
       <itemPath>../capture.c</itemPath>
+      <itemPath>../sccp.c</itemPath>
       <itemPath>../led.c</itemPath>
       <itemPath>../diag.c</itemPath>
       <itemPath>../timebase.c</itemPath>

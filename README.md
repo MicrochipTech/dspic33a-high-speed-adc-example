@@ -45,7 +45,7 @@ To be precise about how much of this code rests on something that has run on sil
 | Part of this code | Origin | Has run on hardware? |
 |---|---|---|
 | Clock setup: PLL1/PLL2 divider values, CLKGEN1/CLKGEN6 settings, switching sequence | bit-identical to the MCC-generated `clock.c` of [dspic33ak-curiosity-adc-40msps](https://github.com/microchip-pic-avr-examples/dspic33ak-curiosity-adc-40msps) | yes, in that example |
-| ADC trigger scheme: Integration mode, software trigger starts a burst, the ADC's repeat timer paces the conversions (`MODE = 2`, `TRG1SRC = 1`, `TRG2SRC = 3`, `RPTCNT`, `AD3SWTRG`) | datasheet Example 16-4 (p1330) for the repeat timer; the example below and Example 16-6 (p1331) for the burst | partly — Microchip's example uses back-to-back (`TRG2SRC = 2`) and reads one 800-sample burst from `AD3CH0RES` in an assembler loop, **without DMA and without restarting the burst**. This code ran back-to-back first too; the board showed the delivered rate did not follow `SAMC` then (`docs/HARDWARE-LOG.md`, run 4), hence the repeat timer |
+| ADC trigger scheme: Integration mode, software trigger starts a burst, the conversions inside it run back-to-back (`MODE = 2`, `TRG1SRC = 1`, `TRG2SRC = 2`, `AD3SWTRG`) | the same as Microchip's 40 MSPS example, plus Example 16-6 (p1331) for the burst | yes — and by elimination. Every documented way to pace the conversions inside a burst was tried on the board and none worked (`docs/HARDWARE-LOG.md` runs 4 to 7): the repeat timer and `SAMC` are ignored, the SCCP1 trigger produces no conversion at all. Back-to-back is what is left, and the rate comes from the ADC clock |
 | DMA basics: `DMALOW`/`DMAHIGH` window, status flags cleared by writing 0, control register layout | MCC `dma.c` of [dspic33a-dac-dma-sinewave](https://github.com/microchip-pic-avr-examples/dspic33a-dac-dma-sinewave) and datasheet Examples 13-1 to 13-4 (p832 ff.) | yes — but memory-to-DAC in Repeated One-Shot mode, the opposite direction and a far lower rate |
 | **ADC burst → DMA in Repeated Continuous mode → one buffer with `HALF`/`DONE` interrupts → burst restarted from the `DONE` ISR** | **our own construction**, assembled from datasheet §13.4.8 (Example 13-4, p835), §13.6.1.2 (HALF interrupt, p848) and §16.4.5 (p1322) | **no.** There is no Microchip example for this combination. This is the part `docs/TROUBLESHOOTING.md` §1.1 flags as the remaining risk |
 | Self-test on the internal 15/16·VDD reference (ADxAN6) | the input and its sample time come from datasheet Example 16-3 (p1328), which uses it for gain calibration; the pass/fail logic is ours | the input yes, the check no |
@@ -60,14 +60,45 @@ page it rests on.
 
 ## Read this first
 
-**What has run on hardware, and what has not.** Since 23.09.2026 this code runs on the
-EV74H48A: clock tree, console, ADC core, DMA channel and the self-test on the internal
-reference all work on silicon, and every one of those runs is recorded with its log in
-`docs/HARDWARE-LOG.md`. What is **not** settled is the measurement itself: the first
-sweep showed the ADC ignoring the sample time with the back-to-back trigger and losing
-about 4 % of the samples to DMA overruns at full rate; the trigger was changed to the
-ADC's repeat timer in response, and that version has not been on the board yet. Treat
-the rate figures as open until the log says otherwise.
+**What has run on hardware.** Since 23.09.2026 this code runs on the EV74H48A, and
+thirteen runs are recorded with their logs in `docs/HARDWARE-LOG.md`. As of 24.09.2026
+the following is proven on silicon, not argued from the datasheet:
+
+- Clock tree, console, ADC core, DMA channel and the self-test on the internal
+  reference.
+- **The measurement chain itself.** With a known triangle from the on-chip DAC routed
+  to the ADC, one captured buffer contains the triangle: a clean rise, one turning
+  point, a clean fall, the largest step between two neighbouring samples 113 counts out
+  of a swing of 1440, no jump and no gap (run 13). **The ADC converts a real changing
+  signal and the DMA places every result in the ping-pong buffer, complete and in the
+  order it was converted.**
+- **The sample rate follows the setting.** One clean burst, timed with Timer1, delivered
+  3990 kSPS against 4081 nominal — 2.2 % off (run 13).
+
+**What is not settled.** How far up that stays true. At the undivided clock the DMA
+loses about 4 % of the samples as overruns, and because every overrun raises the DMA
+interrupt — 1.6 million per second, one every 625 ns — the CPU stops coming back to the
+main loop at all. The rate at which the chain stays lossless is exactly what the sweep
+is for, and the table from a board is still outstanding.
+
+**One number to distrust.** Every rate figure measured *under load* in runs 4 to 11 —
+the sweep's old `measured` column — is wrong by about a factor of ten. It was taken by a
+CPU drowning in the overrun interrupt. The sweep now measures each rate on a single
+clean burst as well and prints both, because the difference between the two columns is
+the artefact itself.
+
+**Two things about this device that cost us four days**, both in `docs/HARDWARE-LOG.md`
+with register evidence, and both worth knowing before you trust a datasheet page here:
+
+1. Nothing paces the conversions inside a burst. The ADC's repeat timer (`TRG2SRC = 3`,
+   `RPTCNT`) and the SCCP1 trigger were configured correctly, read back correctly and
+   ignored; `SAMC` does not change the rate either. The conversions run back-to-back and
+   the only thing that changes the rate is the ADC clock.
+2. The CLKGEN6 divider does not change the ADC clock. Every ratio was written, read back
+   and confirmed by `DIVSWEN` and `CLKRDY` — with the generator switched off around the
+   write and with it left running as Example 12-2 prescribes — and the rate did not
+   move. The ADC also kept converting with CLKGEN6 switched off entirely. **The rate is
+   set with PLL1's output dividers instead**, which works.
 
 Parts of this example were **AI-assisted**. All register names, bitfields and value
 ranges were taken from datasheet **DS70005591D**, the errata **DS80001162E** and the
@@ -76,38 +107,45 @@ of use — so every setting can be checked against the primary source.
 
 **Revision history**
 
-- **2026-09-23, first runs on the board** (four of them, all in `docs/HARDWARE-LOG.md`).
-  Found and fixed: the console's tail garbled at the clock switch (flush first); a
-  lost DMA `DONE` because the interrupt flag was cleared at the end of the handler and
-  the status flags by read-modify-write; the sample buffer is a dedicated volatile
-  object with guard words and the DMA window is exactly that buffer; `RCON` is
-  reported at boot; the rate sweep runs automatically and measures the rate with
-  Timer1. Found and not yet closed: the delivered rate did not follow `SAMC` with the
-  back-to-back trigger, so the conversions are now paced by the ADC's repeat timer
-  (`TRG2SRC = 3`, `RPTCNT`) — untested on the board at the time of writing. The
-  source was also split into modules (`board.h`, `clock`, `adc`, `dma`, `capture`,
-  `led`, `diag`, `cli`) with a simulator build for the buffer logic.
+- **2026-09-24, nine more runs on the board, and the chain proved** (runs 5 to 13, all
+  in `docs/HARDWARE-LOG.md`). The firmware was rebuilt around what the board actually
+  does:
+  - **Back-to-back only.** The repeat timer, the SCCP1 trigger as second and as first
+    trigger, `sccp.c/.h`, the pacing selection and the `pacing`/`period` commands are
+    gone: four mechanisms, four times ignored by the hardware.
+  - **The rate comes from PLL1's output dividers**, 1600 MHz / (POSTDIV1 · POSTDIV2),
+    40 down to 4.08 MSPS with 8 MSPS exactly on the ladder. The CLKGEN6 divider is kept
+    as the `clk` command with a warning; do not build on it.
+  - **Nothing runs by itself.** The firmware boots, sets the slowest rate and waits.
+    `test` lists the parts of a run, `test all` runs them. The reason: through seven runs
+    the console never received a byte, and only an idle board could show that this was
+    the receive interrupt starving behind the DMA interrupt rather than a wiring fault.
+  - **An emergency brake in the DMA handler.** Past 500 000 overruns in one measurement
+    it masks its own interrupt and takes the channel down, so a rate that floods the CPU
+    ends in a log line instead of a silent board.
+  - **A DAC test that proves the data.** The on-chip DAC2 is routed to the ADC *inside
+    the chip* over the UREF line, so no pin and no wire are involved; one buffer is
+    captured with the stream stopped from the interrupt, and the judgement is made
+    afterwards on the stored samples.
+- **2026-09-23, first runs on the board** (four of them). Found and fixed: the console's
+  tail garbled at the clock switch (flush first); a lost DMA `DONE` because the interrupt
+  flag was cleared at the end of the handler and the status flags by read-modify-write;
+  the sample buffer is a dedicated volatile object with guard words and the DMA window is
+  exactly that buffer; `RCON` is reported at boot; the rate is measured with Timer1. The
+  source was also split into modules (`board.h`, `clock`, `adc`, `dma`, `capture`, `led`,
+  `diag`, `cli`) with a simulator build for the buffer logic.
 - **2026-09-22, after the first report from a board** — the project's tool is the PKOB4
   (`pkob4hybrid`). A first attempt had run against a PC-side tool instead of the board
-  and looked like a dead board; that was the whole cause. The project now has no
-  alternative tool configuration at all — this example needs the hardware, so there is
-  nothing to pick wrongly. A second change made in the same breath — setting
-  `OSCCTRL.PLLxEN` and waiting for `PLLxRDY` before the first divider switch — was
-  reverted after review: it rests on Example 16-3, a snippet from the ADC chapter whose
-  own arithmetic is wrong, and it waits for a lock on the POR dividers. The clock code
-  follows the MCC sequence again, which has run on silicon. The reasoning is in
-  `clock_init()` and in `docs/TROUBLESHOOTING.md` so it does not get re-added.
-  `regs` now also dumps `IEC3`/`IFS3`/`IPC12` and the console's own pin routing
-  (`RPCON`, `RPOR28`, `RPINR13`, `TRISH`, `TRISD`) — with a silent console those were
-  exactly the registers the troubleshooting guide asked for and the dump did not show.
+  and looked like a dead board; that was the whole cause. A second change made in the
+  same breath — setting `OSCCTRL.PLLxEN` and waiting for `PLLxRDY` before the first
+  divider switch — was reverted after review: it rests on Example 16-3, a snippet from
+  the ADC chapter whose own arithmetic is wrong, and it waits for a lock on the POR
+  dividers. The clock code follows the MCC sequence again, which has run on silicon.
 - **2026-09-22, third revision** — moved to the **EV74H48A** with the dsPIC33AK512MPS512
   DIM (the board of Microchip's own 40 MSPS example): ADC3 on the mikroBUS A analog pin,
   LED0 on RC8, pin table below. A **command console** (`cli.c`, on the parser from
   [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser)) on the MCP2221A USB-UART
-  channel: `status`, `start`/`stop`, `samc`, `input`, `selftest`, `stats`, `dump`,
-  `clear`, `led`, `reset`. The console runs in the UART receive interrupt below the DMA
-  interrupt. The ADC core is now a compile-time choice (`ADC_INSTANCE`), so the
-  potentiometer on ADC5 is two defines away.
+  channel. The console runs in the UART receive interrupt below the DMA interrupt.
 - **2026-09-22, second revision** — tailored so that the first run needs nothing but
   the board: a **self-test** on the ADC's internal 15/16·VDD reference runs before the
   external input is used; **LED0 reports** heartbeat, error and a stop code; every
@@ -233,18 +271,47 @@ measurements come from, and the results carry over because the silicon is the sa
 
 ## First run on hardware
 
-Here is what to expect and where it is most likely to trip you up. The boot path,
-the self-test and the sweep have run on a board (`docs/HARDWARE-LOG.md`); the steps
-below are still the way to read a first run.
+**The firmware runs no test by itself.** It boots, brings the console up, sets the
+slowest sample rate and waits. Everything else is typed. That is deliberate: through
+seven board runs the console never received a byte, and it could not be told whether the
+bytes never arrived or whether the receive interrupt was starving behind the DMA
+interrupt. With nothing converting after the boot, that question answers itself — and it
+turned out to be the starvation.
 
-### Step 1 — read the LED, no signal and no debugger needed
+### Step 1 — the console answers
 
-Program the board and watch LED0:
+Open the board's USB-UART channel at 115200 8N1 and reset. About a dozen lines appear,
+ending in `[boot] READY`. Then type a character: it echoes. Then type `help`.
+
+If nothing echoes, stop here — it is the terminal, the COM port or the wiring, not the
+firmware. Nothing is converting at this point, so nothing can starve the receiver.
+
+### Step 2 — run the parts of a test
+
+```
+test              lists the parts and what each one proves
+test all          self, clock, clkoff, sweep, dac, in that order, with a verdict
+test self         ADC -> DMA -> RAM on the internal 15/16*VDD reference
+test clock        switch every CLKGEN6 ratio and read it back (no measurement)
+test clkoff       switch CLKGEN6 off: does the ADC still convert?
+test rate         delivered rate at the rate set now, from one clean burst
+test sweep        the rate ladder, slowest first, with the counters
+test dac          the DAC triangle through the chain: is everything there, in order?
+```
+
+`test all` stops only if `test self` fails — without a working chain every number after
+it is meaningless. Everything else runs to the end and reports.
+
+Two commands set the rate by hand: `pll <p1> <p2>` (the one that works) and `clk <ratio>`
+(the CLKGEN6 divider, which does not change the rate on this silicon and is kept for the
+record). `regs` prints the register dump.
+
+### Step 3 — read the LED
 
 | LED0 | Meaning |
 |---|---|
-| **slow blink, 1 Hz** | running, self-test passed, no error counter has moved. This is the goal. |
-| fast blink, 5 Hz | running, but an error counter is non-zero — `dma_overrun`, `late_service`, `proc_missed`, `dma_addr_err` or `dma_bus_err`. With one channel and nothing else on the CPU that should not happen; read the counters. |
+| **slow blink, 1 Hz** | running, no error counter has moved. This is the goal. |
+| fast blink, 5 Hz | running, but an error counter is non-zero — `dma_overrun`, `late_service`, `proc_missed`, `dma_addr_err` or `dma_bus_err`. |
 | *n* short blinks, pause, repeat | stopped at a checkpoint; *n* is the code below. `fail_code` holds the same number. |
 | dark, or steadily on | nothing runs at all: not programmed, no power, or stopped in a debugger |
 
@@ -263,83 +330,35 @@ The stop codes:
 | 9 | a CPU trap or an interrupt with no handler | the `[TRAP]` block on the console — it names the vector, the boot stage and the `INTCON*` cause bits. `docs/TROUBLESHOOTING.md` §2.0b |
 | 10 | the fail-safe clock monitor moved the CPU to the backup FRC | the `[CLKF]` lines: `OSCCTRL`, `PLL2CON`, `CLK1CON` |
 | 11 | something wrote past the end of the sample buffer | the `[guard]` lines: which of the 16 guard words behind `buf` changed and what it holds. A 12-bit value there means the DMA ran past the buffer |
-| 12 | the delivered sample rate does not follow the period of a pacing source fixed by `ADC_PACING` | the `[ratetest]` lines: nominal and measured kSPS at two periods four times apart, measured against Timer1. Off by more than 10 %, or the two not four times apart, means that source does not pace the ADC — or the time base check above them is not 1 250 000. With `ADC_PACING` AUTO (default) a failing source is not fatal: the `[pacing] summary` line says which passed and which one is in use |
 
-**What the self-test proves.** Before the external pin is used, the code runs the
-identical clock, ADC, DMA and interrupt chain on the ADC's internal 15/16·VDD reference
-(AD3AN6, Table 16-2) and checks that the mean of a buffer half is 3840 ± 5 %. Only then
-does it switch the channel to AD3AN5 — between two bursts, when the channel is idle. A
-slow blink therefore means the whole chain has been verified on the silicon in front
-of you, with a number, not just "something interrupts".
+**What the self-test proves, and what it cannot.** It runs the identical clock, ADC, DMA
+and interrupt chain on the ADC's internal 15/16·VDD reference (AD3AN6, Table 16-2) and
+checks that the mean of a buffer half is 3840 ± 5 %. That is a real end-to-end check of
+the wiring — but it samples a **constant**, so a result register that never changed would
+give exactly the same mean. Only the DAC test can tell those apart, which is why it
+exists.
 
-With a debugger attached you can additionally halt and read the counters:
+**The counters**, readable with `status` or a debugger:
 
 | Variable | Should be |
 |---|---|
-| `blocks_done` | increasing — at 40 MSPS a buffer half completes every 25.6 µs, so this climbs fast |
+| `blocks_done` | increasing while a test runs a stream |
 | `selftest_mean` | ≈ 3840 |
 | `last_sample` | changing once a signal is connected; noise around some level on an open pin |
-| `dma_overrun` | **0** |
+| `dma_overrun` | **0** at a usable rate; at the undivided clock it is about 4 % of the samples |
 | `dma_addr_err` | **0** — non-zero means the DMA address window is wrong |
 | `late_service`, `proc_missed` | **0** |
 | `fail_code` | 0 |
 
-### Step 2 — feed a signal in
-
-**Which pin.** The code samples `AD3AN5` (`ADC_INSTANCE 3`, `ADC_PINSEL 5`), which is
-**RA0** — on the Curiosity Platform board the **AN pin of mikroBUS socket A** (see "The
-board" above). Signal to that pin, generator ground to a mikroBUS GND pin. On another
-board or package, the input map is Table 16-2 of DS70005591D, from page 1224. Without a
-generator, turn the potentiometer instead: it is on ADC5, two defines and a longer
-sample time away (table above).
-
-**What level.** 0 to 3.3 V, single ended against AVSS, unipolar (`DIFF = 0`). Anything
-with a negative excursion gets clipped at the bottom.
-
-**What frequency.** This matters more than people expect. One buffer half is 1024
-samples, which at 40 MSPS is **25.6 µs**. A 1 kHz sine fills 2.5 % of one period — in
-the buffer that is a straight line. For a recognisable waveform use something in the
-**100 kHz to a few MHz** range, then several periods fit in the window.
-
-**Source impedance — the most likely reason for odd values.** `SAMC = 0` means a sample
-time of 0.5 TAD = 6.25 ns, and in that time your source has to charge the hold
-capacitor. A 50 Ω function generator manages; a high-impedance divider or a long cable
-does not, and you get values that are too small or smeared. If the picture looks wrong,
-**`ADC_SAMC` at the top of the source is the first knob to turn** — raise it and see
-whether the amplitude comes up.
-
-### Step 3 — look at the buffer
-
-The halves refill 39 000 times per second, so you have to stop the capture to see
-anything: set a breakpoint in the DMA0 ISR, then view `buf` in the watch window or as
-a memory view.
-
-Which half to look at: `ready_half` says which one was completed last (0 = `buf[0]` to
-`buf[1023]`, 1 = `buf[1024]` to `buf[2047]`). The DMA is filling the *other* one.
-
 ### If it does not work
 
-| Symptom | Where to look first |
-|---|---|
-| MPLAB X halts on a line nobody set a breakpoint on ("break session") | a CPU trap or an unhandled interrupt. This build catches them: LED code 9 and a `[TRAP]` block naming the vector, the boot stage and the cause bits — `docs/TROUBLESHOOTING.md` §2.0b |
-| LED blinks a code 1 … 5 | clock or ADC configuration — the code says which step; the registers to read are in the table above |
-| LED code 6 right after programming | ADC not converting (`CNTSTAT` stays 0?), or wrong DMA trigger (`DMA0SEL`) |
-| LED code 6 after a moment of blinking | the burst restart in the ISR did not take — `docs/TROUBLESHOOTING.md` §1.1 |
-| LED code 7 | self-test mean off — read `selftest_mean`; far too low points at the sample time, way off at the clock |
-| LED code 8 | the DMA disabled itself on an address fault — `DMALOW`/`DMAHIGH` |
-| `dma_overrun` counting up | the shared DMA bus is not keeping up — see below, this is the interesting result |
-| values far too small or flat | source impedance, raise `ADC_SAMC` |
-| values look like a straight line | signal frequency too low for a 25.6 µs window |
-| values above 4095 | `DMA0SRC` points at the accumulator (`AD3CH0DATA`) instead of `AD3CH0RES` |
-| `late_service` or `proc_missed` counting up | the ISR or `main()` is not keeping up, reduce the processing or enlarge `SAMPLES_PER_HALF` |
-
-Note that `dma_overrun` counting up is not a bug in this code — it is the measurement
-this example exists for.
-
-**If you get stuck, read [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).** It goes
-through each wait loop and what being stuck there means, lists the symptoms in the order
-you are likely to meet them, and — most usefully — **names the places where we are least
-sure of our own code**, so you do not spend time on the parts that are solid.
+`docs/TROUBLESHOOTING.md` is the guide, and it is written symptom first: it starts with
+the places where we doubt our own code, then walks the symptoms in the order you will
+meet them — it does not compile, it lands in a break session, the LED blinks a code,
+`dma_overrun` counts up, the values look wrong, the console is silent. `docs/HARDWARE-LOG.md`
+is the other half: every run on this board, dated, with what the log said and what was
+changed because of it. If something here surprises you, it has probably surprised us
+first and is written down there.
 
 ## How it works
 
@@ -378,65 +397,32 @@ this operating point — *"Input frequency 320 MHz, ADC clock 80 MHz, TAD 12.5 n
 so non-integer ratios are possible — but this example does not need one: both clock
 generators take their PLL output straight through, `CLK1DIV = CLK6DIV = 0`.
 
-### 2. ADC — one core, one channel, bursts of 2048 conversions paced by the repeat timer
+### 2. ADC — one core, one channel, bursts of 2048 conversions back-to-back
 
-![ADC path](docs/02_adc_path.png)
+`MODE = 10` is Integration mode: a software trigger (`TRG1SRC = 1`, `AD3SWTRG`) starts a
+burst, and every following conversion inside it is started by `TRG2SRC`. `CNT` is the
+number of conversions in the burst and is tied to the DMA buffer, so one burst is one
+full buffer and the DMA's `DONE` interrupt is also the moment to start the next one.
+`IRQSEL = 0` raises the channel event after **every** conversion, and that event is what
+triggers the DMA.
 
-| Field | Value | Why |
-|---|---|---|
-| `PINSEL` | 5 | analog input AD3AN5 = mikroBUS A AN on the EV74H48A (Table 16-2, from page 1224; `ADC_PINSEL`) |
-| `NINSEL` | 0 | negative input on AVSS, i.e. single ended |
-| `DIFF` | 0 | single ended → unsigned result |
-| `FRAC` | 0 | integer, right aligned (page 1265) |
-| `SAMC` | 0 | sample time 0.5 TAD = minimum (page 1266) |
-| `MODE` | 2 | **Integration**: a burst of `CNT` conversions (page 1267) |
-| `CNT` | 2048 | conversions per burst = one DMA buffer (`AD3CH0CNT`, page 1272) |
-| `TRG1SRC` | 0x01 | **software trigger** starts the burst (Table 16-3, page 1226) |
-| `TRG2SRC` | 0x03 | **repeat timer** triggers every further conversion (Table 16-4, page 1227): *"clocked from the ADC analog core clock (TAD), and its period is set by RPTCNT[5:0]"* (§16.4.5, page 1322) |
-| `RPTCNT` | 2 | period of that timer in TAD = 12.5 ns → 40 MSPS nominal (`AD3CON[23:18]`, `ADC_RPTCNT`; `period <2..63>` at run time) |
-| `IRQSEL` | 0 | channel event **after each conversion**, when `AD3CH0RES` is ready (page 1266) |
-| `EIEN` | 0 | no early interrupt — note 4 on page 1265 forbids it with DMA |
-| `ACCNUM` | 0 | oversampling only, unused in this mode |
+**`TRG2SRC = 2`, back-to-back, and nothing else.** The datasheet offers a repeat timer
+(`TRG2SRC = 3` with the period in `RPTCNT`) and external triggers such as SCCP1
+(`TRG2SRC = 34`). On this silicon none of them work:
 
-**On the trigger choice**, since that was the original question — and since the first
-version of this code got it wrong: there is no register setting that makes a channel
-free-run forever. §16.4.5 (page 1322) is explicit:
+| Tried | Result on the board |
+|---|---|
+| Repeat timer, `RPTCNT` 2 … 63 | register holds the value, rate does not change (runs 5, 6, 7) |
+| SCCP1 as second trigger, code 34, `AUXOUT = 01` | **no conversion at all** (run 7) |
+| One conversion per SCCP1 trigger, Single Conversion mode, `TRG1SRC = 34` | **no conversion at all** (run 7) |
+| Sample time `SAMC` 0 … 31 | rate does not change (run 4) |
 
-- `TRG2SRC` *"are not used for a Single Conversion mode (MODE = 00)"*, and Table 16-3
-  lists the back-to-back value as *reserved* for `TRG1SRC`. So "single conversion plus
-  immediate re-trigger" converts exactly nothing.
-- Back-to-back triggering (`0b000010`) and the repeat timer (`0b000011`) exist only as
-  `TRG2SRC`, i.e. in the multisample modes (Window, Integration, Oversampling), and
-  there the **first** conversion needs a `TRG1SRC` trigger. Integration mode then runs
-  `CNT` conversions (max 65535) and stops.
+All four were removed from this example after run 7, together with `sccp.c/.h`. What
+remains is the one mechanism the hardware honours, and the rate is set by the ADC clock —
+see *Which sample rates you can get*.
 
-That is why this code works in bursts: a software trigger starts 2048 conversions, the
-ADC's repeat timer triggers each of them, and the DMA `DONE` interrupt — which arrives
-when the 2048th sample has landed in RAM — starts the next burst. The gap between
-bursts is the interrupt latency, once per 51.2 µs, so the measured rate will sit a
-little below the nominal one.
-
-**Why the repeat timer and not back-to-back.** The first version used `TRG2SRC = 2`,
-back-to-back, like Microchip's own 40 MSPS example and datasheet Example 16-6. On the
-board the rate sweep then showed the same overrun and missed counts for every `SAMC`
-from 0 to 31 (`docs/HARDWARE-LOG.md`, run 4): the delivered rate did not follow the
-sample time, the ADC simply ran as fast as it could — and §16.4.5 says of back-to-back
-that *"the timing is affected (can be delayed) by priorities of other channels"*. The
-repeat timer (`TRG2SRC = 3`, Example 16-4 on page 1330) is the ADC's own time base: one
-trigger every `RPTCNT` TAD, deterministic, and the sweep measures it with Timer1.
-
-Two more consequences of Integration mode that are easy to miss:
-
-- **The per-conversion result is `AD3CH0RES`**, `RES[11:0]`. `AD3CH0DATA` is the
-  accumulator of the whole burst (page 1270) — pointing the DMA there gives you a
-  running sum, not samples.
-- **`IRQSEL` must be 0** so that the channel event fires for every conversion; with
-  `IRQSEL = 1` it fires once per burst and the DMA would move one value per 51.2 µs.
-
-Lower rates are set through the sample time, the repeat timer or the ADC input clock —
-see "Which sample rates you can get" below. PWM or SCCP triggers are only needed if
-sampling must be tied to a switching event or run far below 1 MSPS, PTG only for
-staggered sequences across several cores.
+The per-conversion result is `ADxCH0RES[11:0]`. `ADxCH0DATA` is the burst accumulator
+(page 1270) and is **not** what the DMA reads.
 
 ### 3. DMA into one buffer with two halves
 
@@ -485,231 +471,145 @@ the cause of the next overrun.
 
 ## The console
 
-Open the MCP2221A's COM port (115200 8N1). At start-up the firmware prints a banner
-with the build time stamp, then the `> ` prompt; if you connect later, press Enter and
-the prompt answers:
-
-```
-adc_dma_40msps - ADC at 40 MSPS into RAM via DMA
-board: EV74H48A, dsPIC33AK512MPS512 GP DIM
-build: Sep 22 2026 14:31:07
-type 'help' for the commands
->
-```
-
-The console is the [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser) module in
-`cmd_parser.c`, unchanged, with the commands of this example in `cli.c`:
+UART2 on the board's MCP2221A USB-UART channel, 115200 8N1, no flow control. The parser
+is [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser), copied unchanged except for
+one line (the command table is 24 entries instead of 16). It runs in the UART receive
+interrupt, below the DMA interrupt — which is why a rate that overruns makes the console
+unresponsive, and why the firmware boots idle.
 
 | Command | Does |
 |---|---|
-| `help` | lists the commands |
-| `version` | build id (date, time, git revision), board and compile-time configuration: the `[build]` block from the boot |
-| `status` | run state and every counter from "What to measure", plus input, sample time, self-test mean and stop code |
-| `regs` | the clock, ADC, DMA, interrupt and UART registers as hex, plus the counters — the dump `docs/TROUBLESHOOTING.md` Part 4 asks for |
-| `start`, `stop` | start the burst stream / let the current buffer finish and stop |
-| `samc <0..31>` | sample time in TAD steps: (2·SAMC + 0.5) TAD — the aperture, not the rate. Applied between two bursts |
-| `buf [n]` | samples per buffer half in use, 16…1024 (allocated at 1024, default 1024); only while stopped, the next `start` sets ADC burst, DMA block and guard words up for it |
-| `core <1..5> [pinsel]` | switch the ADC core at run time (stream stopped, core down, DMA re-armed on the new core's trigger): `core 5 3` = AD5AN3 = RA8, the pin DAC2 drives; `core 3 5` = back to mikroBUS A AN |
-| `dac <1\|2> <on\|off> [low] [high] [slpdat]` | triangle on DACOUT1 = RA1 or DACOUT2 = RA8; `low`/`high` are 12-bit DAC codes (default 0x100 … 0xF00), `slpdat` = counts per DAC clock (8 = 22 kHz at 320 MHz). Both DACs can run at once; they share CLKGEN7, which the last one to stop switches off |
-| `dactest [halves]` | capture and judge the running DAC's triangle through the chain on the active core (DAC2 first if both run, as `dac_active()` picks it; see phase 2 below) |
-| `clk <100..1000>` | CLKGEN6 divide ratio x 100. Kept as a test: the board showed the ADC ignores it, so it does **not** change the sample rate (`docs/HARDWARE-LOG.md`, run 10) |
-| `pll <p1> <p2>` | **the sample rate.** PLL1 output dividers: ADC clock = 1600 MHz / (p1 * p2), p1 >= p2, and back-to-back takes 8 ADC clocks per conversion. `5 1` = 320 MHz = 40 MSPS, `5 4` = 80 MHz = 10 MSPS |
-| `input <0..15>` | PINSEL of the ADC core; 6 is the internal 15/16·VDD reference. Applied between two bursts |
-| `selftest` | samples the internal reference, prints the mean, NAK if it is outside 3648 … 4032 |
-| `stats` | min, max, mean and peak-to-peak of the completed half |
-| `dump [count] [offset]` | samples of the completed half, eight per line; Ctrl+C aborts |
-| `clear` | zeroes the error counters |
-| `led on`, `led off`, `led auto` | LED0 by hand, or back to the heartbeat |
-| `sweep [halves]` | **the rate measurement, automated:** for repeat-timer periods 63, 32, 16, 8, 4, 3, 2 TAD (1.27 … 40 MSPS nominal) runs `halves` buffer halves (default 2000 = 2 M samples) and prints one line per rate with the **measured** sample rate (Timer1) next to the nominal one, `SAMC` read back from the register, and `dma_overrun` measured three ways — CPU idle, CPU processing every half like the main loop, CPU polling an SFR in a tight loop — plus `late_service` and `proc_missed`. A rate is usable where overrun stays 0; the three columns say whether the DMA bus or the CPU is the limit. Takes a few seconds; restores the previous sample time and run state. With `AUTO_SWEEP 1` in `board.h` (the default) the same table is printed once automatically after the self-test, before the measurement starts — no typing needed |
+| `help` | the command list |
+| `version` | build id, git revision, board, configuration |
+| `status` | run state, counters, the clock, the receive diagnostics |
+| `regs` | clock, ADC, DMA, DAC, UREF and UART registers |
+| `test [part] [halves]` | run a part of the measurement, or `all` — see below |
+| `pll <p1> <p2>` | **the sample rate**: PLL1 output dividers, 1600 MHz / (p1·p2), p1 ≥ p2, both 1…7 |
+| `clk <100…1000>` | the CLKGEN6 divide ratio ×100. Arrives in the register and does **not** change the rate on this silicon; kept for the record |
+| `start` / `stop` | the burst stream |
+| `input <0…15>` / `samc <0…31>` | analog input and sample time |
+| `core <1…5> [pinsel]` | switch the ADC core |
+| `buf [n]` | samples per buffer half, 16…1024 |
+| `dac <1\|2> <on\|off> [low] [high] [slpdat]` | triangle on DACOUT1 = RA1 or DACOUT2 = RA8, both sharing CLKGEN7 (the last unit to stop switches it off). `slpdat` is the step per DAC clock, so **larger is faster** (default 8; the DAC test itself starts DAC2 at 64, since 8 leaves the triangle almost standing still inside one captured buffer) |
+| `dactest [halves]` | the DAC test on its own, against whichever DAC is active (`dac_active()` picks DAC2 first if both run) |
+| `stats` / `dump [count] [offset]` | the completed half: min/max/mean, or the raw values |
+| `clear` | zero the error counters |
+| `led on\|off\|auto` | LED0 |
 | `reset` | software reset |
 
-**The firmware also talks without being asked.** From reset on, every start-up step
-reports itself on the same port — the UART is brought up on the 8 MHz FRC before the
-clocks are touched and re-timed once PLL2 runs — so a terminal log from power-up reads
-like this on a good day:
+### The parts of a test, and what each one proves
+
+| `test …` | Proves |
+|---|---|
+| `self` | the chain is wired up: clock, ADC, DMA, interrupt, buffer. It samples a **constant**, so it cannot tell a working converter from a result register that never changes |
+| `clock` | that a CLKGEN6 divider write arrives and is confirmed. It passes on this silicon **and the rate still does not follow** — passing here proves the register holds the value, nothing more |
+| `clkoff` | whether CLKGEN6 feeds the ADC at all: the generator is switched off and the ADC is asked to convert anyway. On this board it **keeps converting** |
+| `rate` | the delivered rate at the current setting, from one clean burst timed with Timer1 |
+| `sweep` | the rate ladder from the slowest setting up, with overrun, late and missed per point, and the rate measured both clean and under load |
+| `dac` | **the one that proves the data**: a known triangle through the chain, captured as one contiguous buffer, judged for a changing signal with even steps and no jump |
+
+### What a run looks like
 
 ```
-[boot] uart up on FRC, 115200 8N1
-
-
-##############################################################
-##                                                          ##
-##   ADC/DMA TEST LOG  -  START OF RUN  (copy from here)    ##
-##                                                          ##
-##############################################################
-
-[boot] adc_dma_40msps Sep 23 2026 16:02:11 git 3c58fe5 (master)
+[boot] adc_dma_40msps Sep 24 2026 13:22:59 git b57e310 (master)
 [boot] RCON: 0x00000080
 [boot] reset cause: EXTR
-[build] adc_dma_40msps Sep 23 2026 16:02:11 git 3c58fe5 (master)
-[build] board: EV74H48A, dsPIC33AK512MPS512 GP DIM
-[build] adc core: 3
-[build] default input (pinsel): 5
-[build] default samc: 0
-[build] default rptcnt: 2
-[build] pacing (0 = auto): 0
-[build] sccp ticks: 5
-[build] samples per half: 1024
-[build] auto_sweep: 1
-[build] boot_verbose: 0
-
-adc_dma_40msps - ADC at 40 MSPS into RAM via DMA
-board: EV74H48A, dsPIC33AK512MPS512 GP DIM
-build: adc_dma_40msps Sep 23 2026 16:02:11 git 3c58fe5 (master)
-type 'help' for the commands
-please log this terminal from power-up and send it back
-> [boot] register snapshot after init
-[regs] ...                      clock, ADC, DMA, capture and UART registers,
-[regs] uart                     the same dump the "regs" command prints
-...
-[boot] self-test on the internal reference
-[selftest] mean on internal 15/16 VDD (expect ~3840): 3819
-[pacing] time base check, ticks per 100 ms (expect 1250000): 1250001
-[ratetest] pacing: ADC repeat timer (period in TAD = 12.5 ns)
-...
-[pacing] summary: repeat timer FAIL, SCCP1 timer FAIL, back-to-back runs
-[pacing] using: back-to-back (no rate control) - NO PACED SOURCE PASSED, the rate is not under control
-[boot] automatic rate sweep before the measurement (AUTO_SWEEP in board.h)
-[sweep] ...
-
-==============================================================
-[DONE] ALL AUTOMATIC TESTS FINISHED
-[DONE] ADC core and its clock generator (CLKGEN6) are switched OFF - nothing converts
-[DONE] pacing chosen: one conversion per SCCP1 trigger, no burst (period in ticks of 10 ns)
-[DONE] period: 5
-[DONE] ksps nominal: 20000
-[DONE] the console is free now: type help. start = measure at that rate, stop, status, sweep
-==============================================================
-
-##############################################################
-##                                                          ##
-##   ADC/DMA TEST LOG  -  END OF RUN  (copy up to here)     ##
-##                                                          ##
-##############################################################
-
-[stat] blocks=0 overrun=0 late=0 missed=0 addr_err=0 bus_err=0 last=0 input=5 samc=0 pace=65 per=5 run=0 pwr=0 ad3if=0 rx=0 last=0x00 cr=0 lf=0
-> start
-[stat] blocks=195312 overrun=0 late=0 missed=0 addr_err=0 bus_err=0 last=2047 input=5 samc=0 pace=65 per=5 run=1 pwr=1 ad3if=0 rx=6 last=0x0D cr=1 lf=0
-[half] n=1 min=1990 max=2103 mean=2047 pp=113
-[stat] blocks=390624 overrun=0 ...
-[half] n=0 min=1988 max=2105 mean=2046 pp=117
+[boot] pll1 postdiv1: 7
+[boot] pll1 postdiv2: 7
+[boot] adc clock Hz: 32653061
+[boot] sample rate ksps (back-to-back): 4081
+[boot] READY - nothing is converting, the console has the CPU
+> dac on 64
+dac slpdat: 64
+dac period ns: 54880
+> test dac
+[dactest] DAC2 routed to the internal UREF line, INSEL: 7
+[dactest]   measured on this core's AN7, ADC core: 3
+[dactest]   samples in the window: 2048
+[dactest] window ns: 513280
+[dactest] sample rate ksps in this burst: 3990
+[dactest] min: 2411   max: 3851   peak-to-peak: 1440
+[dactest] largest step between two samples: 113
+[dactest] slope reversals: 1
+[dactest] every 64th sample across the window:
+   2418 2541 2603 2714 2816 2960 3044 3128 3260 3386 3496 3581 3706 3789 3851
+   3688 3581 3512 3397 3281 3195 3063 2998 2861 2755 2666 2539 2416 ...
 ```
 
-**The boot runs the tests twice.** Phase 1 on the boot core (ADC 3, mikroBUS A AN):
-register snapshot, self-test, pacing trial, sweep, `[PHASE 1 DONE]` with the chosen rate.
-Phase 2 switches to ADC core 5 on AD5AN3 = RA8, the pin DAC2's output buffer drives, and
-starts DAC2 in Triangle Wave mode (0x100…0xF00, 22 kHz): no wire, the loop closes on the
-pin. It repeats every test on that core and then runs `dactest`: 64 halves are copied
-out of the ping-pong buffer as they complete and judged against the DAC settings —
-minimum and maximum at DACLOW/DACDAT (±150 LSb), slope reversals against the triangle
-period at the measured rate (±10 %), and no jump larger than four expected steps (a
-lost sample). `[dactest] PASS` means the DAC triangle arrived intact through ADC, DMA
-and the ping-pong buffer, with real data instead of a flat reference.
+That last block is the point of the whole project: a triangle, sampled by the ADC,
+carried by the DMA into RAM, complete and in order.
 
-**After the last test the ADC core, its clock generator, DAC2 and its clock generator
-are switched off** (`pwr=0`):
-nothing converts, no DMA event, no interrupt from lost samples, so the console is
-guaranteed to get the CPU - the interrupt storm of a rate with overruns cannot reach it.
-While idle a `[stat]` line comes every 10 s (`rx` shows typed bytes arriving). `start`
-brings clock and core back and measures at the rate the sweep chose; then a `[stat]`
-line comes every 5 s for the first minute, then every minute, each followed by a
-`[half]` line with min, max, mean and peak-to-peak of the last completed half - the
-same figures as the `stats` command, so the log says whether a signal is there. If a step
-fails, the log ends with `[FAIL] code n`, the reason in words, and the full register
-dump (`[regs] …`) — the same thing the `regs` command prints — and then LED0 blinks
-the code. **That log is what to send back** if the board is not on your desk: it
-answers most of `docs/TROUBLESHOOTING.md` Part 4 without a debugger.
+### The DAC test measures inside the chip
 
-Everything the analysis needs is in that log by itself, nothing has to be typed: the
-build id with the git revision (a `+local changes` suffix means the tree had uncommitted
-edits; `unknown` means the build ran without git on the PATH), the board and every
-compile-time switch from `board.h` (`[build]`), the reset cause, the register snapshot
-after initialisation (`[regs]`, before anything runs), the self-test, the pacing verdicts,
-the sweep, and the signal statistics after every status line. The git revision comes from
-`tools/version.bat`, which the project's Makefile runs before every build, from the IDE
-and from the command line alike; it writes `version.h`, which is generated and not tracked.
+`UREFCON.INSEL` puts one of DAC1…DAC8 on the device's internal UREF line, and `ADnAN7`
+is the UREF input of **every** ADC core (Table 16-2). So the test routes DAC2 to UREF and
+samples AN7 on whatever core is already in use: **no pin, no wire, no core switch.**
 
-Two things about it are worth knowing:
+The pin route exists too and is documented in `board.h`: DACOUT1 is AD5AN1 = RA1 (shared
+with PGC2), DACOUT2 is AD5AN3 = RA8 — one physical pin carrying both the DAC output and
+the ADC input, so the loop closes without a wire. On the EV74H48A that pin also goes to
+capacitive touch pad 2, which loads it; the internal route has neither problem.
 
-- **The console is its own thread.** Received bytes are handled in the UART2 receive
-  interrupt at priority 1; a command runs there, output included. The DMA interrupt
-  (priority 4) preempts it, so the measurement never waits for the console. `main()`
-  does: during a long `dump` it processes no buffer halves, and `proc_missed` says so.
-  That is deliberate — the counter is the measurement, not a bug.
-- **A script can drive it.** After every command the parser sends the prompt followed
-  by one control byte: ACK (0x06) if the command succeeded, NAK (0x15) if it failed.
-  A script reads until that byte, checks it, and only then sends the next line. Usage
-  errors give NAK and a usage line; an unknown command gives NAK. The reference client
-  for that protocol is `test/cmd_parser_host/cmd_console.py` in the parser's repository,
-  (`test/cmd_parser_host/cmd_console.py`).
+Two things about the DAC are modelled wrongly in `dac.c` and are **not** used for any
+verdict: the computed triangle period is about eight times off what the capture shows,
+and `DACLOW` is not reproduced — the triangle's upper end matches `DACDAT` exactly, its
+lower end does not match `DACLOW` at all. The test measures the period from the data
+instead and prints the computed one beside it for the record.
 
 ## Which sample rates you can get
 
-All figures are **per ADC core**; the dsPIC33AK512MPS512 has five (Table 16-1,
-page 1223).
+All figures are **per ADC core**; the dsPIC33AK512MPS512 has five (Table 16-1, page
+1223).
 
-**The basis.** The ADC clock period is TAD = 4 / F_IN, with F_IN allowed from 32 to
-320 MHz, so TAD runs from 12.5 to 125 ns (AD50, page 2034). One conversion takes the
-sample time plus 1.5 TAD; with the minimum sample time of 0.5 TAD that is 2 TAD, hence
-40 MSPS at 320 MHz (AD51). There are three knobs.
+**The basis.** The ADC clock may run from 32 to 320 MHz (Table 16-1). The conversions run
+back-to-back and eight ADC clocks make one conversion, so 320 MHz is 40 MSPS and 32 MHz
+is 4 MSPS. Nothing inside the burst paces them — see the ADC section — so **the ADC clock
+is the only knob.**
 
-**1. Sample time `SAMC` with the back-to-back trigger — the way the first version of
-this example ran, and what the board did not confirm.** Sample time is (2·SAMC + 0.5)
-TAD (page 1266), so the conversion period should be (2·SAMC + 2) TAD. At 320 MHz input
-clock that would give:
+**The knob that works: PLL1's output dividers.** PLL1 feeds nothing but the ADC path (the
+CPU runs off PLL2), its VCO is 1600 MHz, and the output is 1600 MHz / (POSTDIV1 ·
+POSTDIV2) with both fields 1…7 and POSTDIV1 ≥ POSTDIV2 (page 778). `pll <p1> <p2>` sets
+it; the sweep walks this ladder from the slowest rate up:
 
-| `SAMC` | Rate |
-|---|---|
-| 0 | 40 MSPS |
-| 1 | 20 MSPS |
-| 2 | 13.3 MSPS |
-| 3 | 10 MSPS |
-| 4 | 8 MSPS |
-| 9 | 4 MSPS |
-| 31 | 1.25 MSPS |
+| POSTDIV1/2 | ADC clock | Rate |
+|---|---|---|
+| 7/7 | 32.65 MHz | 4.08 MSPS — the slowest that clears the ADC minimum |
+| 7/6 | 38.10 MHz | 4.76 MSPS |
+| 6/6 | 44.44 MHz | 5.56 MSPS |
+| 7/5 | 45.71 MHz | 5.71 MSPS |
+| 6/5 | 53.33 MHz | 6.67 MSPS |
+| 7/4 | 57.14 MHz | 7.14 MSPS |
+| **5/5** | **64.00 MHz** | **8.00 MSPS** |
+| 6/4 | 66.67 MHz | 8.33 MSPS |
+| 5/4 | 80.00 MHz | 10.00 MSPS |
+| 6/3 | 88.89 MHz | 11.11 MSPS |
+| 5/3 | 106.67 MHz | 13.33 MSPS |
+| 6/2 | 133.33 MHz | 16.67 MSPS |
+| 5/2 | 160.00 MHz | 20.00 MSPS |
+| 5/1 | 320.00 MHz | 40.00 MSPS — the boot setting of `clock_init()` |
 
-That is 40 / (SAMC + 1) MSPS on paper. On the board the delivered rate did not change
-with `SAMC` at all (`docs/HARDWARE-LOG.md`, run 4), so this example no longer relies on
-it. `SAMC` remains the remedy for a source impedance that is too high for a 6.25 ns
-sample window — it sets the aperture, the repeat timer sets the rate.
+Measured on the board (run 13): one clean burst at 7/7 delivered **3990 kSPS against
+4081 nominal**, 2.2 % off. The switch takes the DMA channel down, the ADC core off, the
+PLL's output dividers are changed (page 778: they must not move while the PLL is
+operating), the core comes back with `ADRDY` and the DMA is set up from scratch — the
+boot order, run backwards and forwards again.
 
-**2. Repeat timer or SCCP1 as the second trigger — what the datasheet describes, and
-what the board did not do** (`TRG2SRC = 3`, period in `RPTCNT[5:0]` of `AD3CON`, page
-1258, or `TRG2SRC = 34` with the SCCP1 trigger, Table 16-4). On paper a trigger every
-k TAD, k = 2 … 63: 80 / k MSPS, 40 down to 1.27 MSPS. On the board
-(`docs/HARDWARE-LOG.md`, runs 5 and 6) the register holds `TRG2SRC = 3` and `RPTCNT =
-16`, and the DMA still receives 36 MSPS: in Integration mode the conversions inside a
-burst run back-to-back whatever the repeat timer says. The SCCP1 candidate of those
-runs proves nothing: it selected code 32, which is "PTG trigger 12", and the SCCP1
-module had no auxiliary output enabled (`AUXOUT = 00`), so no trigger ever left it.
-Both are fixed (34, `AUXOUT = 01`); both sources stay in the firmware as candidates.
+**The knob that does not work: the CLKGEN6 divider** (`clk`, `clock_adc_set_div()`). The
+divided clock should be F_IN / (2 · (`INTDIV` + `FRACDIV`/512)) per Example 12-2, and
+every ratio is written, read back and confirmed by `DIVSWEN` and `CLKRDY` — with the
+generator switched off around the write and with it left running as the example
+prescribes. The conversion rate does not move at any of them, and the ADC keeps
+converting with CLKGEN6 switched off entirely (`test clkoff`). It is kept in the firmware
+so the behaviour can be reproduced, not because it is useful. Two datasheet details
+apply if you try it anyway: "FRACDIV will not work if INTDIV is configured to 0" (12.4.2
+4b), so no ratio between 1 and 2 exists at all; and the divider is changed with the
+generator **running**.
 
-**2b. One conversion per SCCP1 trigger — Microchip's own mechanism** (`pacing 65`,
-Single Conversion mode, `TRG1SRC = 34`). The ADC converts once per trigger pulse and
-the DMA takes each result; the SCCP1 period sets the rate, 100000 / n kSPS in ticks of
-10 ns. No burst, no `CNT`, no restart. This is how Microchip's 40 MSPS example runs its
-eight channels at 5 MSPS each (MCC: "Single Sample", trigger "SCCP1 Trigger Event"),
-so the trigger path is proven on this silicon; whether one channel follows it up to 20
-or 25 MSPS is what the rate test and the sweep measure. Tried first at boot.
-
-**3. The ADC input clock, CLKGEN6 — the second candidate** (`pacing 64`, `period` =
-divide ratio × 100; `ADC_CLKDIV` in `board.h`). The divided clock is F_IN / (2 ·
-(`INTDIV` + `FRACDIV`/512)), datasheet Example 12-2, and the conversions run
-back-to-back at TAD = 4 / F_IN: ratio 1 = 40 MSPS, 2 = 20, 4 = 10, 8 = 5, 10 = 4 (32
-MHz, the ADC's minimum) with the integer part alone; 1.6 = 25, 2.5 = 16, 5 = 8 MSPS
-with the fraction. The boot sweep runs the even ratios first and the fractional ones in
-a second pass, so both grids are measured. The clock is not changed under a running
-core: the stream is stopped, the ADC taken down (`adc_deinit()`), the generator
-switched off, the divider written, the generator switched on (`DIVSWEN`, then
-`CLKRDY`), the ADC brought back (`adc_reinit()`, `ADRDY` awaited) — the order of the
-boot — and then the stream restarted. `SAMC` and the repeat timer would extend the
-range down to about 125 kSPS (32 MHz, k = 64) if they paced, which on this board they
-do not.
-
-**Below that** the burst mechanism is the wrong tool. For rates like the 40 kHz of a
-piezo grain sensor, use Single Conversion mode with an SCCP or PWM trigger as
-`TRG1SRC`: the DMA transfer per conversion works exactly the same way, and the burst
-restart disappears entirely. That goes down to a few Hz.
+**Below 4 MSPS** the burst mechanism is the wrong tool. For rates like the 40 kHz of a
+piezo grain sensor, use Single Conversion mode with a PWM trigger as `TRG1SRC`: the DMA
+transfer per conversion works exactly the same way and the burst restart disappears.
+That goes down to a few Hz. Note that the SCCP1 trigger did not work on this board — a
+PWM trigger has not been tried.
 
 Three caveats:
 
@@ -918,19 +818,18 @@ simulator run takes about 2.5 minutes for the 100 halves.
 | Path | Contents |
 |---|---|
 | `main.c` | start-up sequence and the main loop — the order of the inits, and why |
-| `board.h` | everything board-specific: the compile-time choices (`ADC_INSTANCE`, `ADC_PINSEL`, `ADC_SAMC`), the LED pin, the console pins |
+| `board.h` | everything board-specific: the compile-time choices (`ADC_INSTANCE`, `ADC_PINSEL`, `ADC_SAMC`, the boot sample rate `ADC_PLL_POSTDIV1/2`), where the DAC reaches the ADC, the LED pin, the console pins |
 | `config_bits.c` | every configuration word of the device, with the reason for each value — and why two of them are written as numbers |
-| `clock.c`, `clock.h` | FRC → PLL1 320 MHz (ADC) and PLL2 200 MHz (CPU), the switching order, the clock-fail interrupt, and the ADC clock divider (`clock_adc_set_div()`, CLKGEN6 `INTDIV` with `DIVSWEN`) that paces the conversions when the trigger sources do not |
+| `clock.c`, `clock.h` | FRC → PLL1 320 MHz (ADC) and PLL2 200 MHz (CPU), the switching order, the clock-fail interrupt, the ADC clock's rate control (`clock_adc_set_pll()`, PLL1's output dividers — the knob that works) and `clock_adc_set_div()` (the CLKGEN6 divider, which does not change the rate on this silicon and is kept only so the behaviour can be reproduced) |
 | `adc.c`, `adc.h` | the ADC core: channel 0 in Integration mode, burst trigger, input/sample-time register |
 | `dma.c`, `dma.h` | DMA channel 0: address window, Repeated Continuous mode, HALF/DONE interrupt, status flags — knows no ADC and no buffer |
 | `sim_dma.c`, `sim.h` | **simulator build only:** stand-in for `dma.c` that produces buffer halves (1 MHz sine) and the ping-pong check; see "In the MPLAB X simulator" |
 | `capture.c`, `capture.h` | the measurement: wires ADC and DMA together, handles the DMA events with every error counter and the burst restart, start/stop/input, self-test, per-half processing — what the console may read and control |
 | `led.c`, `led.h` | LED0 |
 | `diag.c`, `diag.h` | stop codes (`fail()`), trap and unhandled-interrupt handler, boot-stage record, reset cause, register dump |
-| `timebase.c`, `timebase.h` | Timer1 as a 12.5 MHz stopwatch — the independent clock the delivered sample rate is measured against (rate test at boot, `sweep`). It does **not** pace the ADC |
-| `dac.c`, `dac.h` | DAC1 and DAC2 in Triangle Wave mode on their pins DACOUT1 = RA1 and DACOUT2 = RA8 (CLKGEN7 as their clock), one table for both units: the known signal for phase 2 of the boot tests and for the `dac` command. RA1 is AD5AN1 and RA8 is AD5AN3, so ADC core 5 reads either one back with no wire; every other channel needs one |
-| `dactest.c`, `dactest.h` | copies each completed half out of the ping-pong buffer and judges it against the DAC settings: min/max, slope reversals against the triangle period, jumps (lost samples). `[dactest]` lines, PASS/FAIL |
-| `sccp.c`, `sccp.h` | SCCP1 in timer mode as the ADC's trigger: its period rollover on the auxiliary output (`AUXOUT = 01`, Table 26-10) is the "SCCP1 trigger" (code 34) — as `TRG1SRC` for one conversion per trigger (pacing 65) or as `TRG2SRC` inside a burst (34) |
+| `timebase.c`, `timebase.h` | Timer1 as a 12.5 MHz stopwatch — the independent clock the delivered sample rate is measured against (`test rate`, `test sweep`, and the window length of the DAC test). It does **not** pace the ADC |
+| `dac.c`, `dac.h` | DAC1 and DAC2 in Triangle Wave mode on their pins DACOUT1 = RA1 and DACOUT2 = RA8 (CLKGEN7 as their shared clock), one table for both units. The DAC test itself instead routes DAC2 through `UREFCON` onto the chip's internal UREF line, where every ADC core can sample it as `ANn7` — no pin, no wire, no core switch |
+| `dactest.c`, `dactest.h` | captures one contiguous buffer with the stream stopped from the DMA interrupt, then judges whichever DAC is running (`dac_active()` picks DAC2 first if both run): a changing signal, even steps, no jump, and the triangle period measured from the data. `[dactest]` lines, PASS/FAIL |
 | `cli.c`, `console.h` | the console: UART2 on the MCP2221A channel, the receive interrupt, the commands |
 | `cmd_parser.c`, `cmd_parser.h` | the command parser, unchanged from [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser) (Apache 2.0) |
 | `adc_dma_40msps.X/` | MPLAB X project — build, program and debug from here |

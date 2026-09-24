@@ -141,17 +141,62 @@ void adc_set_input(uint8_t pinsel, uint8_t samc)
     ADCBITS(CH0CON1).SAMC   = samc;
 }
 
+/* ---- Channel mode and trigger, for the variant matrix --------------
+ *
+ * All of these write the channel's configuration register directly and
+ * are only safe while no burst is in flight - capture.c takes the stream
+ * down before it changes a variant. The values come from the device
+ * pack's ATDF (value groups AD_CH_CON1__TRG1SRC and __TRG2SRC), which
+ * names what each number selects; the datasheet's own trigger table
+ * disagrees with it about SCCP1 and the board sided with the ATDF. */
+
+void adc_set_mode_burst(void)
+{
+    ADCBITS(CH0CON1).MODE    = 2u;      /* Integration                   */
+    ADCBITS(CH0CON1).ACCNUM  = 0u;
+    ADCBITS(CH0CON1).TRG1SRC = 0x01u;   /* software starts the burst     */
+    ADCBITS(CH0CON1).TRG2SRC = 0x02u;   /* back-to-back inside it        */
+}
+
+void adc_set_mode_single(uint8_t trg1src)
+{
+    /* One conversion per trigger: no burst, no CNT, nothing to restart.
+     * This is the shape Microchip's own 40 MSPS example uses, eight
+     * channels each triggered from one SCCP source. */
+    ADCBITS(CH0CON1).MODE    = 0u;      /* Single Conversion             */
+    ADCBITS(CH0CON1).ACCNUM  = 0u;
+    ADCBITS(CH0CON1).TRG1SRC = trg1src;
+    ADCBITS(CH0CON1).TRG2SRC = 0u;      /* unused in this mode (p1322)   */
+}
+
+void adc_set_mode_oversample(uint8_t accnum)
+{
+    /* MODE 3: the channel accumulates ACCNUM conversions and only then
+     * sets CH0RDY (16.4, p1321). If the DMA trigger hangs off that flag,
+     * this divides the transfer rate by the accumulation count while the
+     * converter keeps running flat out - which is the one documented way
+     * to reduce the DMA load without touching the rate. Whether the DMA
+     * really sees only every n-th event is what the matrix measures. */
+    ADCBITS(CH0CON1).MODE    = 3u;
+    ADCBITS(CH0CON1).ACCNUM  = accnum;
+    ADCBITS(CH0CON1).TRG1SRC = 0x01u;
+    ADCBITS(CH0CON1).TRG2SRC = 0x02u;
+}
+
+void adc_set_trg2(uint8_t trg2src) { ADCBITS(CH0CON1).TRG2SRC = trg2src; }
+void adc_set_period(uint8_t rptcnt) { ADCBITS(CON).RPTCNT = rptcnt; }
+
+uint8_t adc_mode(void)   { return (uint8_t)ADCBITS(CH0CON1).MODE; }
+uint8_t adc_trg1(void)   { return (uint8_t)ADCBITS(CH0CON1).TRG1SRC; }
+uint8_t adc_trg2(void)   { return (uint8_t)ADCBITS(CH0CON1).TRG2SRC; }
+uint8_t adc_accnum(void) { return (uint8_t)ADCBITS(CH0CON1).ACCNUM; }
+uint8_t adc_period(void) { return (uint8_t)ADCBITS(CON).RPTCNT; }
+
 bool adc_ready(void) { return ADCBITS(CON).ADRDY != 0u; }
 
 void adc_set_burst_len(uint32_t count)
 {
     ADCREG(CH0CNT) = count;
-}
-
-void adc_set_mode_burst(void)
-{
-    ADCBITS(CH0CON1).MODE    = 2u;          /* Integration           */
-    ADCBITS(CH0CON1).TRG1SRC = 0x01u;       /* software trigger      */
 }
 
 void adc_deinit(void)

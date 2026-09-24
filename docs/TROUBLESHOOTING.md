@@ -25,7 +25,14 @@ stopped** — so most of this guide starts from what the LED shows.
 
 Read this before debugging anything. These are our own doubts, most suspect first.
 
-### 1.1 The burst restart (highest remaining risk)
+### 1.1 The burst restart — SETTLED ON THE BOARD, 24.09.2026
+
+**This was the highest remaining risk and it is closed.** Run 13 captured one buffer with
+a known triangle on the input and found the triangle in it: a clean rise, one turning
+point, a clean fall, the largest step between two neighbouring samples 113 counts out of
+a swing of 1440, no jump and no gap. Every conversion arrives, in the order it was
+converted, across the half boundary and across the burst restart. The reasoning below is
+kept because it explains why the construction looks the way it does.
 
 The ADC cannot free-run indefinitely: back-to-back triggering exists only in the
 multisample modes, and Integration mode stops after `CNT` conversions (max 65535).
@@ -341,11 +348,28 @@ again before it had finished the previous transfer (p816), i.e. the DMA bus coul
 keep up with the ADC — exactly the question this example exists to answer (see the
 README section on the shared DMA bus).
 
+**But it has a second effect that will bite you long before the numbers do.** Every
+overrun raises the DMA channel interrupt, and the event has no enable bit of its own
+(13.6.1; `DMA0CH` has `HALFEN`, `DONEEN` and `MATCHEN` only). At the undivided clock that
+is 1.6 million interrupts per second — one every 625 ns, about 125 CPU cycles at 200 MHz,
+which is roughly what an interrupt entry with its context save costs. The CPU then stops
+returning to the main loop: no trap, no reset, no banner, and the console goes deaf
+because the receive interrupt sits below the DMA channel in priority. Runs 7 and 9 both
+died that way, silently, in different places.
+
+Two things in this firmware deal with it. The handler brakes itself past 500 000
+overruns in one measurement, masking its own interrupt and taking the channel down, so a
+flooding rate ends in a log line instead of a dead board. And any measurement that has to
+look at the data uses `capture_oneshot()`, which fills the buffer once and lets the
+**interrupt** stop the stream — at these rates the main loop can be tens of milliseconds
+behind the DMA, and a half it copies will have been overwritten a thousand times in the
+meantime (run 11: 8552 halves missed between eight copies).
+
 What to do with the result:
 
-1. Note at how many channels and what rate it starts. That number is the answer.
-2. Reduce the load and confirm the mechanism: set `ADC1_SAMC` higher (slower sampling)
-   and check the overruns disappear.
+1. Note at what rate it starts. That number is the answer.
+2. Reduce the rate with `pll <p1> <p2>` and confirm the overruns disappear. Do **not**
+   use `SAMC` or `clk` for this — neither changes the rate on this silicon.
 3. Then decide: average inside the ADC (`ACCNUM`, see README) or use fewer channels.
 
 **Before reporting it as the bus limit, rule out the trivial causes:** with one channel

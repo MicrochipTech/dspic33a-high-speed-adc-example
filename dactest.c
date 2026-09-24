@@ -60,6 +60,7 @@
 #include "timebase.h"
 #include "diag.h"
 #include "sim.h"
+#include "clock.h"
 
 /* A frozen result register gives a peak-to-peak of zero; noise on a real
  * input gives a few counts. Anything below this means nothing is moving. */
@@ -115,6 +116,40 @@ uint32_t dactest_run(uint32_t halves)
     console_kv("[dactest]   expected max (DACDAT)", high);
     console_kv("[dactest]   triangle period ns", period_ns);
     console_flush();
+
+    /* ---- match the triangle to the sample rate ---------------------
+     *
+     * The window is 2048 samples long, so its duration depends entirely
+     * on the rate in use - 502 us at 4 MSPS, 256 us at 8, 102 us at 20.
+     * A triangle that is right for one of them is useless at the others:
+     * too slow and the window stands still (run 12, a swing of 72
+     * counts), too fast and it holds fifty periods and the dump is
+     * unreadable. So the speed is set from the rate, aiming at about one
+     * period per window.
+     *
+     * The scaling is anchored on a measurement, not on dac2_period_ns():
+     * run 13 showed one period in 513 us at slpdat 64 with a 32.65 MHz
+     * DAC clock, while the formula claimed 54.9 us. Until that formula is
+     * understood, the anchor is the honest way round. Period scales as
+     * 1/(clock * slpdat), so:
+     *
+     *   slpdat = 64 * (513 us / window) * (32.65 MHz / dac clock)      */
+    {
+        const uint32_t ksps_now = capture_variant_ksps();
+        const uint32_t f_dac    = clock_dac_hz();
+        if ((ksps_now != 0u) && (f_dac != 0u)) {
+            const uint32_t win_ns = (uint32_t)(((uint64_t)n * 1000000u) / ksps_now);
+            uint64_t sl = (uint64_t)64u * 513280u * 32653061u;
+            sl /= ((uint64_t)win_ns * f_dac);
+            if (sl < 1u)   { sl = 1u; }
+            if (sl > 255u) { sl = 255u; }
+            console_kv("[dactest]   window ns expected", win_ns);
+            console_kv("[dactest]   triangle slpdat chosen for it", (uint32_t)sl);
+            if (!dac_triangle_start(unit, 0x100u, 0xF00u, (uint16_t)sl)) {
+                console_puts("[dactest]   could not restart the DAC at that speed\r\n");
+            }
+        }
+    }
 
     /* ---- one buffer, then the ISR stops ---------------------------- */
     const uint32_t t0 = timebase_ticks();
