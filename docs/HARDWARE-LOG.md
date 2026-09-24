@@ -1166,9 +1166,66 @@ Two numbers unchanged from run 14 and still unexplained: `loaded` reads between 
 2000-block sweep point will show about 98 bursts if the handler books stale events, or 1000
 if the counting is honest.
 
-*Provenance: the derivation above was done by the parallel session and re-computed here from
-the relayed figures; the terminal log itself is not in this repository. The rows quoted are
-the five that were passed on, not all fourteen.*
+The full terminal output is in `docs/logs/run15-test-sweep.txt`. The derivation above came
+from the parallel session working on the GUI and was re-computed here; the verbatim log is
+kept because the conclusions below are drawn from its numbers and should be checkable against
+the source.
+
+## Run 15, read again with all fourteen rows - and the answer is nearly there
+
+Two things in the full table are not visible in an excerpt, and together they almost settle
+the open question before the counters have even run.
+
+**Every sweep point took the same time, whatever rate it was set to.** The point ends when
+`blocks_done` reaches 2000, and the `loaded` column says how long that took: between 40652
+and 42034 kSPS in all fourteen rows, which is 48.7 to 50.4 ms. A spread of three per cent -
+while the configured rate spans a factor of ten.
+
+If `blocks_done` counted real half-completions, a 2000-block point would take 512 ms at
+4 MSPS and 51 ms at 40. It took about 50 ms at both. **Whatever drives `blocks_done` under
+load, it is not the rate at which halves are filled.**
+
+**And that turns the next run into a choice between a rising curve and a flat line.** The
+number of bursts actually started follows from the point duration and the configured rate:
+
+```
+postdiv   nominal   point takes   bursts if the handler books stale events   if honest
+  7/7       4081       50.4 ms                    100                          1000
+  7/6       4761       50.3                       117                          1000
+  6/6       5555       49.9                       135                          1000
+  7/5       5714       49.7                       139                          1000
+  6/5       6666       49.8                       162                          1000
+  7/4       7142       50.1                       175                          1000
+  5/5       8000       49.5                       193                          1000
+  6/4       8333       50.2                       204                          1000
+  5/4      10000       49.5                       241                          1000
+  6/3      11111       50.3                       273                          1000
+  5/3      13333       49.1                       320                          1000
+  6/2      16666       49.6                       404                          1000
+  5/2      20000       49.0                       479                          1000
+  5/1      40000       48.7                       952                          1000
+```
+
+One hypothesis predicts a column that climbs from 100 to 952 in step with the rate; the other
+predicts 1000 fourteen times. There is nothing to interpret.
+
+**Second: the overrun counts fall as the rate rises.** 70702 at 4 MSPS down to 48096 at
+40 MSPS - a third fewer at ten times the conversion rate. Read as a loss fraction that is
+absurd. Read as what it is - the number of handler entries that found the flag set - it fits:
+every point ran for the same 50 ms, the handler was saturated throughout, and at the higher
+rate more losses fall into the same entry. That is the correction of the previous section
+arriving from the data side, and it was the GUI session that spotted it.
+
+**Third, unexplained: the first row behaves differently from all the others.** Row 7/7 has
+`missed 19` where every other row has about 1900, and its `process` overrun count is 127278
+against 70702 idle - nearly double - while in all other rows idle and process are within a
+per cent of each other. The two hang together: in row 7/7 the main loop kept up and did its
+work, and that work cost bus cycles and produced more overruns; everywhere else the main loop
+got nothing and the process run therefore looks like the idle run. What is not explained is
+why only the first row. It is the first point after the boot, so nothing has streamed before
+it - a stateful difference in the start-up of a point is the obvious suspect, and
+`counters_clear()` and `seen_blocks` are where to look. Worth watching in the repeat: if the
+repeat shows the same thing in its first row, it is systematic and not noise.
 
 **Practical note for the next attempt.** The banner says `+local changes`, which means the
 working tree in front of the board differs from the commit it names - the same thing happened
