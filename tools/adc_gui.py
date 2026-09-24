@@ -1278,6 +1278,12 @@ SWEEP_CNT_RE = re.compile(
     r"\[sweep\]\s+isr\s+(\d+)\s+half\s+(\d+)\s+done\s+(\d+)\s+"
     r"bursts\s+(\d+)\s+blocks\s+(\d+)")
 SWEEP_HALVES_RE = re.compile(r"\[sweep\] halves per point[:\s]+(\d+)")
+# Since edd6757 the sweep states its own sample geometry, so the numbers
+# below can be checked against the log instead of against an assumption.
+# Older logs have neither line; for those the fallback is the 'half: n' of
+# a 'buf' reply, and failing that the field in the tile.
+SWEEP_SPH_RE = re.compile(r"\[sweep\] samples per half[:\s]+(\d+)")
+SWEEP_SPP_RE = re.compile(r"\[sweep\] samples per point[:\s]+(\d+)")
 SWEEP_HALFLEN_RE = re.compile(r"\bhalf[:\s]+(\d+)")
 
 
@@ -1288,12 +1294,20 @@ def parse_sweep_log(text: str) -> dict:
     counter line ('isr ... bursts ...') is attached to the row above it,
     which is where the firmware prints it; older builds have no such line
     and the row simply carries no measured burst count."""
-    rows, halves, half_len = [], None, None
+    rows, halves, half_len, per_point = [], None, None, None
     for raw in text.splitlines():
         line = raw.strip()
         m = SWEEP_HALVES_RE.search(line)
         if m:
             halves = int(m.group(1))
+            continue
+        m = SWEEP_SPH_RE.search(line)
+        if m:
+            half_len = int(m.group(1))
+            continue
+        m = SWEEP_SPP_RE.search(line)
+        if m:
+            per_point = int(m.group(1))
             continue
         m = SWEEP_ROW_RE.search(line)
         if m:
@@ -1319,7 +1333,14 @@ def parse_sweep_log(text: str) -> dict:
             m = SWEEP_HALFLEN_RE.search(line)
             if m:
                 half_len = int(m.group(1))
-    return {"rows": rows, "halves": halves, "half_len": half_len}
+    # The log states the product as well, so the two numbers the whole
+    # prediction rests on can be checked against each other rather than
+    # taken on trust.
+    consistent = None
+    if per_point and halves and half_len:
+        consistent = (per_point == halves * half_len)
+    return {"rows": rows, "halves": halves, "half_len": half_len,
+            "per_point": per_point, "consistent": consistent}
 
 
 def sweep_predict(rows, halves: int, half_len: int):
@@ -1336,13 +1357,47 @@ def sweep_predict(rows, halves: int, half_len: int):
     return out
 
 
+SWEEP_MIN_SEPARATION = 2.0
+
+
+def sweep_rows_that_decide(rows):
+    """The rows the verdict may rest on, and why the others are left out.
+
+    Two rows of the table carry almost no information and one carries a
+    confound, so a verdict over the whole table is weaker than it looks:
+
+    * the top of the sweep barely separates the models at all - at 40 MSPS
+      they predict 952 against 1000, five percent apart, which measurement
+      noise covers;
+    * the first row is the one point that runs straight after the boot with
+      no stream before it, and run 15 showed it behaving unlike every other
+      row (missed 19 against 1900, process overrun nearly double idle).
+
+    So: drop the first row, keep the rows where the two predictions are at
+    least SWEEP_MIN_SEPARATION apart. Row one is still shown in the table
+    and still compared - just separately, and never as evidence."""
+    have = [r for r in rows if r.get("bursts")]
+    if len(have) < 4:
+        return have, ""
+    body = have[1:]
+    strong = [r for r in body
+              if r["bursts_honest"] >= SWEEP_MIN_SEPARATION * max(1.0, r["bursts_double"])]
+    if len(strong) >= 3:
+        return strong, (f"verdict from {len(strong)} of {len(have)} rows: the first is left out "
+                        f"as the only point that starts from cold, and the fastest rows are left "
+                        f"out because there the two predictions are less than "
+                        f"{SWEEP_MIN_SEPARATION:.0f}x apart")
+    return body, (f"verdict from {len(body)} of {len(have)} rows: the first is left out as the "
+                  f"only point that starts from cold")
+
+
 def sweep_verdict(rows):
     """Which of the two predictions the measured bursts follow.
 
-    Compares the mean relative error of both models. Needs at least three
-    rows that carry a measured count, because the two models only separate
-    across a range of rates - at one point they can agree by accident."""
-    have = [r for r in rows if r.get("bursts")]
+    Compares the mean relative error of both models over the rows that can
+    tell them apart. Needs at least three such rows, because at a single
+    point the two can agree by accident."""
+    have, why = sweep_rows_that_decide(rows)
     if len(have) < 3:
         return ("grey", "no verdict",
                 "The log carries no 'bursts' column, or fewer than three rows of it. "
@@ -1350,17 +1405,18 @@ def sweep_verdict(rows):
                 "this log.")
     def err(key):
         return sum(abs(r["bursts"] - r[key]) / max(1.0, r[key]) for r in have) / len(have)
+    why = (why + ". ") if why else ""
     e_honest, e_double = err("bursts_honest"), err("bursts_double")
     lo, hi = have[0], have[-1]
     span = hi["bursts"] / max(1.0, lo["bursts"])
     if e_double < e_honest / 2.0:
         return ("negative",
-                f"double-booked: bursts climb {span:.1f}x with the rate",
+                f"double-booked: bursts climb {span:.1f}x over the rows used",
                 f"The measured bursts follow the rate, not the buffer count "
                 f"({lo['bursts']} at {lo['nom_ksps']/1000:.1f} MSPS up to {hi['bursts']} at "
                 f"{hi['nom_ksps']/1000:.1f}). One burst still fills one buffer, so the extra "
                 f"blocks are the handler counting the same event again - the rate was never "
-                f"the problem. Mean error: {e_double*100:.0f} % against this model, "
+                f"the problem. {why}Mean error: {e_double*100:.0f} % against this model, "
                 f"{e_honest*100:.0f} % against honest counting.")
     if e_honest < e_double / 2.0:
         return ("positive",
@@ -1368,7 +1424,7 @@ def sweep_verdict(rows):
                 f"The measured bursts stay at halves/2 across the whole sweep, so every "
                 f"counted block really was a buffer half filling up. The conversions are "
                 f"genuinely slower than the setting asks for, and the cause sits in the "
-                f"conversion chain, not in the interrupt handler. Mean error: "
+                f"conversion chain, not in the interrupt handler. {why}Mean error: "
                 f"{e_honest*100:.0f} % against this model, {e_double*100:.0f} % against "
                 f"double-booking.")
     return ("warning", "neither model fits",
@@ -2263,7 +2319,18 @@ def main_gui(args):
         colour, headline, detail = sweep_verdict(rows)
         sw_verdict_chip.text = headline
         sw_verdict_chip.props(f"color={colour}")
-        sw_msg_lbl.text = f"{len(rows)} rows · {detail}"
+        notes = [f"{len(rows)} rows"]
+        if got.get("consistent") is False:
+            notes.append(f"WARNING: the log says {got['per_point']} samples per point, but "
+                         f"{halves} halves x {half_len} samples is {halves*half_len} - the "
+                         f"predictions below rest on those two numbers")
+        first = rows[0]
+        if first.get("bursts"):
+            notes.append(f"row one separately (it is the only point starting from cold): "
+                         f"{first['bursts']} bursts against {first['bursts_honest']:.0f} if "
+                         f"honest and {first['bursts_double']:.0f} if double-booked")
+        notes.append(detail)
+        sw_msg_lbl.text = " · ".join(notes)
 
     sw_parse_btn.on_click(lambda: sweep_show(sw_text.value))
 
