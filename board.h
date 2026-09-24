@@ -126,72 +126,82 @@
 #ifndef ADC_SAMC
 #define ADC_SAMC          0u      /* sample time 0.5 TAD                      */
 #endif
-/* Sample rate: the ADC's repeat timer triggers a conversion every
- * ADC_RPTCNT TAD (TAD = 12.5 ns with the 320 MHz ADC clock). 2 = 40 MSPS,
- * 4 = 20 MSPS, 8 = 10 MSPS, 63 = 1.27 MSPS. The measured rate is in the
- * sweep table; "period <n>" changes it at run time. */
-#ifndef ADC_RPTCNT
-#define ADC_RPTCNT        2u
+/* Sample rate. The conversions run back-to-back - one after the other,
+ * as fast as the converter goes - and the only thing that changes the
+ * rate is the ADC clock itself, the CLKGEN6 divider. Nothing else on
+ * this silicon paces them: the ADC repeat timer, the SCCP1 trigger and
+ * the sample time SAMC were all tried on the board and all ignored
+ * (docs/HARDWARE-LOG.md runs 4 to 7), so they are gone from this code.
+ *
+ * The ratio is in hundredths of the 320 MHz clock, and eight clocks make
+ * one conversion: 1000 = /10 = 32 MHz = 4 MSPS, 500 = /5 = 64 MHz =
+ * 8 MSPS, 100 = 320 MHz = 40 MSPS. 32 MHz is the ADC minimum (Table
+ * 16-1), so 1000 is the slowest setting there is.
+ *
+ * The default is that slowest setting on purpose: it is the one rate the
+ * DMA should manage comfortably, so the first test of a run is the one
+ * most likely to pass, and a failure there means the chain itself is
+ * broken - not the rate. "clk <ratio>" changes it at run time. */
+#ifndef ADC_CLKDIV
+#define ADC_CLKDIV        100u    /* CLKGEN6 divider: straight through       */
 #endif
 
-/* What paces the conversions inside a burst (TRG2SRC, DS70005591D Table
- * 16-4 p1227). Three candidates, and the boot can try them in turn:
- *   3   the ADC's repeat timer, period ADC_RPTCNT TAD (12.5 ns)
- *   34  SCCP1 trigger as the burst's second trigger, period
- *       ADC_SCCP_TICKS x 10 ns (Table 16-4 code 100010; the 32 used
- *       until 23.09. evening was "PTG trigger 12")
- *   64  the ADC clock itself: back-to-back conversions, rate set by the
- *       CLKGEN6 divider (period = divide ratio of the 320 MHz clock in
- *       hundredths, 100..1000: 100 = 40 MSPS, 200 = 20, 250 = 16, 500 =
- *       8, 1000 = 4 MSPS; the sweep runs the even ratios first, then a
- *       second pass with fractional ones). Not a TRG2SRC value; clock.c
- *       does the switching. The board showed on 23.09.
- *       (HARDWARE-LOG run 6) that neither 3 nor 32 paces a burst in
- *       Integration mode, so this is the source that actually works.
- *   2   back-to-back, as fast as the converter goes - no rate control;
- *       what Microchip's 40 MSPS example uses
- *   65  one conversion per SCCP1 trigger: Single Conversion mode, the
- *       SCCP1 trigger as TRG1SRC, period ADC_SCCP_TICKS x 10 ns. No
- *       burst, no restart - the mechanism of Microchip's own 40 MSPS
- *       example (8 channels x 5 MSPS, each one paced exactly so).
- *   0   AUTO: try 65, 64, 3, 34, each with the rate test; the first that
- *       delivers the rate its period says wins; if none does, 2.
- *       The log says which ("[pacing] ..."). The default, because the
- *       repeat-timer pairing rests on the datasheet text alone and the
- *       board has the last word.
- * A fixed value skips the trial; the rate test then stops the boot with
- * fail 12 if that source does not deliver. */
-#ifndef ADC_PACING
-#define ADC_PACING        0u
+/* The sample rate at boot, as PLL1's two output dividers: the ADC clock
+ * is 1600 MHz / (POSTDIV1 * POSTDIV2), and eight of those clocks make one
+ * back-to-back conversion. 7/7 = 32.65 MHz = 4.08 MSPS is the slowest
+ * setting that still clears the ADC's 32 MHz minimum; 5/5 = 64 MHz =
+ * 8 MSPS is what the customer's application needs; 5/1 = 320 MHz =
+ * 40 MSPS is the maximum and what clock_init() starts with.
+ *
+ * The slowest setting is the default on purpose: it is the one the DMA
+ * should manage comfortably, so the first test of a run is the one most
+ * likely to pass, and a failure there means the chain itself is broken -
+ * not the rate. "pll <p1> <p2>" changes it at run time.
+ *
+ * Why the PLL and not the CLKGEN6 divider: the divider does not work.
+ * Every ratio was written, read back and confirmed by DIVSWEN and CLKRDY,
+ * with the generator switched off around the write and with it left
+ * running, and the ADC converted at 40 MSPS at every one of them
+ * (docs/HARDWARE-LOG.md runs 8 and 9). */
+#ifndef ADC_PLL_POSTDIV1
+#define ADC_PLL_POSTDIV1  7u
 #endif
-#ifndef ADC_SCCP_TICKS
-#define ADC_SCCP_TICKS    5u      /* 5 x 10 ns = 20 MSPS                      */
-#endif
-#ifndef ADC_CLKDIV
-#define ADC_CLKDIV        100u    /* ADC clock divide ratio x 100: 100 = 320 MHz */
+#ifndef ADC_PLL_POSTDIV2
+#define ADC_PLL_POSTDIV2  7u
 #endif
 
 /* Boot chatter: with 1 every start-up step reports its registers on the
  * console ([clk] PLL1 locked, [adc] pinsel, [dma] DMALOW ...). With 0 the
- * boot prints only what changes from run to run - reset cause, self-test
- * and rate-test results, the sweep, and anything that fails. fail() and
+ * boot prints only what changes from run to run - reset cause and
+ * anything that fails. fail() and
  * the trap handler print everything either way. */
 #ifndef BOOT_VERBOSE
 #define BOOT_VERBOSE      0
 #endif
 
-/* Run the rate sweep (the "sweep" console command) once automatically,
- * right after the self-test and before the measurement starts. Needs no
- * console input: the table appears on the terminal by itself, from the
- * slowest rate to the fastest, so a board that dies at some rate shows
- * where. 0 = only on command. */
-#ifndef AUTO_SWEEP
-#ifdef __MPLAB_DEBUGGER_SIMULATOR
-#define AUTO_SWEEP        0       /* 36 000 halves at ~3 per second: no    */
-#else
-#define AUTO_SWEEP        1
-#endif
-#endif
+/* Where the DAC lands in the ADC, from the pinout table (DS70005591D
+ * Table 1, 100-pin and 128-pin columns):
+ *
+ *   PGC2/DACOUT1/AD5AN1/CVDAN1/CMP4D/RP2/RA1        DACOUT1 = AD5AN1
+ *   DACOUT2/AD5AN3/CVDAN8/CMP5A/IBIAS3/ISRC3/RA8    DACOUT2 = AD5AN3
+ *
+ * BOTH DAC OUTPUTS BELONG TO ADC CORE 5. The DAC test therefore has to
+ * switch the core, whatever core the rest of the run uses - run 10
+ * (24.09.2026) ran it on core 3, which cannot see RA8 at all, and
+ * measured the open mikroBUS pin instead of the triangle.
+ *
+ * DAC2 is the one to use: DAC1 shares its pin with PGC2, the second
+ * programming clock. On the EV74H48A, RA8 is DIM pin P44 and goes to
+ * capacitive touch pad 2 - the loop closes on the pin, no wire needed. */
+#define DAC_ADC_CORE      5u
+#define DAC_ADC_PINSEL    3u      /* AD5AN3 = RA8 = DACOUT2, the pin route   */
+
+/* The internal route, and the one the DAC test uses: UREFCON.INSEL = 7
+ * puts DAC2 on the chip's UREF line, and ADnAN7 is the UREF input of
+ * EVERY core (Table 16-2). So the ADC measures the DAC inside the chip -
+ * no pin, no wire, no core switch, and none of the loading the board's
+ * touch-pad network puts on RA8. */
+#define DAC_UREF_PINSEL   7u      /* ADnAN7 = UREF input, any core           */
 
 /* Git revision of the working tree, written to version.h by
  * tools/version.bat (MPLAB X pre-build step, build.bat) or version.sh

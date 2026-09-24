@@ -24,7 +24,7 @@ runs at the end are few and each one has an expected output written down.
 2. **Frame format** on the wire, after the parser's echo of the command:
 
    ```
-   BIN n=<count> pace=<trg2src> per=<period> samc=<samc> in=<pinsel>\r\n
+   BIN n=<count> p1=<postdiv1> p2=<postdiv2> samc=<samc> in=<pinsel>\r\n
    <2*count bytes: samples as uint16 little-endian, 12-bit value in bits 11:0>
    \r\nCRC <hex4>\r\n
    > <ACK or NAK>

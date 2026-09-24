@@ -56,13 +56,13 @@ bool     adc_ch0_flag(void);                 /* its CH0 interrupt flag          
  * the core's event flags. Between tests, with the core idle. */
 void     adc_clear_events(void);
 
-/* ADC core ADC_INSTANCE, channel 0, Integration mode, CNT = SAMPLES_PER_BUF,
- * conversions inside a burst paced by the ADC's repeat timer with period
- * `rptcnt` TAD (TAD = 12.5 ns at 320 MHz: 2 = 40 MSPS, 63 = 1.27 MSPS).
- * Stops in fail(5) if the core never reports ready. */
-void adc_init(uint8_t pinsel, uint8_t samc, uint8_t rptcnt);
+/* ADC core ADC_INSTANCE, channel 0, Integration mode, CNT = the DMA block
+ * length, conversions back-to-back (TRG2SRC = 2) - the only mechanism
+ * this silicon honours. The rate comes from the ADC clock alone, see
+ * clock_adc_set_div(). Stops in fail(5) if the core never reports ready. */
+void adc_init(uint8_t pinsel, uint8_t samc);
 
-/* Trigger one burst of SAMPLES_PER_BUF conversions. */
+/* Trigger one burst of CNT conversions. */
 void adc_start_burst(void);
 
 /* Input pin (PINSEL 0..15) and sample time (SAMC 0..31) of channel 0.
@@ -70,29 +70,6 @@ void adc_start_burst(void);
 void    adc_set_input(uint8_t pinsel, uint8_t samc);
 uint8_t adc_pinsel(void);
 uint8_t adc_samc(void);
-
-/* Repeat-timer period (RPTCNT, 2..63 TAD). Same rule as adc_set_input(). */
-void    adc_set_period(uint8_t rptcnt);
-uint8_t adc_period(void);
-
-/* What re-triggers the conversions inside a burst: TRG2SRC, DS70005591D
- * Table 16-4 (p1227). Same rule: between bursts, through capture.c. */
-#define ADC_TRG2_B2B      2u        /* back-to-back: as fast as it goes  */
-#define ADC_TRG2_REPEAT   3u        /* the ADC's repeat timer, RPTCNT    */
-#define ADC_TRG2_SCCP1    34u       /* SCCP1 trigger: 100010 in Tables 16-3
-                                     * AND 16-4 (p1226 f.). 32 = 100000 is
-                                     * "PTG trigger 12" - what runs 5 and 6
-                                     * on the board were really testing. */
-/* Not TRG2SRC values - pacing sources capture.c owns:
- *   64  the ADC clock divider (clock.c), TRG2SRC = back-to-back
- *   65  one conversion per SCCP1 trigger: Single Conversion mode with the
- *       SCCP1 trigger as TRG1SRC - what Microchip's own 40 MSPS example
- *       does (8 channels x 5 MSPS, MCC: "Single Sample", trigger source
- *       "SCCP1 Trigger Event"). No burst, no CNT, no restart. */
-#define ADC_PACE_CLKDIV   64u
-#define ADC_PACE_SINGLE   65u
-void    adc_set_trg2(uint8_t trg2src);
-uint8_t adc_trg2(void);
 
 /* Take the core down and bring it back. The clock of a running core is
  * not changed: the caller calls adc_deinit(), changes CLKGEN6, calls
@@ -110,7 +87,9 @@ bool    adc_ready(void);
  * per TRG1 trigger from the given source, TRG2 unused. Only while no
  * burst is in flight and no trigger is running. */
 void    adc_set_mode_burst(void);
-void    adc_set_mode_single(uint8_t trg1src);
+/* Conversions per burst (CNT, up to 65535): the DMA block length. Set
+ * by capture_init() before every start, idle only. */
+void    adc_set_burst_len(uint32_t count);
 
 /* The core's registers as "name: 0x........" lines (part of regs_dump()). */
 void adc_regs_dump(void);

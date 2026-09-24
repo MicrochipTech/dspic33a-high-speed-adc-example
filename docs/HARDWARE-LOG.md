@@ -367,3 +367,579 @@ with the DMA off and begins with a freshly initialised one (the user's rule). Re
 single-conversion source stops wherever its timer is switched off, and the next test
 would have started in a half-filled half - harmless for a rate, misleading for the DAC
 check. Self-test, rate test, every sweep point and the DAC test call it first.
+
+Also (24.09.): the buffer half length is a run-time value, `capture_half_len()`,
+default = the allocation maximum of 1024 samples, so nothing changes unless asked.
+`buf <16..1024>` (stream stopped) sets it; the next `capture_start()` sets the ADC burst
+length (`adc_set_burst_len`), the DMA block and the guard words - which now sit right
+behind the region in use - for that size. All consumers (stats, dump, sweep and rate
+maths, DAC test, self-test mean) read the length. No heap: the array stays static at
+its maximum. The simulator build takes `build.bat sim <n>` to run the ping-pong check
+at another size.
+
+## 2026-09-24, run 7 - master 1817f6d (+local changes), build 09:39:31, both phases
+
+`RCON = EXTR`. The first run with the two boot phases. Self-test 3815 on core 3,
+3824 on core 5.
+
+**What the board confirmed for the first time.** The ADC core switch works at run
+time: phase 2 reports `core: 5`, `DMA0SEL 0x3B -> 0x48` and `DMA0SRC 0x0B64 ->
+0x0DA4`, so the DMA follows the core to the other trigger and the other result
+register, and the self-test passes on both cores. DAC2 comes up on CLKGEN7 at
+320 MHz: `DACCTRL1 = 0x3F7F8000`, `DAC2CON = 0x8100`, `DAC2DAT = 0x0F000100`
+(3840/256), `DAC2SLPDAT = 8`, `CLK7CON` equal to `CLK6CON`. Two of the three
+questions the 24.09. entry left open are answered; the third - whether ADC 5 reads
+the pin the DAC drives - is not, because the DAC test never printed a verdict (below).
+
+**All four paced sources failed, in two different ways.**
+
+1. Both SCCP1 paths, `ADC_PACE_SINGLE` (65) and `ADC_TRG2_SCCP1` (34), printed
+   `no data at period: 20` - not a wrong rate, no conversion at all. After the
+   23.09. fixes (code 34 instead of 32, `AUXOUT = 01`) that points at SCCP1 still
+   emitting nothing, and the log cannot say more: the register snapshot had no SCCP
+   block at all.
+2. The clock divider (64) at ratio 8 (`period 800`, nominal 5000 ksps) delivered
+   37 350 ksps, and the repeat timer (3) at RPTCNT 16 delivered 36 028 ksps - both
+   the unpaced rate. `CLK6DIV` was 0x0000 in the phase-1 snapshot and 0x8000 in the
+   phase-2 one (`INTDIV 0, FRACDIV 256` = the ratio 1 written back after the test),
+   so writes do reach the register; what the log does not show is the value that
+   stood there *while* the divider was measured. `rate_measure()` discarded the
+   return of `capture_set_period()`, so a divider switch that failed
+   (`DIVSWEN`/`CLKRDY` never coming) produced a normal looking row.
+
+So `[pacing] using: back-to-back - NO PACED SOURCE PASSED, the rate is not under
+control`, and the sweep has one row.
+
+**The measurement, now confirmed a fourth time and in two independent runs.**
+Back-to-back 38 167 ksps, overrun 83 083 of 2 048 000 samples = **4.06 %**, missed
+1969 of 2000, late 0. Phase 1 and phase 2 printed these figures **digit for digit
+identical** - with a floating mikroBUS pin in phase 1 and the DAC driving the pin in
+phase 2. The loss is therefore set by the clock alone and has nothing to do with the
+signal: at ~38 MSPS the DMA does not keep up. That is the number this example exists
+to produce.
+
+**The run stops inside the DAC test, silently.** The log ends after
+`[dactest]   jump limit LSb: 76`, the last of the header lines; no verdict, no
+`[PHASE 2 DONE]`, no `[DONE]`, no END banner, no boot banner, no `[TRAP]` block. The
+colleague repeated the run with a second terminal program (TeraTerm, then Hercules)
+and it stopped at the same line both times, with `help` having no effect afterwards -
+so it is the board, not the copy. Between that line and the next output there are
+only `capture_settle()`, `counters_clear()`, `capture_start()` and the collecting
+loop, and **every wait on that path is bounded**: `capture_settle()` waits at most
+`WAIT_LIMIT` (~30 ms) and then takes the core down and up, `adc_reinit()` bounds
+ADRDY, `dma0_deinit()` has no loop, and the loop itself leaves with `[dactest] no
+data` (6) or `DMA channel switched itself off` (8). An ordinary wait can therefore
+not be the cause.
+
+The one mechanism that fits every observation: the DMA interrupt runs at priority 4
+and fires ~1.56 million times a second at 38 MSPS (every 640 ns), U2RX at priority 1
+sits below it. If the handler takes longer than the gap between events, the CPU never
+reaches the main loop again - no output, no trap, no reset, and the console deaf,
+which is also what `rx = 0` in run 6 was. Against it: the sweep, which runs the same
+start/stop sequence, completed. Unproven either way.
+
+Changed in reaction (no board run yet):
+
+- `dactest.c` traces the four steps and flushes after each line
+  (`settling`, `settled`, `starting the stream`, `stream started, collecting`,
+  `first half copied`), so the next log names the call that swallows the CPU.
+  Flushed because an unflushed line sits in the transmit FIFO when the CPU stops.
+- `sccp.c/.h`: `sccp1_regs_dump()` - `CCP1CON1`, `CCP1CON2`, `CCP1PR` and `CCP1TMR`
+  read twice. Both reads 0 means the timer never started and no aux-out pulse can
+  reach the ADC. It is in the boot snapshot (`diag.c`) and in the rate test, in the
+  `no data` branch as well - which is the only witness when nothing converts.
+- `capture.c`: `pacing_readback()` prints, next to each measured row, what the
+  hardware holds - divide ratio and ADC clock for 64, RPTCNT and TRG2SRC for 3, the
+  SCCP registers for 34/65. `rate_measure()` now reports a refused period (code 13)
+  instead of measuring anyway.
+- `console.h` includes `<stdbool.h>`; it declares `console_sweep(uint32_t, bool)`
+  and was not self-contained, which only showed when `sccp.c` included it.
+
+## 2026-09-24, after run 7 - back-to-back only, nothing runs by itself (no board run yet)
+
+The user's decision after run 7: concentrate on back-to-back, remove everything else from
+the code, and let the firmware do nothing until someone types a command.
+
+**Removed.** `sccp.c/.h`; the pacing sources 3 (ADC repeat timer), 34 (SCCP1 as second
+trigger) and 65 (one conversion per SCCP1 trigger); `capture_autopace()`, the pacing
+selection and the whole `pacing`/`period` mechanism including the ISR path that applied a
+period between two bursts; `ADC_PACING`, `ADC_RPTCNT`, `ADC_SCCP_TICKS` and `AUTO_SWEEP`
+in `board.h`; the `rptcnt` argument of `adc_init()` and the `adc_set_period`/`adc_trg2`/
+`adc_set_mode_single` helpers; the two automatic boot phases with their register
+snapshots. `TRG2SRC` is wired to 2 and nothing writes it again.
+
+Why: all four were configured correctly, read back correctly and ignored (runs 4 to 7).
+Keeping them meant every log carried four failing blocks before the one measurement that
+works.
+
+**The rate is now the ADC clock alone.** `clock_adc_set_div()` returns `CLKDIV_OK` or the
+step that failed - `CLKDIV_NOT_WRITTEN` (the write did not reach CLK6DIV),
+`CLKDIV_DIVSWEN` (the switch never completed), `CLKDIV_CLKRDY`, `CLKDIV_LOST` (the value
+was discarded over the switch), `CLKDIV_ADC` (the core did not come back). The fields are
+read back before and after the switch. `capture_set_clkdiv()` does the sequence the user
+asked for and it is the boot order run backwards and forwards again: DMA channel down and
+burst finished (`capture_settle`), ADC core off (`adc_deinit`), CLKGEN6 off, divider
+written and read back, generator on, `DIVSWEN`, `CLKRDY`, fields read back, core on with
+`ADRDY` (`adc_reinit`), DMA set up from scratch on the next `capture_start()`. Run 7 could
+not distinguish a divider that never switched from one that switched without effect,
+because `rate_measure()` discarded the return value of `capture_set_period()`.
+
+Also corrected: the comment in `clock_adc_set_div()` claimed ratio 1 was `INTDIV 0,
+FRACDIV 0`. The arithmetic in the same block gives `INTDIV 0, FRACDIV 256`, which is what
+the phase-2 snapshot of run 7 showed (`CLK6DIV = 0x8000`).
+
+**Nothing runs at boot.** The firmware brings LED, console, clocks, ADC core and DMA
+channel up, sets the slowest ratio (`ADC_CLKDIV` = 1000 = /10 = 32 MHz = 4 MSPS), prints
+about a dozen lines and waits. No conversion is triggered, so no DMA event and no
+interrupt can come from the ADC side. That is what settles `rx = 0`: with nothing
+converting, a character that does not echo cannot be blamed on interrupt starvation.
+
+**`test` runs the parts.** `test` alone lists them; `test all [halves]` runs self, clock,
+sweep, dac in that order and prints a four-line verdict at the end. Only `test self`
+failing stops `all` - without a working chain every number after it is meaningless.
+
+- `test self`  - the self-test on the internal reference at the slowest clock.
+- `test clock` - every ratio of the ladder switched and read back, **nothing measured**.
+  This is the test that separates "the switch does not happen" from "the switch happens
+  and the rate does not follow".
+- `test rate [halves]` - delivered rate at the ratio set now, judged against the nominal
+  one within 10 %.
+- `test sweep [halves]` - the ladder with overrun/late/missed per point.
+- `test dac [halves]` - the DAC2 triangle through the chain.
+
+Plus `clk <100..1000>` to set a single ratio by hand, and `regs` as before.
+
+**The sweep runs from the slowest rate upwards** (the user's decision), because the
+slowest point is the one the DMA should manage: the first row is the row most likely to
+pass, and a failure there is the chain, not the rate. The ladder is
+1000, 900, 800, 700, 600, **500**, 450, 400, 350, 300, 250, 200, 150, 125, 100 - that is
+4.00, 4.44, 5.00, 5.71, 6.67, **8.00**, 8.89, 10.0, 11.4, 13.3, 16.0, 20.0, 26.7, 32.0,
+40.0 MSPS. 500 = 8 MSPS is in it because that is the customer's floor. The fractional
+ratios are there for a second reason: 2.5 sits exactly between 2 and 3, and 4.5 between
+4 and 5, so a row that lands halfway between its neighbours proves `FRACDIV` works and a
+row that snaps to a neighbour proves only `INTDIV` counts. Ratio 1 is `FRACDIV 256`, so
+that question is not academic.
+
+**Still in, unchanged in purpose:** the self-test, the counters, the guard words, the trap
+handler and the `RCON` report, `dac.c`/`dactest.c` (the only way to show that the samples
+arrive complete and in order - counters cannot), and the DAC test's step trace from
+earlier today.
+
+Verified: both builds (`build.bat` and `build.bat sim`) are `-Wall -Wextra` clean. The
+simulator acceptance run was not made - it is run on request now. **Nothing of this has
+been on the board.**
+
+The expected log is much shorter than run 7's: the boot prints about a dozen lines
+instead of two full register snapshots and five rate-test blocks per phase, and the
+register dump is a command (`regs`) rather than an automatism.
+
+## 2026-09-24, run 8 - master afc5e00 (+local changes), build 11:31:46 - THE CONSOLE WORKS
+
+`RCON = EXTR`. The first run of the reworked firmware, and the first run in which anyone
+typed anything at the board.
+
+**The console receives.** `help` answered with the full command list, `test all` started.
+That closes the question the last three runs left open: **the bytes do reach RD1, and
+`rx = 0` in runs 6 and 7 was the receive interrupt (priority 1) being starved behind the
+DMA interrupt (priority 4, 1.6 million per second at full rate)**. Pin routing, PPS,
+terminal and COM port were never the problem. The idle boot was worth it on its own: from
+here on experiments cost a command, not a build and a colleague.
+
+**Self-test 3829** on the internal reference at the slowest clock setting. PASS.
+
+**`test clock` passed all fifteen ratios** - every one written, read back identically,
+`DIVSWEN` cleared, `CLKRDY` came, the ADC core came back with `ADRDY`. And that turned out
+to be a **false positive**: it proves the register holds the value, nothing more.
+
+**The sweep showed the rate does not follow the divider at all.** Twelve rows before the
+log was cut, every one of them at the full rate:
+
+```
+ratio 1000 (read back 1000)  ksps nominal 4000  measured 39729   overrun 73157/80633/77511  missed 1735
+ratio  900 (read back  900)  ksps nominal 4444  measured 39818   overrun 72663/79459/77114  missed 1705
+ratio  800 (read back  800)  ksps nominal 5000  measured 39693   overrun 74019/89791/76741  missed 1929
+ratio  700 (read back  700)  ksps nominal 5714  measured 40675   overrun 66681/89308/75017  missed 1925
+ratio  600 (read back  600)  ksps nominal 6666  measured 39248   overrun 76987/76983/76727  missed 1568
+ratio  500 (read back  500)  ksps nominal 8000  measured 39311   overrun 77307/84700/73206  missed 1754
+ratio  450 (read back  450)  ksps nominal 8888  measured 40356   overrun 69259/69892/69215  missed 1930
+ratio  400 (read back  400)  ksps nominal 10000 measured 40338   overrun 69762/86856/76987  missed 1802
+ratio  350 (read back  350)  ksps nominal 11428 measured 40390   overrun 67316/67767/67359  missed 1921
+ratio  300 (read back  300)  ksps nominal 13333 measured 40761   overrun 65538/77950/77035  missed 1346
+ratio  250 (read back  250)  ksps nominal 16000 measured 40433  overrun 64324/64459/63702  missed 1913
+ratio  200 (read back  200)  ksps nominal 20000 measured 41119   overrun 61112/90055/77496  missed 1552
+```
+
+Timer check 1250001 of 1250000, so the stopwatch is right. Asked for 4 MSPS, got 39.7.
+The scatter between rows is about 5 % and does not correlate with the ratio - it is run to
+run noise, not a trend. Overrun stays at 3 to 4.5 % of 2 048 000 samples throughout, and
+`missed` at 1300 to 1930 of 2000, exactly as in runs 4 to 7.
+
+**The cause, found in the datasheet afterwards (12.4.2 step 4 and Example 12-2, p771).**
+The documented procedure changes the divider **with the clock generator running**:
+
+```
+CLK6CONbits.ON = 1;                  // the generator is ON throughout
+CLK6DIVbits.INTDIV  = 1;             // 4a: integer factor
+CLK6DIVbits.FRACDIV = 128;           // 4b: fraction
+CLK6CONbits.DIVSWEN = 1;             // 4c: apply
+while (CLK6CONbits.DIVSWEN != 0);
+```
+
+Our sequence switched CLKGEN6 **off** first (`ON = 0`), wrote the divider, switched it back
+on and then set `DIVSWEN`. The bit cleared, `CLKRDY` came, the register kept the value -
+and the divide factor was never taken over. Fixed: the generator stays on, `INTDIV` is
+written before `FRACDIV`, then `DIVSWEN`. The ADC core and the DMA channel are still taken
+down by the caller; they are what needs protecting, the generator is not.
+
+**Second finding in the same paragraph:** "FRACDIV will not work if INTDIV is configured
+to 0" (12.4.2 4b). INTDIV is ratio/2, so **no ratio between 1 and 2 can be realised** -
+`FRACDIV` alone does nothing and the clock comes out undivided. Ratios 1.25 and 1.5 are
+therefore out of the ladder, 20 MSPS is the fastest divided rate, and the step above it is
+the undivided 40 MSPS. `clock_adc_set_div()` now refuses 101..199 with `CLKDIV_INTDIV0`
+instead of silently running at full speed. Ratio 1 is written as both fields 0.
+
+**Not known yet:** the log ends inside the sweep, so there is no DAC test result and no
+verdict block. The three remaining rows (150, 125, 100) are gone from the ladder anyway.
+
+Nothing of the fix has been on the board.
+
+**Why the run stops dead, and the brake against it.** After the ratio-200 row the log ends
+mid-line and the parser stops answering - the same picture as run 7's DAC test. The
+explanation that fits everything: at the undivided rate the overrun interrupt fires every
+625 ns, which is 125 CPU cycles at 200 MHz, and an interrupt entry with its context save
+plus the handler costs about the same. The CPU sits exactly on the edge of never returning
+to the main loop, and twice it fell off. No trap, no reset, no banner, because the CPU is
+executing valid code - it just never leaves the handler; and the console dies with it
+because U2RX is priority 1 and the DMA channel 4. Run 6 shows the same effect one step
+weaker: `missed` 96 %, so the main loop still got 4 % of the halves.
+
+The overrun event cannot be masked on its own (13.6.1; `DMA0CH` has HALFEN, DONEEN and
+MATCHEN only). So the handler stops itself: past `OVERRUN_LIMIT` (500 000) in one
+measurement it masks its own interrupt, takes the channel down and ends the stream
+(`capture_overrun_aborted()`). A healthy full-rate point produces about 82 000 overruns per
+2000 halves, so the limit never fires in normal use; a runaway reaches it within a third of
+a second. The sweep row, the rate test and the DAC test all report it instead of the board
+going quiet. `counters_clear()` re-arms it, and every test calls that first.
+
+This does not make a flooding rate usable - it makes it survivable, so the run continues
+and the log gets written. The cure for the flood itself is the divider fix above.
+
+## 2026-09-24, run 9 - master 38e7a0c, build 12:23:31 - the brake holds, the divider still does nothing
+
+**The brake works and the board stays alive.** The whole `test all` ran to the end, and
+afterwards the console still answered - `help`, `test`, `test clock`, `test dac` all worked.
+At the undivided ratio all three loads aborted with STOPPED, which is the brake doing its
+job. No freeze, for the first time since run 6.
+
+**But the brake stays tripped - a defect, fixed after this run.** It compared the
+cumulative `dma_overrun`, which only `counters_clear()` resets, so once it had fired the
+very first overrun of every later test tripped it again: `test self` reported "DMA channel
+disabled" although everything had just worked. It has its own counter now, zeroed at every
+`capture_start()`, and it also clears `dma_armed` so the next start re-initialises the
+channel.
+
+**The divider still changes nothing.** All thirteen rows measured 39 750 to 40 791 ksps -
+ratio 1000 (4 MSPS asked for) and ratio 200 (20 MSPS asked for) alike:
+
+```
+postdiv/ratio 1000  nominal  4000  measured 39750   overrun 78730/187413/75638  missed 1960
+              900   nominal  4444  measured 40418   overrun 71734/78695/73985   missed 35
+              800   nominal  5000  measured 39797   overrun 78725/130000/78725  missed 15
+              700   nominal  5714  measured 40364   overrun 72426/159177/74830  missed 13
+              600   nominal  6666  measured 40781   overrun 69520/115816/79235  missed 11
+              500   nominal  8000  measured 40043   overrun 73070/142702/72706  missed 9
+              450   nominal  8888  measured 40706   overrun 69718/71807/69937   missed 1944
+              400   nominal 10000  measured 40663   overrun 68689/166827/68704  missed 7
+              350   nominal 11428  measured 40704   overrun 68271/68770/68318   missed 1924
+              300   nominal 13333  measured     0   overrun STOPPED/241619/62881
+              250   nominal 16000  measured 40791   overrun 65440/66444/64961   missed 1940
+              200   nominal 20000  measured 40712   overrun 66631/STOPPED/62008 missed 47
+              100   nominal 40000  measured     0   overrun STOPPED/STOPPED/STOPPED
+```
+
+That is now the second switching sequence with the same result. Run 8 switched CLKGEN6 off
+around the write, run 9 left it running exactly as Example 12-2 prescribes; in both the
+register took the value, `DIVSWEN` cleared, `CLKRDY` came, and the ADC converted at 40 MSPS
+throughout. **The conclusion is no longer "we switch it wrongly" but "the CLKGEN6 divider
+does not set the ADC conversion rate on this silicon."**
+
+Worth noting in the table: `missed` is bimodal - either about 1930 of 2000 or under 50 -
+and the rows where the main loop kept up are the rows where the `process` run shows roughly
+twice the overruns. Both follow from the CPU sitting on the tipping point of the interrupt
+load: if it tips, the main loop gets nothing; if it does not, the processing itself costs
+bus cycles and pushes the overrun count up. It is not a property of the rate, which never
+changed.
+
+**Changed in reaction (no board run yet): the rate comes from PLL1 now.**
+
+PLL1 feeds nothing but the ADC path - the CPU runs off PLL2 - so it can be retuned freely.
+FVCO is 1600 MHz and the output is FVCO / (POSTDIV1 * POSTDIV2), both fields 1..7 with
+POSTDIV1 >= POSTDIV2 (p778). The ladder, slowest first:
+
+```
+  7/7   32.65 MHz    4.08 MSPS   slowest that still clears the ADC minimum of 32 MHz
+  7/6   38.10 MHz    4.76 MSPS
+  6/6   44.44 MHz    5.56 MSPS
+  7/5   45.71 MHz    5.71 MSPS
+  6/5   53.33 MHz    6.67 MSPS
+  7/4   57.14 MHz    7.14 MSPS
+  5/5   64.00 MHz    8.00 MSPS   the customer's floor
+  6/4   66.67 MHz    8.33 MSPS
+  5/4   80.00 MHz   10.00 MSPS
+  6/3   88.89 MHz   11.11 MSPS
+  5/3  106.67 MHz   13.33 MSPS
+  6/2  133.33 MHz   16.67 MSPS
+  5/2  160.00 MHz   20.00 MSPS
+  5/1  320.00 MHz   40.00 MSPS   the boot setting of clock_init()
+```
+
+The decisive argument for this route: **the PLL's output-divider switch is the one
+`clock_init()` performs at every boot.** If it did not work the board would not come up at
+all, so unlike the CLKGEN6 divider it is known to work on this silicon. The sequence is the
+same as before - DMA channel down, ADC core off (p778: the output dividers must not move
+while the PLL is operating), PLL1DIV written and read back, FOUTSWEN awaited, PLL1RDY
+awaited, CLKGEN6 CLKRDY awaited, core on, DMA from scratch.
+
+`clock_adc_hz()` is derived from the registers now (PLLPRE, PLLFBDIV, POSTDIV1, POSTDIV2,
+then the CLKGEN6 ratio) instead of assuming 320 MHz, so a switch that did not take shows up
+in the number instead of being papered over. `clock_dac_hz()` uses the same PLL output -
+CLKGEN7 hangs off PLL1 too, so retuning for the sample rate moves the DAC's triangle with
+it, and `dactest` reads the period back live.
+
+**New: `test clkoff`.** Table 16-1 names CLKGEN6 as the ADC clock source, and its divider
+has no effect - so ask the board directly: take the core down, switch CLKGEN6 **off**,
+bring the core back and try to convert. If halves still arrive, the ADC is not running off
+that generator and the last two runs are explained at a stroke. If nothing arrives, the
+generator does feed it and the mystery stays with the divider. Either way it is one command
+and a few milliseconds. It runs as part of `test all`, after `test clock`.
+
+`test clock` keeps the CLKGEN6 ratios and now prints, under its PASS, that passing there
+only proves the register holds the value.
+
+Boot default is the slowest PLL setting (7/7), for the same reason the ladder starts there.
+New commands: `pll <p1> <p2>` for the rate, `clk` kept for the CLKGEN6 ratio with its
+warning. Both builds `-Wall -Wextra` clean; nothing of this has been on the board.
+
+## 2026-09-24, run 10 - master 33118cc, build 12:41:01 - the ADC ignores its clock entirely
+
+Boot at PLL 7/7: `adc clock Hz 32653061`, `sample rate ksps 4081`. So the PLL switch itself
+does arrive - the registers report the clock the ladder asks for. Self-test 3832, PASS.
+
+**`test clkoff`: the ADC kept converting with CLKGEN6 switched off.** 260 halves after the
+generator was taken down, and the core still reported ADRDY. Table 16-1 names CLKGEN6 as the
+ADC clock source; the board disagrees.
+
+**And the PLL does not set the rate either.** Fourteen rows, the read-back clock rising
+cleanly from 32.65 to 320 MHz - a factor of ten - and the measured rate flat at 41 375 to
+44 231 ksps throughout:
+
+```
+postdiv 7/7   32.65 MHz   nominal  4081   measured 42516   overrun 56567/58489/57239
+postdiv 6/5   53.33 MHz   nominal  6666   measured 42408   overrun 54695/55042/54483
+postdiv 5/5   64.00 MHz   nominal  8000   measured 42242   overrun 53602/53599/53595
+postdiv 5/2  160.00 MHz   nominal 20000   measured 43334   overrun 42753/43211/43085
+postdiv 5/1  320.00 MHz   nominal 40000   measured 44231   overrun 32314/32625/32076
+```
+
+Note what the measured column is: **above the datasheet's 40 MSPS** at every setting, with a
+weak upward trend that follows the PLL by 4 % while the nominal rate spans a factor of ten.
+The overrun count falls as the PLL goes up, from 56 567 to 32 314.
+
+**The reading this forces, and it is bigger than a rate problem.** `blocks_done` counts DMA
+half-completions, not conversions. If the ADC's result-ready event stays asserted, the DMA
+copies the same result register over and over at its own speed - which would be independent
+of every ADC clock setting, would come out above the converter's specified maximum because
+it is not the converter's rate, would not stop when CLKGEN6 is switched off, and would show
+exactly this weak coupling to the PLL through the register interface.
+
+**The self-test cannot tell the difference.** It samples a DC reference, so a frozen register
+gives the same mean of 3832 that real conversions do. It has never proved that anything is
+converted - only that a plausible value lands in the buffer.
+
+**The DAC test is therefore the decisive measurement of this project**, and it has never once
+run correctly: in run 7 it stopped silently, in runs 9 and 10 the brake stopped it, and in
+run 10 it ran on **ADC core 3** while DACOUT2 is an input of core 5 - it was measuring an open
+pin. Rebuilt for this, no board run yet:
+
+- **The DAC is measured inside the chip.** `UREFCON.INSEL` puts one of DAC1..DAC8 on the
+  device's internal UREF line (ATDF value group `UREFCON_CON__INSEL`: 1 AVDD/2, 2 VDD/2,
+  3 VDDcore, 4 bandgap, 5 temperature sensor, 6..13 DAC1..DAC8, 14 AVSS, 15 AVDD), and
+  `ADnAN7` is the UREF input of **every** core (Table 16-2). So the test routes DAC2 to UREF
+  and samples AN7 on whatever core is in use: no pin, no wire, no core switch, and none of
+  the loading the board's touch-pad network puts on RA8. `uref_route_dac2()` in dac.c,
+  `UREFCON` added to the register dump. The pin route is documented in board.h for the
+  record: DACOUT1 = AD5AN1 = RA1 (shared with PGC2), DACOUT2 = AD5AN3 = RA8, both on core 5.
+- **Capture first, analyse afterwards.** Eight halves are copied into RAM and nothing is
+  computed while the stream runs; the judgement comes after the stream is down. The old
+  version analysed each half as it arrived, which under the overrun storm took long enough
+  for half a million overruns to pile up - that is why the brake stopped it after the first
+  half in run 10. A memcpy of 2 KB is about a thousand cycles and fits in the 24 us a half
+  lasts even with the storm stealing most of the CPU. 16 KB of the 64 KB go to the store;
+  the firmware now uses about 21 KB in total.
+- **The verdict is about data, not rate.** Peak-to-peak over the whole capture is the
+  question: a frozen register gives 0, a real ramp some thousand counts. Eight halves are
+  8192 samples, about 200 us at the rates seen, and one slope of the triangle lasts 220 us -
+  so a clean monotonic ramp of roughly 1600 counts must appear. Slope reversals show whether
+  the samples are in order, and gaps count halves that completed but were not copied, which
+  would break the continuity the shape is judged on. A few dozen raw values are printed, so
+  the ramp can be seen in the log instead of trusted from the arithmetic.
+
+If that capture shows a ramp, the chain is proven - conversions are real, complete and in
+order - and only the rate is open. If it shows a flat line, the DMA is moving a stale
+register and every rate measured in runs 4 to 10 is void.
+
+Worth taking to the product line either way: an ADC that ignores both its clock generator's
+divider and its PLL's output dividers, converts with the generator switched off, and delivers
+above its specified maximum is a question for the factory, and the register evidence for it
+is now complete.
+
+## 2026-09-24, run 11 - master 928867d, build 13:03:59 - THE ADC REALLY CONVERTS
+
+`dac on`, then `test dac`. The DAC2 triangle routed to the internal UREF line and sampled as
+AN7 on core 3 - no pin, no wire, no core switch.
+
+**The question this project has been circling since run 4 is answered: the conversions are
+real.**
+
+```
+min 221   max 3864   peak-to-peak 3643
+```
+
+The DAC was set to 256..3840. The buffer holds the full DAC range, so the ADC converts a
+real signal and the DMA moves real results. The stale-register hypothesis raised after run
+10 is dead, and the internal UREF path works.
+
+**What the run could not answer is order and completeness, and the reason is in the numbers:**
+
+```
+halves missed between copies (gaps): 8552   for eight copies
+slope reversals: 430
+largest step between two samples: 3126
+overrun during the capture: 342508
+```
+
+Between two memcpys about a thousand halves completed. At the full rate the main loop runs
+tens of milliseconds behind the DMA, so the half being copied had been overwritten a thousand
+times over: the copy is a mixture of old and new data. That is visible in the raw dump, which
+alternates between two plateaus of about 3100 and 1470 with the step always a few samples
+into the half - the seam between what the DMA had already rewritten and what was left from
+before. Not signal, and not a converter fault: a torn read.
+
+`ksps measured` printed 0, which only says the window was far longer than the sample count
+suggests - the same starvation seen from the other side.
+
+**Changed in reaction (no board run yet): one buffer, and the DMA interrupt stops the stream.**
+
+`capture_oneshot()` fills the buffer exactly once and the ISR ends the run at DONE instead of
+restarting the burst. The main loop being slow no longer matters - it only has to notice,
+eventually, that the burst is over. Afterwards the whole buffer is one contiguous window that
+nothing is writing any more, so there are no gaps to count and no torn halves by construction:
+the ADC burst is CNT = 2 * half_len, which is exactly one buffer, with HALF at the middle and
+DONE at the end.
+
+2048 samples are about 48 us at the rates seen, and one slope of the triangle lasts 220 us at
+the boot clock, so the window covers roughly a fifth of a slope: a monotonic ramp of some 700
+counts, with at most one turning point if it straddles a peak. `dac on <slpdat>` with a
+smaller slpdat makes the triangle faster and the ramp steeper - slpdat 2 gives about a quarter
+of a period per buffer.
+
+The verdict is now three things a torn window cannot fake: peak-to-peak (a frozen register
+gives 0), at most one slope reversal, and no step larger than 200 counts between neighbouring
+samples - the triangle moves well under one count per sample at these rates, so a jump of
+hundreds is a missing sample or a seam. The store shrank from 16 KB to 4 KB with it.
+
+Both builds `-Wall -Wextra` clean.
+
+## 2026-09-24, run 12 - master 528b370, build 13:10:35 - a PASS that does not hold
+
+`dac on`, `test dac`. The one-shot capture works: one contiguous window of 2048 samples, no
+gaps, no torn halves, and the test printed PASS. The PASS is not trustworthy, for three
+reasons, and all three are fixed.
+
+```
+window ticks (12.5 MHz): 0
+min 686   max 758   peak-to-peak 72   largest step 49   slope reversals 0
+overrun during the burst: 664
+first 24 samples: 740 x17, then 747 x7
+every 64th: 740, 724, 695, 686, 717, 717, 717, ... 717
+```
+
+**The reversal check was vacuous.** The hysteresis was a fixed 96 counts and the window moved
+72, so the detector never armed: "reversals 0" said only that the signal was smaller than the
+threshold. It is derived from the measured peak-to-peak now, with a floor of 8.
+
+**Timer1 was never running.** `timebase_init()` was called only from `timebase_check()`, which
+only the sweep calls - a run that types `test dac` and nothing else has no clock, hence zero
+ticks. It is started at boot now.
+
+**And the window barely moved.** At the DAC settings the triangle should cover about 800
+counts in 2048 samples; it covered 72. The raw values show it plainly: 740, a short settle
+down to 686, then 717 for the remaining 1800 samples. Nearly constant, not a ramp.
+
+What does hold: the values change smoothly, in steps of at most 49, with no jumps. A frozen
+result register would give a peak-to-peak of zero. **The ADC converts and the DMA places the
+results in order** - it is what the ADC sees that does not follow the triangle the way the
+arithmetic expects.
+
+Two possibilities remain and they are now separable: either the sample rate is not what the
+window length says, or the DAC clock is not what its registers say. The test computes both
+sides independently - window length from Timer1, slope rate from the DAC registers - and
+prints how far the triangle should have moved next to how far it did. A window that stands
+still cannot pass any more. The same run now also yields the first uncontended rate
+measurement: one burst, no interrupt storm, stopped with Timer1. Every rate in runs 4 to 11
+came from a CPU that was drowning in interrupts.
+
+Next at the board: `dac on 64` then `test dac`. SLPDAT is the step per DAC clock, not the
+period - larger is faster - so 64 shortens the period from 439 us to 55 us and one buffer
+covers nearly two full periods instead of a fifth of one slope. Then a triangle has to be
+visible in the raw dump by eye.
+
+## 2026-09-24, run 13 - master b57e310, build 13:22:59 - THE CHAIN IS PROVEN
+
+`dac on 64`, `test dac`. The raw dump is the result this project exists for:
+
+```
+2418 2541 2603 2714 2816 2960 3044 3128 3260 3386 3496 3581 3706 3789 3851
+3688 3581 3512 3397 3281 3195 3063 2998 2861 2755 2666 2539 2416
+```
+
+A triangle. Clean rise to 3851, clean fall to 2416, one turning point, largest step between
+two neighbouring samples 113 counts out of a swing of 1440, no jump anywhere, no gap.
+
+**The ADC converts a real changing signal and the DMA places every result in the ping-pong
+buffer, complete and in the order it was converted.** That is the statement the customer
+needs, and it is now on silicon.
+
+**Second finding, and it overturns eleven runs of measurements:**
+
+```
+window ns 513280   sample rate ksps in this burst: 3990   (nominal 4081)
+```
+
+2.2 % off the setting. **The PLL rate control works.** The 42 to 44 MSPS that every sweep from
+run 8 onwards reported at every setting are an artefact of measuring while the CPU drowns in
+the overrun interrupt. A single clean burst with Timer1 around it says something completely
+different - and it says the ADC follows the PLL.
+
+**The FAIL was our own yardstick.** The test compared the swing against a triangle period
+computed from the DAC registers, 54.9 us at slpdat 64. The capture contains exactly one period
+in 513 us, so the real period is about 449 us - a factor of eight out. And the triangle runs
+between 2416 and 3851: the upper end matches `DACDAT` 3840 exactly, the lower end has nothing
+to do with `DACLOW` 256. Both are properties of the DAC that `dac2_period_ns()` models wrongly,
+and a chain that works must not fail on them.
+
+Changed in reaction (no board run yet):
+
+- **The DAC test judges from the data.** The period is derived from the distance between
+  turning points and printed next to the computed one, which is marked as not matching this
+  hardware and is not judged against. What is judged is what the test is for: a changing
+  signal (peak-to-peak above a floor) whose steps between neighbouring samples stay below an
+  eighth of the swing. Relative, so it holds at any rate and any triangle speed - the absolute
+  limits only ever fitted one setting. Run 13's numbers pass it: step limit 180, largest step
+  113.
+- **The sweep measures its rate on a clean single burst.** Each row now runs one `capture_
+  oneshot()` with Timer1 around it before the three loaded runs, and prints `clean` next to
+  `loaded`. The difference between the two columns is the artefact itself, so both stay in the
+  table.
+
+Both builds `-Wall -Wextra` clean.

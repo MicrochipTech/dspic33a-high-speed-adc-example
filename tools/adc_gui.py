@@ -46,58 +46,52 @@ ACK = b"\x06"
 NAK = b"\x15"
 BAUD = 115200
 
-# Sample rate from the board's pacing source and period (see board.h,
-# capture.c): the repeat timer is clocked from the ADC's own TAD (adc.c:
-# "TAD = 4/Fadc"), so its rate scales with CLKGEN6's divider -- 80000/n
-# assumes the 320 MHz bypass, the general form is (fadc_hz/4000)/n. SCCP1
-# runs off the fixed 100 MHz standard peripheral clock (sccp.h), independent
-# of CLKGEN6. Back-to-back has no formula at all (see rate_ksps()).
-PACING = {
-    3:  ("ADC repeat timer (period in TAD, 2..63)",   lambda n, fadc: (fadc / 4000.0) / n, 2, 63),
-    32: ("SCCP1 timer (period in 10 ns ticks, 4..)",   lambda n, fadc: 100000.0 / n,        2, 65535),
-    2:  ("back-to-back (no rate control)",            lambda n, fadc: float("nan"),         0, 0),
-}
+# The sample rate
+#
+# Back-to-back only, since the board answered: neither the ADC's repeat
+# timer nor SCCP1 paces a burst, and the CLKGEN6 divider does not change
+# the rate either (HARDWARE-LOG runs 5 to 10). What does change it is the
+# ADC clock from PLL1 - cli.c's `pll <p1> <p2>`, PLL1 VCO / (p1 * p2) -
+# and back-to-back needs 8 ADC clocks per conversion: a conversion is
+# 2 TAD and TAD is 4 / f_adc (adc.c). Run 13 measured 3990 kSPS against a
+# nominal 4081, 2.2 % out, so the formula holds on silicon.
+PLL_VCO_HZ = 1600e6
+ADC_CLOCKS_PER_SAMPLE = 8
+PLL_POSTDIV_MIN, PLL_POSTDIV_MAX = 1, 7
 
 
-def rate_ksps(pacing: int, period: int, fadc_hz: float = 320e6) -> float:
-    name, f, lo, hi = PACING[pacing]
-    return f(period, fadc_hz) if period else float("nan")
+def adc_clock_hz(postdiv1: int, postdiv2: int) -> float:
+    d = max(1, int(postdiv1)) * max(1, int(postdiv2))
+    return PLL_VCO_HZ / d
 
 
-# CLKGEN6, the ADC's own clock (clock.h): PLL1 = 320 MHz in, divided clock =
-# Fin / (2 * (INTDIV + FRACDIV/512)); INTDIV 0 with FRACDIV 0 is the
-# straight-through bypass (320 MHz, no division). 32 MHz is the ADC's
-# minimum (DS70005591D Table 16-1), so INTDIV tops out at 5 (ratio 10).
-CLKGEN6_FIN_HZ = 320e6
-CLKGEN6_INTDIV_MAX = 5
-CLKGEN6_FRACDIV_MAX = 511
+def rate_ksps(postdiv1: int, postdiv2: int) -> float:
+    """Nominal sample rate for the PLL post-dividers, in kSPS."""
+    return adc_clock_hz(postdiv1, postdiv2) / ADC_CLOCKS_PER_SAMPLE / 1e3
 
 
-def clkgen6_hz(intdiv: int, fracdiv: int) -> float:
-    ratio = 2 * (intdiv + fracdiv / 512.0)
-    return CLKGEN6_FIN_HZ if ratio == 0 else CLKGEN6_FIN_HZ / ratio
-
-
-def clkgen6_b2b_ceiling_hz(fadc_hz: float) -> float:
-    """A theoretical upper bound for back-to-back, NOT a measured rate:
-    the fastest documented full sample+convert period is 2 TAD (adc.c,
-    RPTCNT = 2 on the repeat timer), and TAD = 4/Fadc, so ceiling =
-    Fadc/8. adc.c is explicit that the real board's back-to-back rate does
-    "not follow SAMC at all" -- this bound was never confirmed to hold for
-    back-to-back specifically, only for the repeat timer. Use it as an FYI
-    (and as the fake target's stand-in signal rate), never to calibrate a
-    real capture's FFT axis."""
-    return fadc_hz / 8.0
+def pll_options():
+    """Every (p1, p2) the firmware takes, best rate first, deduplicated by
+    the rate they produce. cli.c requires p1 >= p2."""
+    seen, out = set(), []
+    for p1 in range(PLL_POSTDIV_MIN, PLL_POSTDIV_MAX + 1):
+        for p2 in range(PLL_POSTDIV_MIN, p1 + 1):
+            r = round(rate_ksps(p1, p2), 3)
+            if r in seen:
+                continue
+            seen.add(r)
+            out.append((p1, p2, r))
+    return sorted(out, key=lambda e: -e[2])
 
 
 # ---------------------------------------------------------------------------
 # Packages, boards, and where a channel comes out
 #
-# 'core <1..5> [pinsel]' and 'input <0..15>' already exist in cli.c. Which
-# package pin such a pair reads is silicon layout: pins128.py (MPS512,
-# TQFP-128) and pins64.py (MPS506, the Nano's 64-pin part) carry the data
-# sheet's own tables, DS70005591D Tables 11 and 5, so a pair is resolved
-# from the document and never guessed.
+# 'core <1..5> [pinsel]' and 'input <0..15>' exist in cli.c. Which package
+# pin such a pair reads is silicon layout: pins128.py (MPS512, TQFP-128)
+# and pins64.py (MPS506, the Nano's 64-pin part) carry the data sheet's own
+# tables, DS70005591D Tables 11 and 5, so a pair is resolved from the
+# document and never guessed.
 #
 # Where that pin comes out on a board is board layout, and that is
 # boards.py: the DIM information sheet DS70005563A for the EV74H48A, the
@@ -107,6 +101,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pins128  # noqa: E402  (needs the path above)
 import pins64  # noqa: E402
 from boards import BOARDS  # noqa: E402
+
 
 # ---------------------------------------------------------------------------
 # Settings file
@@ -125,8 +120,7 @@ SETTINGS_DEFAULTS = {
     "board": "EV74H48A",
     "view": {"dac_source": 0},
     "adc": {"core": 3, "pinsel": 5, "samc": 0},
-    "clock": {"intdiv": 0, "fracdiv": 0},
-    "pacing": {"source": 3, "period": 4},
+    "pll": {"postdiv1": 5, "postdiv2": 1},
     "buffer": {"size": 2048},
     "capture": {"count": 1024, "interval_ms": 500},
     "dac": {
@@ -692,7 +686,7 @@ def dac_period_ns_of(low: int, high: int, slp: int) -> float:
 # Frame: "BIN n=<count> pace=<> per=<> samc=<> in=<>\r\n" + 2*count bytes
 # (uint16 LE, 12 bit) + "\r\nCRC <hex4>\r\n" + the usual prompt and ACK/NAK.
 # ---------------------------------------------------------------------------
-_BIN_HEADER_RE = re.compile(r"BIN n=(\d+) pace=(\d+) per=(\d+) samc=(\d+) in=(\d+)")
+_BIN_HEADER_RE = re.compile(r"BIN n=(\d+) p1=(\d+) p2=(\d+) samc=(\d+) in=(\d+)")
 _CRC_LINE_RE = re.compile(rb"CRC ([0-9A-Fa-f]{4})")
 
 
@@ -720,7 +714,7 @@ def parse_blk_frame(header_line: str, payload: bytes, tail: bytes):
     if not m:
         raise RuntimeError(f"blk: no BIN header, got {header_line!r}")
     n = int(m.group(1))
-    meta = dict(pace=int(m.group(2)), per=int(m.group(3)),
+    meta = dict(postdiv1=int(m.group(2)), postdiv2=int(m.group(3)),
                 samc=int(m.group(4)), pinsel=int(m.group(5)))
     m2 = _CRC_LINE_RE.search(tail)
     if not m2:
@@ -899,7 +893,7 @@ class FakeTarget:
                  waveform: str = "sine", on_log=None):
         self.on_log = on_log  # optional callable(str): the console transcript
         self.port = "fake"
-        self.pacing, self.period = 3, 4          # 20 MSPS nominal
+        self.pll1, self.pll2 = 5, 1              # 320 MHz ADC clock = 40 MSPS
         self.core = 3                            # ADC core 1..5, 'core'; 3+PINSEL 5 = mikroBUS A default
         self.samc, self.input = 0, 5
         # Both DACs, as dac.c has them: unit -> its triangle settings.
@@ -914,7 +908,7 @@ class FakeTarget:
         self.harm2_amp = harm2_amp               # 2nd harmonic peak, ADC counts (sine only)
         self.harm3_amp = harm3_amp               # 3rd harmonic peak, ADC counts (sine only)
         self.waveform = waveform                 # "sine" (piezo-like) or "triangle" (DAC2 -> ADC5 self-test)
-        self.clk6_intdiv, self.clk6_fracdiv = 0, 0  # CLKGEN6 divider, 320 MHz bypass by default
+        self.clkdiv = 100                        # CLKGEN6 ratio x 100, does not set the rate
         self.buf_size = 2048                     # total ping-pong buffer, 'buf'
         self.t0 = None                            # wall-clock anchor, lazy
         self.counters = dict(overrun=0, late=0, missed=0, addr_err=0, bus_err=0, blocks=0)
@@ -934,16 +928,10 @@ class FakeTarget:
         """The rate _samples() actually generates at, scaled by the
         configured CLKGEN6 divider like the real repeat timer is (adc.c:
         TAD = 4/Fadc). Real hardware in back-to-back mode has no documented
-        rate (adc.c: the sweep showed it does not follow SAMC either, "the
-        ADC simply ran as fast as it could") -- genuinely unknown without a
-        live measurement, so rate_ksps() correctly returns NaN there. The
-        fake target has no such excuse: it has to generate *something*, so
-        it stands in the theoretical back-to-back ceiling (clkgen6_b2b_
-        ceiling_hz) and reports that via 'status' (fs_hz) instead of leaving
-        the GUI to rediscover NaN and blank the FFT."""
-        fadc = clkgen6_hz(self.clk6_intdiv, self.clk6_fracdiv)
-        fs = rate_ksps(self.pacing, self.period, fadc) * 1e3
-        return fs if math.isfinite(fs) else clkgen6_b2b_ceiling_hz(fadc)
+        rate: back-to-back at the ADC clock, 8 clocks per conversion,
+        the same formula the firmware uses since the rate became the PLL's
+        job alone (cli.c 'pll')."""
+        return rate_ksps(self.pll1, self.pll2) * 1e3
 
     def _samples(self, n: int) -> np.ndarray:
         """A window of the last `n` samples of an ongoing background signal,
@@ -1017,20 +1005,16 @@ class FakeTarget:
                 self.running = True;  return True, ["running: 1"]
             if c == "stop":
                 self.running = False; return True, ["running: 0"]
-            if c == "period":
-                n = int(args[0]); lo, hi = PACING[self.pacing][2:4]
-                if self.pacing == 2 or not (lo <= n <= hi):
-                    return False, ["period: out of range for the active pacing, or back-to-back (no period)"]
-                self.period = n
-                fadc = clkgen6_hz(self.clk6_intdiv, self.clk6_fracdiv)
-                return True, [f"period: {n}", f"ksps nominal: {int(rate_ksps(self.pacing, n, fadc))}"]
-            if c == "pacing":
-                p = int(args[0])
-                if p not in PACING:
-                    return False, ["usage: pacing <3|32|2>"]
-                self.pacing = p
-                self.period = {3: 4, 32: 5, 2: 0}[p]
-                return True, [f"pacing: {p}", PACING[p][0], f"period: {self.period}"]
+            if c == "pll":
+                if len(args) < 2:
+                    return False, ["usage: pll <postdiv1 1..7> <postdiv2 1..7>"]
+                p1, p2 = int(args[0]), int(args[1])
+                if not (PLL_POSTDIV_MIN <= p2 <= p1 <= PLL_POSTDIV_MAX):
+                    return False, ["usage: pll <postdiv1 1..7> <postdiv2 1..7>, p1 >= p2"]
+                self.pll1, self.pll2 = p1, p2
+                return True, [f"postdiv1: {p1}", f"postdiv2: {p2}",
+                              f"adc clock Hz: {int(adc_clock_hz(p1, p2))}",
+                              f"ksps nominal: {int(rate_ksps(p1, p2))}"]
             if c == "samc":
                 self.samc = int(args[0]);  return True, [f"samc: {self.samc}"]
             if c == "input":
@@ -1071,30 +1055,30 @@ class FakeTarget:
                         return False, ["usage: buf <n, even, 16..8192> - total ping-pong buffer"]
                     self.buf_size = n
                 return True, [f"buf: {self.buf_size}", f"half: {self.buf_size // 2}"]
-            if c == "clkgen6":
-                if args:
-                    if len(args) < 2:
-                        return False, ["usage: clkgen6 <intdiv 0..5> <fracdiv 0..511>"]
-                    intdiv, fracdiv = int(args[0]), int(args[1])
-                    if not (0 <= intdiv <= CLKGEN6_INTDIV_MAX) or not (0 <= fracdiv <= CLKGEN6_FRACDIV_MAX) \
-                       or intdiv + fracdiv / 512.0 > CLKGEN6_INTDIV_MAX:
-                        return False, [f"usage: clkgen6 <intdiv 0..{CLKGEN6_INTDIV_MAX}> "
-                                       f"<fracdiv 0..{CLKGEN6_FRACDIV_MAX}> (32 MHz ADC minimum)"]
-                    if intdiv == 0 and fracdiv != 0:
-                        return False, ["clkgen6: intdiv 0 is the 320 MHz bypass; fracdiv must be 0 then"]
-                    self.clk6_intdiv, self.clk6_fracdiv = intdiv, fracdiv
-                hz = clkgen6_hz(self.clk6_intdiv, self.clk6_fracdiv)
-                return True, [f"clkgen6: intdiv={self.clk6_intdiv} fracdiv={self.clk6_fracdiv}",
-                              f"adc clock: {hz/1e6:.3f} MHz"]
+            if c == "clk":
+                # The firmware keeps this one, and says outright that it
+                # does NOT change the rate (run 10: the ADC ignores the
+                # CLKGEN6 divider). The stand-in behaves the same way.
+                if not args:
+                    return False, ["usage: clk <100..1000> - CLKGEN6 ratio x 100"]
+                n = int(args[0])
+                if not (100 <= n <= 1000):
+                    return False, ["usage: clk <100..1000>"]
+                self.clkdiv = n
+                return True, [f"ratio asked for: {n}", f"ratio read back: {n}",
+                              f"adc clock Hz: {int(adc_clock_hz(self.pll1, self.pll2))}",
+                              "ok (and the rate does not change)"]
             if c == "status":
                 self.counters["blocks"] += 17
                 return True, [f"running: {int(self.running)}", f"blocks: {self.counters['blocks']}",
                               "overrun: 0", "late: 0", "missed: 0", "addr_err: 0", "bus_err: 0",
                               f"core: {self.core}", f"input: {self.input}", f"samc: {self.samc}",
-                              f"pacing: {self.pacing}", f"period: {self.period}",
+                              f"postdiv1: {self.pll1}", f"postdiv2: {self.pll2}",
+                              f"adc clock Hz: {int(adc_clock_hz(self.pll1, self.pll2))}",
+                              f"ksps nominal: {int(rate_ksps(self.pll1, self.pll2))}",
                               f"fs_hz: {round(self._fs_hz())}",
                               f"buf: {self.buf_size}", f"half: {self.buf_size // 2}",
-                              f"clk6_intdiv: {self.clk6_intdiv}", f"clk6_fracdiv: {self.clk6_fracdiv}",
+                              f"clkdiv (x100, read back): {self.clkdiv}",
                               f"dac1_on: {int(self.dac[1]['on'])}", f"dac2_on: {int(self.dac[2]['on'])}",
                               f"dac_low: {self.dac_active_or(1)['low']}",
                               f"dac_high: {self.dac_active_or(1)['high']}",
@@ -1103,7 +1087,7 @@ class FakeTarget:
             if c == "version":
                 return True, ["adc_dma_40msps (fake target)", "board: none, synthetic signal"]
             if c == "help":
-                return True, ["commands: start stop pacing period core samc input dac buf clkgen6 status version dump blk"]
+                return True, ["commands: start stop pll clk core samc input dac buf status version dump blk"]
             if c == "dump":
                 half = self.buf_size // 2
                 count = int(args[0]) if args else 64
@@ -1130,7 +1114,7 @@ class FakeTarget:
         sample bytes themselves are not logged."""
         self._log(f"> blk {count}")
         n = count if 1 <= count <= self.buf_size else 0
-        header_line = (f"BIN n={n} pace={self.pacing} per={self.period} "
+        header_line = (f"BIN n={n} p1={self.pll1} p2={self.pll2} "
                         f"samc={self.samc} in={self.input}\r\n")
         self._log(f"< {header_line.rstrip()}")
         payload = self._samples(n).astype("<u2").tobytes() if n else b""
@@ -1165,11 +1149,20 @@ def parse_dump(lines) -> np.ndarray:
 
 
 def parse_status(lines) -> dict:
+    """The firmware prints "key: value" pairs, and since the back-to-back
+    rework the keys carry digits, spaces and a parenthesised note
+    ("postdiv1: 5", "ksps nominal: 40000", "clkdiv (x100, read back): 100").
+    Normalise each to snake_case without the note, so a lookup is stable:
+    "ksps nominal" -> ksps_nominal, "clkdiv (x100, read back)" -> clkdiv."""
     d = {}
     for l in lines:
-        m = re.match(r"\s*([a-z_]+):\s*(-?\d+)\s*$", l)
-        if m:
-            d[m.group(1)] = int(m.group(2))
+        m = re.match(r"\s*([A-Za-z][\w ()/,.-]*?)\s*:\s*(-?\d+)\s*$", l)
+        if not m:
+            continue
+        key = re.sub(r"\(.*?\)", "", m.group(1))
+        key = re.sub(r"[^A-Za-z0-9]+", "_", key).strip("_").lower()
+        if key:
+            d[key] = int(m.group(2))
     return d
 
 
@@ -1252,17 +1245,17 @@ def capture_cycle(target, count: int, settle_s: float = 0.02, blk: bool = False)
 def selftest() -> int:
     ok_all = True
     t = FakeTarget(signal_khz=250.0)
-    for c in ("pacing 3", "period 4", "samc 0", "input 5"):
+    for c in ("pll 5 1", "samc 0", "input 5"):
         ok, r = t.cmd(c)
         assert ok, (c, r)
-    fs = rate_ksps(3, 4) * 1e3
+    fs = rate_ksps(5, 1) * 1e3
 
     samples, status = capture_cycle(t, 1024, settle_s=0.0, blk=False)
     f, db = spectrum(samples, fs)
     peak = f[np.argmax(db[1:]) + 1]
     print(f"dump: {len(samples)} samples, min {samples.min()} max {samples.max()} mean {samples.mean():.0f}")
     print(f"fs {fs/1e6:.3f} MHz, FFT peak at {peak/1e3:.1f} kHz (expect 250.0), status keys {sorted(status)[:5]}...")
-    ok = len(samples) == 1024 and abs(peak - 250e3) < fs / 1024 and status.get("pacing") == 3
+    ok = len(samples) == 1024 and abs(peak - 250e3) < fs / 1024 and status.get("postdiv1") == 5
     ok_all &= ok
     print("dump selftest", "PASS" if ok else "FAIL")
 
@@ -1388,18 +1381,16 @@ def main_gui(args):
                     load_as_btn = ui.button("load as", icon="folder_open").props("outline dense").classes("flex-grow")
                 settings_msg_lbl = ui.label().classes("text-xs text-slate-400 mono")
             with ui.card().classes("w-full rounded-xl p-4 gap-2"):
-                ui.label("sample rate").classes("card-title")
-                pacing_sel = ui.select({k: v[0] for k, v in PACING.items()}, value=3, label="pacing (TRG2SRC)").props("dense outlined")
-                period_in = ui.number("period", value=4, min=2, max=65535, step=1, format="%d").props("dense outlined")
+                ui.label("sample rate · PLL1").classes("card-title")
+                # The rate is the ADC clock and nothing else: back-to-back
+                # conversions at 8 clocks each (cli.c 'pll').
+                pll_sel = ui.select({f"{p1},{p2}": f"{r/1000:.3f} MSPS  (p1 {p1}, p2 {p2})"
+                                     for p1, p2, r in pll_options()},
+                                    value="5,1", label="PLL1 post-dividers").props("dense outlined")
                 rate_lbl = ui.label().classes("text-cyan-300 mono")
-            with ui.card().classes("w-full rounded-xl p-4 gap-2"):
-                ui.label("adc clock · CLKGEN6").classes("card-title")
-                with ui.row().classes("w-full gap-2"):
-                    intdiv_in = ui.number(f"INTDIV, integer (0..{CLKGEN6_INTDIV_MAX})", value=0, min=0,
-                                          max=CLKGEN6_INTDIV_MAX, step=1, format="%d").props("dense outlined").classes("flex-grow")
-                    fracdiv_in = ui.number(f"FRACDIV, fractional /512 (0..{CLKGEN6_FRACDIV_MAX})", value=0, min=0,
-                                           max=CLKGEN6_FRACDIV_MAX, step=1, format="%d").props("dense outlined").classes("flex-grow")
-                clk6_lbl = ui.label().classes("text-cyan-300 mono")
+                ui.label("back-to-back only; the repeat timer, SCCP1 and the CLKGEN6 divider "
+                         "were all measured to leave the rate untouched")\
+                    .classes("text-xs text-slate-500")
             with ui.card().classes("w-full rounded-xl p-4 gap-2"):
                 ui.label("adc core & channel").classes("card-title")
                 with ui.row().classes("w-full gap-2"):
@@ -1538,32 +1529,18 @@ def main_gui(args):
     def push_log(line: str):
         console_log.push(f"{time.strftime('%H:%M:%S')}  {line}")
 
+    def pll_values():
+        p1, p2 = (pll_sel.value or "5,1").split(",")
+        return int(p1), int(p2)
+
     def update_rate_label():
         try:
-            fadc = clkgen6_hz(int(intdiv_in.value or 0), int(fracdiv_in.value or 0))
-            r = rate_ksps(int(pacing_sel.value), int(period_in.value or 0), fadc)
-            if math.isfinite(r):
-                rate_lbl.text = f"nominal  {r/1000:.3f} MSPS"
-            else:
-                ceiling_hz = clkgen6_b2b_ceiling_hz(fadc)
-                rate_lbl.text = (f"not under control (back-to-back); theoretical ceiling "
-                                 f"≤ {ceiling_hz/1e6:.3f} MSPS -- unverified, adc.c: measured "
-                                 f"rate did not follow SAMC")
+            p1, p2 = pll_values()
+            rate_lbl.text = (f"{rate_ksps(p1, p2)/1000:.3f} MSPS nominal   "
+                             f"(ADC clock {adc_clock_hz(p1, p2)/1e6:.1f} MHz)")
         except Exception:
             rate_lbl.text = ""
-    pacing_sel.on_value_change(lambda e: update_rate_label())
-    period_in.on_value_change(lambda e: update_rate_label())
-
-    def update_clk6_label():
-        try:
-            hz = clkgen6_hz(int(intdiv_in.value or 0), int(fracdiv_in.value or 0))
-            clk6_lbl.text = f"ADC clock  {hz/1e6:.3f} MHz"
-        except Exception:
-            clk6_lbl.text = ""
-        update_rate_label()  # pacing 3 (repeat timer) and the back-to-back ceiling both scale with CLKGEN6
-    intdiv_in.on_value_change(lambda e: update_clk6_label())
-    fracdiv_in.on_value_change(lambda e: update_clk6_label())
-    update_clk6_label()
+    pll_sel.on_value_change(lambda e: update_rate_label())
     update_rate_label()
 
     # ---- settings: the whole page in one dict, and back ----
@@ -1574,8 +1551,7 @@ def main_gui(args):
             "view": {"dac_source": int(ui_state["dac"])},
             "adc": {"core": int(core_sel.value), "pinsel": int(input_in.value or 0),
                     "samc": int(samc_in.value or 0)},
-            "clock": {"intdiv": int(intdiv_in.value or 0), "fracdiv": int(fracdiv_in.value or 0)},
-            "pacing": {"source": int(pacing_sel.value), "period": int(period_in.value or 0)},
+            "pll": {"postdiv1": pll_values()[0], "postdiv2": pll_values()[1]},
             "buffer": {"size": int(buf_in.value or 2048)},
             "capture": {"count": int(count_sel.value), "interval_ms": int(interval_in.value or 500)},
             "dac": {str(u): {"on": bool(c["on"].value), "low": int(c["low"].value or 0),
@@ -1593,16 +1569,14 @@ def main_gui(args):
         if cfg.get("board") in BOARDS:
             ui_state["board"] = cfg["board"]
         ui_state["dac"] = int(cfg.get("view", {}).get("dac_source", 0))
-        adc, clk = cfg.get("adc", {}), cfg.get("clock", {})
+        adc = cfg.get("adc", {})
         core_sel.value = int(adc.get("core", 3))
         input_in.value = int(adc.get("pinsel", 5))
         samc_in.value = int(adc.get("samc", 0))
-        intdiv_in.value = int(clk.get("intdiv", 0))
-        fracdiv_in.value = int(clk.get("fracdiv", 0))
-        pac = cfg.get("pacing", {})
-        if int(pac.get("source", 3)) in PACING:
-            pacing_sel.value = int(pac.get("source", 3))
-        period_in.value = int(pac.get("period", 4))
+        pll = cfg.get("pll", {})
+        key = f"{int(pll.get('postdiv1', 5))},{int(pll.get('postdiv2', 1))}"
+        if key in pll_sel.options:
+            pll_sel.value = key
         buf_in.value = int(cfg.get("buffer", {}).get("size", 2048))
         cap = cfg.get("capture", {})
         if int(cap.get("count", 1024)) in count_sel.options:
@@ -1834,12 +1808,10 @@ def main_gui(args):
             t.harm3_amp = float(harm3_in.value or 0.0)
             t.waveform = waveform_sel.value or "sine"
         msgs = []
-        for c in (f"clkgen6 {int(intdiv_in.value or 0)} {int(fracdiv_in.value or 0)}",
-                  f"pacing {int(pacing_sel.value)}", f"period {int(period_in.value or 0)}",
+        _p1, _p2 = pll_values()
+        for c in (f"pll {_p1} {_p2}",
                   f"samc {int(samc_in.value or 0)}",
                   f"core {int(core_sel.value)} {int(input_in.value or 0)}"):
-            if c.startswith("period") and int(pacing_sel.value) == 2:
-                continue
             ok, lines = await run.io_bound(t.cmd, c)
             msgs.append(("✓ " if ok else "✗ ") + c)
         apply_lbl.text = "   ".join(msgs)
@@ -1893,10 +1865,11 @@ def main_gui(args):
             buf = state["buf_size"]
             count = min(count, buf if state["use_blk"] else buf // 2)
             samples, status = await run.io_bound(capture_cycle, t, count, 0.02, state["use_blk"])
-            fadc = clkgen6_hz(int(status.get("clk6_intdiv", intdiv_in.value or 0)),
-                              int(status.get("clk6_fracdiv", fracdiv_in.value or 0)))
-            fs = rate_ksps(int(status.get("pacing", pacing_sel.value)),
-                           int(status.get("period", period_in.value or 0)), fadc) * 1e3
+            # The board reports its own clock; fall back to the setting.
+            fs = float(status.get("ksps_nominal", 0)) * 1e3
+            if fs <= 0:
+                fs = rate_ksps(int(status.get("postdiv1", pll_values()[0])),
+                               int(status.get("postdiv2", pll_values()[1]))) * 1e3
             if not math.isfinite(fs) and "fs_hz" in status:
                 # Back-to-back has no documented rate on real hardware (only a
                 # 'sweep' measurement could tell); the fake target reports its

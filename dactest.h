@@ -6,7 +6,7 @@
 
 #include <stdint.h>
 
-/* Capture `halves` buffer halves at the current pacing and rate, copy
+/* Capture `halves` buffer halves at the rate set now, copy
  * each completed half out of the ping-pong buffer as soon as it is
  * complete, and judge the data against the DAC settings: minimum and
  * maximum near DACLOW and DACDAT, the number of slope reversals against

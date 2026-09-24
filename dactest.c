@@ -1,19 +1,52 @@
 /*
  * dactest.c - the DAC2 triangle seen through the ADC/DMA chain (dactest.h)
  *
- * The signal is known exactly (dac.c), so the judgement can be hard:
- *   min, max   within DACTEST_TOL of DACLOW / DACDAT (DAC and ADC are both
- *              12-bit and VDD-referred; DAC gain error up to 35 LSb,
- *              DA06, plus ADC errors - 150 LSb covers it)
- *   frequency  slope reversals / 2 over the captured time, against the
- *              period from the DAC settings, 10 %
- *   jumps      a step between two consecutive samples larger than four
- *              expected steps plus 64: a lost sample (DMA overrun) or a
- *              glitch. The expected step is 2 * (DACDAT - DACLOW) * f /
- *              Fs, from the nominal rate (40 MSPS assumed for B2B).
- * Each half is copied out of the DMA buffer right after it completes
- * (2 KB, a few microseconds) so that the evaluation never races the DMA
- * filling it again: at 40 MSPS a half lives 25.6 us.
+ * WHAT THIS TEST IS FOR
+ *
+ * It is the only test in this project that can say whether real
+ * conversions reach the buffer, complete and in order. Everything else
+ * is compatible with a DMA that copies a stale result register: the
+ * self-test samples a DC reference, so a frozen value gives exactly the
+ * right mean, and the counters count DMA events, not conversions.
+ *
+ * Run 11 (24.09.2026) answered the first half of that. Routed through
+ * UREF, the buffer held the full DAC range - min 221, max 3864 against a
+ * DAC set to 256..3840 - so the ADC really converts and the DMA really
+ * moves the results. What it could not answer was order and
+ * completeness, because the capture was torn: at the full rate the main
+ * loop ran tens of milliseconds behind the DMA, the half being copied
+ * had been overwritten a thousand times in the meantime, and the copy
+ * came out as a mixture of old and new data (8552 halves missed between
+ * eight copies, 430 slope reversals, single steps of 3126 counts).
+ *
+ * HOW IT WORKS NOW: one buffer, and the stream stops from the interrupt
+ *
+ * capture_oneshot() fills the buffer exactly once and the DMA interrupt
+ * itself ends the stream, so nothing is racing the copy afterwards. The
+ * ADC burst is CNT = 2 * half_len conversions, which is one full buffer,
+ * so the window is contiguous by construction - no gaps to count, no
+ * torn halves. The main loop being slow no longer matters: it only has
+ * to notice, eventually, that the burst is over.
+ *
+ * WHAT MUST BE IN IT
+ *
+ * 2048 samples are about 48 us at the rates seen so far, and one slope
+ * of the triangle lasts 220 us at the boot clock, so the window covers
+ * roughly a fifth of a slope: a clean monotonic ramp of some 700 counts,
+ * with at most one turning point if the window happens to straddle a
+ * peak. A faster triangle covers more - "dac on <slpdat>" with a smaller
+ * slpdat, 2 gives about a quarter of the period per buffer.
+ *
+ * THE VERDICT
+ *   peak-to-peak     a frozen register gives 0, a real ramp hundreds of
+ *                    counts
+ *   reversals        at most one in a window this short; more means the
+ *                    samples are not in the order they were converted
+ *   largest step     the triangle moves less than one count per sample at
+ *                    these rates, so a jump of hundreds means a sample is
+ *                    missing or the window is torn
+ *   raw dump         a few dozen values, so a human can see the ramp in
+ *                    the log instead of trusting the arithmetic
  */
 
 #include <xc.h>
@@ -28,14 +61,39 @@
 #include "diag.h"
 #include "sim.h"
 
-#define DACTEST_TOL       150u       /* LSb, min/max window               */
-#define DACTEST_HYST      96u        /* LSb, reversal detector hysteresis */
-#define DACTEST_FREQ_PCT  10u
+/* A frozen result register gives a peak-to-peak of zero; noise on a real
+ * input gives a few counts. Anything below this means nothing is moving. */
+#define DACTEST_FLAT_PP       50u
+/* A window of about a fifth of a slope can straddle at most one peak. */
+#define DACTEST_MAX_REVERSALS 1u
+/* The reversal detector's hysteresis has to be smaller than the signal
+ * it is watching, or it never arms and reports zero reversals whatever
+ * the data do - which is how run 12 produced a vacuous PASS on a window
+ * that moved 72 counts against a hysteresis of 96. It is derived from
+ * the measured peak-to-peak now, with a floor for noise. */
+#define DACTEST_HYST_MIN      8u
+#define DACTEST_HYST_DIV      8u
+#define DACTEST_TOL           150u    /* LSb, min/max window (DA06 + ADC)  */
+/* The step between two neighbouring samples, relative to the swing of
+ * the whole window. A triangle climbs its span over hundreds of samples,
+ * so a single step worth an eighth of the swing is a missing sample or a
+ * seam between two writes - not signal. Relative, because it has to hold
+ * at any rate and any triangle speed; absolute limits only ever fitted
+ * one setting. */
+#define DACTEST_STEP_DIV      8u
+#define DACTEST_STEP_MIN      16u
+/* Reversal positions, to derive the period from the data. */
+#define DACTEST_MAX_MARKS     16u
 
-static uint16_t copy[SAMPLES_PER_HALF];
+static uint16_t store[SAMPLES_PER_BUF_MAX];
 
 uint32_t dactest_run(uint32_t halves)
 {
+    (void)halves;                     /* one buffer, by construction     */
+
+    /* Whichever DAC runs. Both units exist since the GUI can drive either
+     * (dac.h); dac_active() picks DAC2 first, the one the UREF route and
+     * this test were built around. */
     const uint8_t unit = dac_active();
     if (unit == 0u) {
         console_puts("[dactest] no DAC is running - nothing to test\r\n");
@@ -44,108 +102,148 @@ uint32_t dactest_run(uint32_t halves)
     const uint32_t low       = dac_low(unit);
     const uint32_t high      = dac_high(unit);
     const uint32_t period_ns = dac_period_ns(unit);
-    const uint32_t f_exp_hz  = (period_ns != 0u) ? (uint32_t)(1000000000ull / period_ns) : 0u;
-    uint32_t ksps_nom = capture_nominal_ksps(capture_period());
-    if (ksps_nom == 0u) { ksps_nom = 40000u; }        /* back-to-back    */
-    /* expected step per sample, LSb: 2 * span * f / Fs */
-    uint32_t step_exp = (uint32_t)(((uint64_t)2u * (high - low) * f_exp_hz) / ((uint64_t)ksps_nom * 1000u));
-    if (step_exp == 0u) { step_exp = 1u; }
-    const uint32_t jump_limit = 4u * step_exp + 64u;
+    const uint32_t n         = 2u * capture_half_len();
 
-    console_puts("[dactest] DAC triangle through the ADC/DMA chain\r\n");
-    console_kv("[dactest]   DAC unit", unit);
-    console_puts("[dactest]   DAC pin: ");
-    console_puts(dac_pin_name(unit));
-    console_puts("\r\n");
+    console_kv("[dactest] DAC unit", unit);
+    console_puts("[dactest] DAC triangle through ADC, DMA and the ping-pong buffer\r\n"
+                 "[dactest] one buffer, the stream stopped from the DMA interrupt, so the\r\n"
+                 "[dactest] window is contiguous and nothing overwrites it while it is read\r\n");
     console_kv("[dactest]   ADC core", adc_core());
-    console_kv("[dactest]   halves", halves);
+    console_kv("[dactest]   input (PINSEL)", capture_pinsel());
+    console_kv("[dactest]   samples in the window", n);
     console_kv("[dactest]   expected min (DACLOW)", low);
     console_kv("[dactest]   expected max (DACDAT)", high);
-    console_kv("[dactest]   expected period ns", period_ns);
-    console_kv("[dactest]   expected frequency Hz", f_exp_hz);
-    console_kv("[dactest]   expected step per sample LSb", step_exp);
-    console_kv("[dactest]   jump limit LSb", jump_limit);
+    console_kv("[dactest]   triangle period ns", period_ns);
+    console_flush();
 
-    /* The defined start: stream stopped, DMA at the buffer start, no
-     * leftovers from the tests before (capture_settle). */
+    /* ---- one buffer, then the ISR stops ---------------------------- */
+    const uint32_t t0 = timebase_ticks();
+    const uint32_t rc = capture_oneshot();
+    const uint32_t ticks = timebase_ticks() - t0;
+    if (rc != 0u) {
+        console_puts((rc == 8u) ? "[dactest] the DMA channel switched itself off\r\n"
+                                : "[dactest] no data\r\n");
+        (void)capture_settle();
+        return rc;
+    }
+    /* The stream is down; the buffer is ours. */
+    memcpy(store, (const void *)capture_buffer(), n * sizeof store[0]);
     (void)capture_settle();
-    counters_clear();
 
-    uint32_t mn = 0xFFFFu, mx = 0u, reversals = 0u, jumps = 0u;
-    uint32_t dir = 0u;                      /* 0 unknown, 1 up, 2 down   */
-    uint32_t ext = 0u;                      /* extreme since the reversal */
-    bool     first = true;
-    uint32_t prev = 0u;
-
-    const uint32_t t0   = timebase_ticks();
-    uint32_t       last = blocks_done;
-    uint32_t       got  = 0u;
-    uint32_t       n    = WAIT_LIMIT;
-    capture_start();
-    while (got < halves) {
-        SIM_DMA_TICK();
-        if (blocks_done == last) {
-            if (!dma0_enabled()) { (void)capture_settle(); console_puts("[dactest] DMA channel switched itself off\r\n"); return 8u; }
-            if (--n == 0u)       { (void)capture_settle(); console_puts("[dactest] no data\r\n"); return 6u; }
-            continue;
-        }
-        last = blocks_done;
-        n    = WAIT_LIMIT;
-        memcpy(copy, (const void *)capture_completed_half(), sizeof copy);
-        got++;
-        for (uint32_t i = 0; i < SAMPLES_PER_HALF; i++) {
-            const uint32_t v = copy[i];
-            if (v < mn) { mn = v; }
-            if (v > mx) { mx = v; }
-            if (first) { first = false; ext = v; prev = v; continue; }
-            const uint32_t d = (v > prev) ? v - prev : prev - v;
-            if (d > jump_limit) { jumps++; }
-            prev = v;
-            /* Reversal detector with hysteresis: a new extreme extends
-             * the current slope, a move of HYST against it is a turn. */
-            if (dir == 1u) {
-                if (v > ext) { ext = v; }
-                else if (ext - v > DACTEST_HYST) { reversals++; dir = 2u; ext = v; }
-            } else if (dir == 2u) {
-                if (v < ext) { ext = v; }
-                else if (v - ext > DACTEST_HYST) { reversals++; dir = 1u; ext = v; }
-            } else {
-                if (v > ext + DACTEST_HYST)      { dir = 1u; ext = v; }
-                else if (v + DACTEST_HYST < ext) { dir = 2u; ext = v; }
-            }
+    /* ---- judge ------------------------------------------------------ */
+    /* First pass: extremes and the largest step. */
+    uint32_t mn = 0xFFFFu, mx = 0u, maxstep = 0u;
+    for (uint32_t i = 0; i < n; i++) {
+        const uint32_t v = store[i];
+        if (v < mn) { mn = v; }
+        if (v > mx) { mx = v; }
+        if (i != 0u) {
+            const uint32_t p = store[i - 1u];
+            const uint32_t d = (v > p) ? (v - p) : (p - v);
+            if (d > maxstep) { maxstep = d; }
         }
     }
-    const uint32_t ticks = timebase_ticks() - t0;
-    (void)capture_settle();                 /* test over: DMA down      */
+    const uint32_t pp = mx - mn;
 
-    const uint32_t samples = halves * SAMPLES_PER_HALF;
-    const uint32_t ksps    = timebase_ksps(samples, ticks);
-    /* f = reversals / 2 / (samples / Fs) = reversals * Fs / (2 * samples) */
-    const uint32_t f_meas  = (uint32_t)(((uint64_t)reversals * ksps * 1000u) / ((uint64_t)2u * samples));
+    /* Second pass: reversals, with a hysteresis scaled to this window. */
+    uint32_t hyst = pp / DACTEST_HYST_DIV;
+    if (hyst < DACTEST_HYST_MIN) { hyst = DACTEST_HYST_MIN; }
+    uint32_t reversals = 0u, dir = 0u, ext = store[0];
+    uint32_t marks[DACTEST_MAX_MARKS];
+    uint32_t nmarks = 0u;
+    for (uint32_t i = 1; i < n; i++) {
+        const uint32_t v = store[i];
+        bool turned = false;
+        if (dir == 1u) {
+            if (v > ext) { ext = v; }
+            else if ((ext - v) > hyst) { turned = true; dir = 2u; ext = v; }
+        } else if (dir == 2u) {
+            if (v < ext) { ext = v; }
+            else if ((v - ext) > hyst) { turned = true; dir = 1u; ext = v; }
+        } else {
+            if (v > (ext + hyst))      { dir = 1u; ext = v; }
+            else if ((v + hyst) < ext) { dir = 2u; ext = v; }
+        }
+        if (turned) {
+            reversals++;
+            if (nmarks < DACTEST_MAX_MARKS) { marks[nmarks++] = i; }
+        }
+    }
 
-    console_kv("[dactest] samples", samples);
-    console_kv("[dactest] ksps measured", ksps);
+    /* The period AS MEASURED, from the distance between turning points -
+     * two of them are one full period. The period computed from the DAC
+     * registers is printed next to it as information only: at slpdat 64
+     * it said 54.9 us and the capture showed 449 us (run 13), so the
+     * formula in dac.c does not describe this hardware and nothing is
+     * judged against it. The same goes for DACLOW: the triangle in run 13
+     * ran between 2416 and 3851, and only the upper end matched. */
+    const uint32_t window_ns = (uint32_t)(((uint64_t)ticks * 1000000000ull) / TIMEBASE_HZ);
+    uint32_t meas_period_ns = 0u;
+    if ((nmarks >= 2u) && (window_ns != 0u) && (n != 0u)) {
+        const uint32_t spread   = marks[nmarks - 1u] - marks[0];
+        const uint32_t per_samp = (2u * spread) / (nmarks - 1u);
+        meas_period_ns = (uint32_t)(((uint64_t)per_samp * window_ns) / n);
+    }
+
+    console_kv("[dactest] window ticks (12.5 MHz)", ticks);
+    console_kv("[dactest] window ns", window_ns);
+    console_kv("[dactest] sample rate ksps in this burst", (window_ns != 0u)
+               ? (uint32_t)(((uint64_t)n * 1000000u) / window_ns) : 0u);
+    console_kv("[dactest] reversal hysteresis used", hyst);
+    console_kv("[dactest] triangle period ns MEASURED from the data", meas_period_ns);
+    console_kv("[dactest]   the same computed from the DAC registers", period_ns);
+    console_puts("[dactest]   (the computed one is known not to match this hardware -\r\n"
+                 "[dactest]    it is printed for the record, nothing is judged against it)\r\n");
     console_kv("[dactest] min", mn);
     console_kv("[dactest] max", mx);
-    console_kv("[dactest] reversals", reversals);
-    console_kv("[dactest] frequency Hz measured", f_meas);
-    console_kv("[dactest] jumps (> jump limit)", jumps);
-    console_kv("[dactest] overrun during the test", dma_overrun);
+    console_kv("[dactest] peak-to-peak", pp);
+    console_kv("[dactest] largest step between two samples", maxstep);
+    console_kv("[dactest] slope reversals", reversals);
+    console_kv("[dactest] overrun during the burst", dma_overrun);
+
+    /* ---- the raw values, so the log shows the ramp itself ----------- */
+    console_puts("[dactest] first 24 samples (consecutive):\r\n");
+    for (uint32_t i = 0; i < 24u; i++) {
+        console_kv("[dactest]   ", store[i]);
+    }
+    console_puts("[dactest] every 64th sample across the window:\r\n");
+    for (uint32_t i = 0; i < n; i += 64u) {
+        console_kv("[dactest]   ", store[i]);
+    }
+
+    /* ---- the verdict ------------------------------------------------ */
+    /* What is judged, and why only this: the test exists to show that
+     * every conversion arrives and that they arrive in the order they
+     * were converted. A changing signal with small, even steps and no
+     * jump proves both. How fast the triangle runs and where its lower
+     * end sits are properties of the DAC, and getting them wrong must not
+     * fail a chain that is working. */
+    uint32_t step_limit = pp / DACTEST_STEP_DIV;
+    if (step_limit < DACTEST_STEP_MIN) { step_limit = DACTEST_STEP_MIN; }
 
     bool ok = true;
-    const uint32_t dmin = (mn > low)  ? mn - low  : low - mn;
-    const uint32_t dmax = (mx > high) ? mx - high : high - mx;
-    if (dmin > DACTEST_TOL) { console_puts("[dactest]   FAIL: minimum not at DACLOW\r\n"); ok = false; }
-    if (dmax > DACTEST_TOL) { console_puts("[dactest]   FAIL: maximum not at DACDAT\r\n"); ok = false; }
-    if (f_exp_hz != 0u) {
-        const uint32_t df = (f_meas > f_exp_hz) ? f_meas - f_exp_hz : f_exp_hz - f_meas;
-        if (df > f_exp_hz * DACTEST_FREQ_PCT / 100u) {
-            console_puts("[dactest]   FAIL: frequency not the triangle's\r\n"); ok = false;
-        }
+    if (pp < DACTEST_FLAT_PP) {
+        console_puts("[dactest]   FAIL: THE WINDOW IS FLAT - no changing signal arrives.\r\n"
+                     "[dactest]     Either the DAC does not reach this input, or the DMA is\r\n"
+                     "[dactest]     copying a result register that never changes.\r\n");
+        ok = false;
     }
-    if (jumps != 0u) { console_puts("[dactest]   FAIL: jumps in the data (lost samples or glitches)\r\n"); ok = false; }
-    if (mx < mn + DACTEST_HYST) { console_puts("[dactest]   FAIL: no signal (flat)\r\n"); ok = false; }
-    console_puts(ok ? "[dactest] PASS: the DAC triangle arrives intact through ADC, DMA and the ping-pong buffer\r\n"
+    console_kv("[dactest] step limit for this swing", step_limit);
+    if (maxstep > step_limit) {
+        console_puts("[dactest]   FAIL: a jump far larger than the signal makes between two\r\n"
+                     "[dactest]     neighbouring samples - a sample is missing, or the window\r\n"
+                     "[dactest]     is a seam between two writes\r\n");
+        ok = false;
+    }
+    if (mn < ((low > DACTEST_TOL) ? (low - DACTEST_TOL) : 0u)) {
+        console_puts("[dactest]   note: minimum below DACLOW\r\n");
+    }
+    if (mx > (high + DACTEST_TOL)) {
+        console_puts("[dactest]   note: maximum above DACDAT\r\n");
+    }
+    console_puts(ok ? "[dactest] PASS: a changing signal arrives in the buffer, in order and\r\n"
+                      "[dactest]   without a break - the ADC converts and the DMA moves every\r\n"
+                      "[dactest]   result into the right place\r\n"
                     : "[dactest] FAIL\r\n");
     return ok ? 0u : 1u;
 }

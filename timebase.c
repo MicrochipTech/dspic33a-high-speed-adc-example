@@ -30,7 +30,16 @@ uint32_t timebase_check(void)
 {
     timebase_init();
     const uint32_t t0 = TMR1;
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+    /* The simulator has no real time base to check and executes this
+     * loop at a small fraction of real time: 20 M cycles took longer
+     * than the whole test budget (24.09.2026, the boot "hung" here).
+     * 1 % of the delay keeps the call and its print, the value means
+     * nothing there anyway. */
+    __delay32(200000ul);
+#else
     __delay32(20000000ul);            /* 100 ms at 200 MHz               */
+#endif
     return TMR1 - t0;
 }
 

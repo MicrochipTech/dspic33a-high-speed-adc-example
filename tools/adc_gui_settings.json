@@ -12,10 +12,6 @@
     "count": 1024,
     "interval_ms": 500
   },
-  "clock": {
-    "fracdiv": 0,
-    "intdiv": 0
-  },
   "dac": {
     "1": {
       "high": 3840,
@@ -38,9 +34,9 @@
     "signal_khz": 100.0,
     "waveform": "sine"
   },
-  "pacing": {
-    "period": 4,
-    "source": 3
+  "pll": {
+    "postdiv1": 5,
+    "postdiv2": 1
   },
   "version": 1,
   "view": {

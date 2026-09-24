@@ -11,8 +11,12 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#define SAMPLES_PER_HALF  1024u
-#define SAMPLES_PER_BUF   (2u * SAMPLES_PER_HALF)
+/* The buffer is allocated at this maximum; the length in use is set at
+ * run time (capture_set_half_len, "buf" command) and defaults to the
+ * maximum, so nothing changes unless someone asks. */
+#define SAMPLES_PER_HALF_MAX  1024u
+#define SAMPLES_PER_BUF_MAX   (2u * SAMPLES_PER_HALF_MAX)
+#define SAMPLES_PER_HALF_MIN  16u
 
 /* ---- Measurement state (defined in capture.c) ---- */
 /* The sample buffer itself is private to capture.c (it sits in a struct
@@ -41,7 +45,7 @@ void capture_start(void);
 /* Everything off: stream stopped, ADC core down, CLKGEN6 off. No
  * conversion, no DMA event, no interrupt from the ADC side - the console
  * has the CPU to itself. capture_start() brings clock and core back with
- * the pacing and period they had. capture_powered() says which state. */
+ * the divide ratio it had. capture_powered() says which state. */
 void capture_shutdown(void);
 bool capture_powered(void);
 
@@ -57,15 +61,27 @@ bool capture_powered(void);
  * whether the stream was running, for the caller to restart it. */
 bool capture_settle(void);
 
+/* Samples per buffer half in use. Changing it: only with the stream
+ * stopped; the call settles (DMA down), the next capture_start() sets
+ * ADC burst length, DMA block and guard words up for the new size.
+ * 16..SAMPLES_PER_HALF_MAX. False if out of range or while running. */
+uint32_t capture_half_len(void);
+bool     capture_set_half_len(uint32_t n);
+
 /* Switch to another ADC core (1..5) with input pinsel and sample time
  * samc: stream stopped, core down, table row switched, adc_init(), DMA
- * re-armed on that core's trigger and result register, pacing back to
- * the repeat timer, clock divider back to 1. Leaves the core powered and
- * idle. False for a bad core number. */
+ * re-armed on that core's trigger and result register. The ADC clock
+ * divider is left as it is. Leaves the core powered and idle. False for a bad core number. */
 bool capture_select_core(uint8_t core, uint8_t pinsel, uint8_t samc);
 /* Let the current burst finish and do not restart it. */
 void capture_stop(void);
 bool capture_running(void);
+/* True if the overrun brake fired during the last measurement: the
+ * handler saw more overruns than any usable rate can produce, masked
+ * its own interrupt and took the channel down, so that the storm could
+ * not lock the CPU out of the main loop. The rate that caused it is
+ * unusable by definition. Cleared by counters_clear(). */
+bool capture_overrun_aborted(void);
 /* True from the burst trigger until the DMA DONE event. */
 bool capture_burst_active(void);
 
@@ -76,32 +92,37 @@ bool    capture_set_input(uint8_t pinsel, uint8_t samc);
 uint8_t capture_pinsel(void);
 uint8_t capture_samc(void);
 
-/* ---- Pacing: what sets the sample rate ----
- * ADC_TRG2_REPEAT: the ADC's repeat timer, period in TAD (12.5 ns), 2..63.
- * ADC_TRG2_SCCP1:  SCCP1 timer, period in ticks of 10 ns, 2..65535.
- * ADC_TRG2_B2B:    back-to-back, no period, as fast as the converter goes.
- * ADC_PACE_CLKDIV: back-to-back conversions, the rate set by the ADC clock
- *                  divider (clock.c); period = divide ratio of the 320 MHz
- *                  clock in hundredths, 100..1000 (40 ... 4 MSPS).
- * ADC_PACE_SINGLE: one conversion per SCCP1 trigger (Single Conversion
- *                  mode, TRG1SRC = SCCP1), period in ticks of 10 ns; no
- *                  burst, no restart. Microchip's 40 MSPS example's way.
- * capture_set_pacing() switches source and default period between two
- * bursts; capture_set_period() sets the period in the active source's
- * unit, applied between two bursts; false for out-of-range or for B2B.
- * capture_nominal_ksps() is the rate the active source should deliver at
- * a period; 0 for B2B. capture_sweep_periods() is the list the sweep
- * steps for the active source (slowest first). */
-bool     capture_set_pacing(uint8_t trg2src);
-uint8_t  capture_pacing(void);
-const char *capture_pacing_name(void);
-bool     capture_set_period(uint32_t period);
-uint32_t capture_period(void);
-uint32_t capture_nominal_ksps(uint32_t period);
-const uint32_t *capture_sweep_periods(uint32_t *count);
-/* A second list for a second sweep pass, or NULL (count 0): for the clock
- * divider the fractional ratios, after the even ones. */
-const uint32_t *capture_sweep_periods2(uint32_t *count);
+/* ---- The ADC clock: what sets the sample rate ----
+ *
+ * The conversions run back-to-back, so the rate is the ADC clock divided
+ * by the eight clocks one conversion takes. The clock comes from PLL1
+ * through CLKGEN6, and PLL1 feeds nothing else (the CPU is on PLL2).
+ *
+ * Two knobs exist and only one of them works:
+ *   capture_set_pll(p1, p2)  PLL1's output dividers, 1600 MHz / (p1*p2),
+ *                            p1 >= p2, both 1..7: 320 down to 32.65 MHz,
+ *                            i.e. 40 down to 4.08 MSPS, and 5/5 = 8 MSPS.
+ *                            THIS is the rate control.
+ *   capture_set_clkdiv(r)    the CLKGEN6 divide ratio in hundredths. It
+ *                            arrives in the register and is confirmed by
+ *                            DIVSWEN and CLKRDY - and does not change the
+ *                            conversion rate (HARDWARE-LOG runs 8 and 9).
+ *                            Kept for the record and for the "clk"
+ *                            command; do not build on it.
+ * Both return CLKDIV_OK or the step that failed (clock.h), and both do
+ * the switch in the boot order: DMA channel down, ADC core off, clock
+ * changed, core on, DMA set up from scratch on the next start.
+ *
+ * capture_nominal_ksps() is what the hardware is set up for, read back
+ * from the clock registers - not what was asked for. */
+struct pll_step { uint8_t p1, p2; };
+uint32_t capture_set_pll(uint32_t p1, uint32_t p2);
+uint32_t capture_set_clkdiv(uint32_t ratio_h);
+uint32_t capture_clkdiv(void);
+uint32_t capture_clkdiv_wanted(void);
+uint32_t capture_nominal_ksps(uint32_t ignored);
+/* The rate ladder, slowest first. */
+const struct pll_step *capture_sweep_steps(uint32_t *count);
 
 /* Sample the ADC's internal 15/16 * VDD reference (ANx6) for a few halves
  * and compare the mean against the expected window. Blocking, bounded.
@@ -111,27 +132,33 @@ const uint32_t *capture_sweep_periods2(uint32_t *count);
  * previous input afterwards. */
 uint32_t capture_selftest(uint32_t *mean);
 
-/* Rate self-test for the active pacing: a few hundred halves at two
- * periods a factor 4 apart, the delivered rate measured against Timer1
- * and judged against the nominal one (10 %) and against each other
- * (3..5x) - the failure seen on the board was a rate that did not move.
- * Blocking, bounded, prints its numbers. Returns 0, or 6/8 from the
- * waits, or 12. Restores the previous period. For B2B it only measures
- * and prints (nothing to judge, returns 0). Skipped in the simulator. */
-uint32_t capture_ratetest(void);
+/* Switch CLKGEN6 off and try to convert anyway: the control experiment
+ * for "is the ADC really clocked from CLKGEN6?". 0 means halves still
+ * arrived with the generator off, anything else that nothing did. The
+ * generator and the ADC core are restored either way. Blocking, bounded.
+ * In the simulator it returns 6 without doing anything. */
+uint32_t capture_clkoff_probe(uint32_t halves);
 
-/* Choose the pacing at boot per ADC_PACING (board.h). AUTO: run the rate
- * test on every candidate - one conversion per SCCP1 trigger, ADC clock
- * divider, repeat timer, SCCP1 as burst trigger, back-to-back - print
- * each result, then take the first that passed, back-to-back if none.
- * A fixed source is tested once and the boot stops with its code if it
- * fails. Returns 0 or that code. */
-uint32_t capture_autopace(void);
+/* Run `halves` halves at whatever the divider is set to and return the
+ * delivered rate in ksps, measured against Timer1. Blocking, bounded,
+ * prints nothing - the caller judges and reports. Returns 0, or 6/8 from
+ * the waits. In the simulator it returns 0 with ksps 0. */
+uint32_t capture_measure_rate(uint32_t halves, uint32_t *ksps);
 
 /* Process the completed half if a new one arrived; returns true if it did.
  * Called from the main loop and from the console's yield hook, so that
  * the measurement keeps running while a long console reply drains. */
 bool capture_service(void);
+
+/* Fill the buffer exactly once and stop, the stop decided in the DMA
+ * interrupt. Afterwards the whole buffer - 2 * capture_half_len()
+ * samples from capture_buffer() - is one contiguous window that nothing
+ * is writing any more. This is the only way to look at the data at a
+ * rate where the main loop runs tens of milliseconds behind the DMA.
+ * Returns 0, or 6/8 from the wait. */
+uint32_t capture_oneshot(void);
+/* The whole buffer. Only meaningful with the stream stopped. */
+const volatile uint16_t *capture_buffer(void);
 
 /* Pointer to the half that completed last. */
 const volatile uint16_t *capture_completed_half(void);

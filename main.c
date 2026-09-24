@@ -4,6 +4,16 @@
  * Start-up sequence and main loop of the ADC/DMA example on the EV74H48A
  * (dsPIC33 Curiosity Platform Development Board, dsPIC33AK512MPS512 DIM).
  *
+ * THE FIRMWARE RUNS NO TEST BY ITSELF. It boots, brings the console up
+ * and waits. That is deliberate: through seven board runs the console
+ * never received a byte (`rx = 0`), and it could not be told whether the
+ * bytes never reached the pin or whether the receive interrupt was
+ * starved behind the DMA interrupt, which fires 1.6 million times a
+ * second at full rate. With nothing converting after the boot, that
+ * question answers itself - anything typed either echoes or it does not.
+ * Everything else then runs on command: "test" lists the parts, "test
+ * all" runs them in order (see cli.c).
+ *
  * The order below matters and is the whole story of this file:
  *
  *   1. LED0 first, so that a stop code can be shown from the very first
@@ -16,16 +26,12 @@
  *   4. The console proper: baud generator re-set for the 100 MHz
  *      peripheral clock, parser, banner, receive interrupt. It runs in
  *      the UART receive interrupt from here on.
- *   5. ADC core and DMA channel, armed but idle.
- *   6. Self-test on the ADC's internal 15/16 * VDD reference: the same
- *      chain as the measurement, only the input differs. Blink code 6, 7
- *      or 8 if it fails; the number is what tells the first person on the
- *      board where to look (docs/TROUBLESHOOTING.md).
- *   7. Measurement: the burst stream runs, the DMA interrupt keeps it
- *      going, the main loop processes each completed buffer half, blinks
- *      the heartbeat and prints a status line now and then, so a log of
- *      the terminal tells the story without anyone typing. The console
- *      can stop, start and reconfigure it at any time.
+ *   5. ADC core and DMA channel, configured and idle, and the ADC clock
+ *      set to the slowest ratio the part allows (ADC_CLKDIV in board.h,
+ *      /10 = 32 MHz = 4 MSPS). Nothing converts: no burst is triggered,
+ *      so no DMA event and no interrupt can come from the ADC side.
+ *   6. The main loop serves the console and, while a test runs the
+ *      stream, processes each completed buffer half.
  *
  * Everything hardware-specific lives in the modules - board.h (pins,
  * ADC core), clock.c, adc.c, dma.c (sim_dma.c in the simulator build),
@@ -43,82 +49,19 @@
 #include "led.h"
 #include "diag.h"
 #include "timebase.h"
-#include "dactest.h"
-#include "dac.h"
 #include "console.h"
 #include "sim.h"
 
-/* Status line every ~5 s for the first minute, then every ~60 s.
- * 39 062 halves per second at 40 MSPS. In the simulator a half costs a
- * few thousand instructions of the stand-in, so count halves, not time. */
+/* Status line every ~5 s for the first minute, then every ~60 s, while a
+ * test has the stream running. 39 062 halves per second at 40 MSPS. In
+ * the simulator a half costs a few thousand instructions of the stand-in,
+ * so count halves, not time. */
 #ifdef __MPLAB_DEBUGGER_SIMULATOR
 #define STATUS_EVERY_HALVES   50u
 #else
 #define STATUS_EVERY_HALVES   195312u
 #endif
 #define STATUS_FAST_LINES     12u
-#define IDLE_STATUS_TICKS     125000000u     /* 10 s of the 12.5 MHz time base */
-
-/* Phase 2: the DAC2 triangle. 0x100..0xF00 (Example 18-3), SLPDAT 8 at
- * 320 MHz DAC clock = 22.4 us per slope, 44.8 us period, 22.3 kHz - the
- * piezo range. 64 halves = 65 536 samples, at 20 MSPS 73 periods. */
-#define DACTEST_LOW           0x100u
-#define DACTEST_HIGH          0xF00u
-#define DACTEST_SLPDAT        8u
-/* DAC2 (RA8) is AD5AN3, so phase 2 closes the loop on the pin with no
- * wire. DAC1 (RA1) is AD5AN1 and would do the same on that channel. */
-#define DACTEST_UNIT          2u
-#define DACTEST_HALVES        64u
-
-/* The automatic tests on the active ADC core: register snapshot, self-test
- * on the internal reference, pacing trial, rate sweep with the choice of
- * the fastest clean rate. Phase 1 runs it on the boot core (ADC_INSTANCE,
- * the mikroBUS input), phase 2 on ADC core 5 with DAC2 on its input. */
-static void run_phase_tests(void)
-{
-    /* Register snapshot after initialisation, before anything runs: the
-     * dump TROUBLESHOOTING.md Part 4 asks for, in every log, without
-     * anyone typing "regs". */
-    console_puts("[boot] register snapshot after init\r\n");
-    regs_dump();
-
-    console_puts("[boot] self-test on the internal reference\r\n");
-    {
-        const uint32_t rc = capture_selftest(NULL);
-        if (rc != 0u) {
-            fail(rc);
-        }
-    }
-
-    /* Which trigger paces the conversions, and does the delivered rate
-     * follow its period? ADC_PACING in board.h: AUTO tries every
-     * candidate with the rate test and prints each verdict; a fixed one
-     * is tested once and stops the boot with code 12 if it fails. */
-    {
-        const uint32_t rc = capture_autopace();
-        if (rc != 0u) {
-            fail(rc);
-        }
-    }
-
-#if AUTO_SWEEP
-    /* The rate sweep, once, without anyone typing (AUTO_SWEEP in
-     * board.h): slowest to fastest, one line per rate - and the
-     * measurement then runs at the fastest clean one. */
-    console_puts("[boot] automatic rate sweep before the measurement (AUTO_SWEEP in board.h)\r\n");
-    console_sweep(2000u, true);
-#endif
-}
-
-#ifndef __MPLAB_DEBUGGER_SIMULATOR
-/* What a phase ended with: pacing, period, nominal rate. */
-static void phase_result(const char *tag)
-{
-    console_puts(tag); console_puts(" pacing chosen: "); console_puts(capture_pacing_name()); console_puts("\r\n");
-    console_puts(tag); console_kv(" period", capture_period());
-    console_puts(tag); console_kv(" ksps nominal", capture_nominal_ksps(capture_period()));
-}
-#endif
 
 int main(void)
 {
@@ -132,20 +75,15 @@ int main(void)
     boot_mark(1u);
     console_early_init();
     boot_mark(2u);
-    /* A banner nobody can miss: where the log of one run begins. The
-     * matching END banner closes the [DONE] block, so a copy from one to
-     * the other is exactly one boot. */
+    /* A banner nobody can miss: where the log of one run begins. */
     console_puts("\r\n\r\n"
                  "##############################################################\r\n"
-                 "##                                                          ##\r\n"
                  "##   ADC/DMA TEST LOG  -  START OF RUN  (copy from here)    ##\r\n"
-                 "##                                                          ##\r\n"
                  "##############################################################\r\n"
                  "\r\n");
     console_puts("[boot] " BUILD_ID "\r\n");
     SIM_BANNER();                     /* simulator build: say so first   */
     diag_report_reset();              /* why are we booting? RCON        */
-    diag_report_build();              /* what runs: build, board, config */
 
     /* Did the previous run end in a trap? boot_stage/trap_* live in
      * persistent RAM, so say so now - an unhandled trap ends in "reset"
@@ -166,69 +104,56 @@ int main(void)
     cli_init();
     boot_mark(5u);
 
-    adc_init(ADC_PINSEL, ADC_SAMC, ADC_RPTCNT);
+    /* Timer1 as the stopwatch. It used to be started by timebase_check(),
+     * which only the sweep calls - so a run that only did "test dac"
+     * measured its window as zero ticks (run 12). Nothing else times
+     * itself off it, so starting it here costs nothing and means every
+     * measurement has a clock. */
+    timebase_init();
+    adc_init(ADC_PINSEL, ADC_SAMC);
     boot_mark(6u);
     capture_init();
     boot_mark(7u);
 
-    run_phase_tests();
+    /* Start at the slowest rate the ADC may run, not at the fastest. It
+     * is the setting the DMA should manage comfortably, so the first test
+     * anyone runs is the one most likely to pass - and a failure there is
+     * the chain itself, not the rate. "clk" changes it. */
+    {
+        const uint32_t rc = capture_set_pll(ADC_PLL_POSTDIV1, ADC_PLL_POSTDIV2);
+        console_kv("[boot] pll1 postdiv1", clock_adc_pll_postdiv1());
+        console_kv("[boot] pll1 postdiv2", clock_adc_pll_postdiv2());
+        console_kv("[boot] adc clock Hz", clock_adc_hz());
+        console_kv("[boot] sample rate ksps (back-to-back)", capture_nominal_ksps(0u));
+        if (rc != CLKDIV_OK) {
+            console_puts("[boot] WARNING the ADC clock did not switch: ");
+            console_puts(clock_adc_div_error(rc));
+            console_puts("\r\n");
+        }
+    }
     boot_mark(8u);
 
 #ifdef __MPLAB_DEBUGGER_SIMULATOR
-    /* The simulator's job is the ping-pong check, which needs the stream. */
-    console_puts("[boot] self-test passed, measurement running on the external input\r\n");
-    counters_clear();                 /* the self-test halves were not serviced */
+    /* The simulator's job is the ping-pong check, which needs the stream
+     * and has nobody to type "test". SIM_HALF_LEN (build.bat sim <n>)
+     * runs it at another buffer size, to show the run-time length reaches
+     * ADC burst, DMA block and the consumers. */
+#ifdef SIM_HALF_LEN
+    console_kv("[boot] simulator: samples per half set to", SIM_HALF_LEN);
+    (void)capture_set_half_len(SIM_HALF_LEN);
+#endif
+    console_puts("[boot] simulator: starting the stream for the ping-pong check\r\n");
+    counters_clear();
     capture_start();
 #else
-    /* ---- phase 1 done: the boot core on the mikroBUS input ---------- */
-    capture_shutdown();
-    counters_clear();
+    /* Idle, and saying so: nothing converts until a test is typed. If a
+     * character typed now does not echo, the console never receives - and
+     * that is a finding, not a side note. */
     console_puts("\r\n"
-                 "--------------------------------------------------------------\r\n");
-    console_kv("[PHASE 1 DONE] tests on ADC core", adc_core());
-    phase_result("[PHASE 1 DONE]");
-    console_puts("--------------------------------------------------------------\r\n\r\n");
-
-    /* ---- phase 2: ADC core 5 measuring DAC2 on the same pin (RA8) ---- */
-    console_puts("[PHASE 2] ADC core 5, input AD5AN3 = RA8 = DACOUT2: DAC2 triangle on the pin, no wire\r\n");
-    (void)capture_select_core(5u, 3u, ADC_SAMC);
-    if (dac_triangle_start(DACTEST_UNIT, DACTEST_LOW, DACTEST_HIGH, DACTEST_SLPDAT)) {
-        console_kv("[dac] triangle on DAC unit", DACTEST_UNIT);
-        console_puts("[dac]   pin: ");
-        console_puts(dac_pin_name(DACTEST_UNIT));
-        console_puts("\r\n");
-        console_kv("[dac]   DACLOW", dac_low(DACTEST_UNIT));
-        console_kv("[dac]   DACDAT", dac_high(DACTEST_UNIT));
-        console_kv("[dac]   SLPDAT (counts per DAC clock)", dac_slpdat(DACTEST_UNIT));
-        console_kv("[dac]   DAC clock Hz", clock_dac_hz());
-        console_kv("[dac]   period ns", dac_period_ns(DACTEST_UNIT));
-    } else {
-        console_puts("[dac] CLKGEN7 did not come up - DAC2 is off, the DAC test will fail\r\n");
-    }
-    run_phase_tests();
-    const uint32_t dac_rc = dactest_run(DACTEST_HALVES);
-
-    /* ---- all done: everything off, the console has the CPU ---------- */
-    dac_all_off();
-    capture_shutdown();
-    counters_clear();
-    /* Unmistakable end marker: the reader of a log must see at a glance
-     * that every automatic test is over and what came out of it. */
-    console_puts("\r\n"
-                 "==============================================================\r\n"
-                 "[DONE] ALL AUTOMATIC TESTS FINISHED (phase 1: boot core on the mikroBUS input, phase 2: ADC core 5 with DAC2)\r\n"
-                 "[DONE] ADC core, CLKGEN6, DAC2 and CLKGEN7 are switched OFF - nothing converts\r\n");
-    phase_result("[DONE] phase 2");
-    console_puts(dac_rc == 0u ? "[DONE] DAC test: PASS - the DAC triangle arrived intact through ADC, DMA and the ping-pong buffer\r\n"
-                              : "[DONE] DAC test: FAIL - see the [dactest] lines\r\n");
-    console_puts("[DONE] the console is free now: type help. start = measure on the active core (5) at that rate; core 3 5 = back to the mikroBUS input\r\n"
-                 "==============================================================\r\n\r\n");
-    console_puts("##############################################################\r\n"
-                 "##                                                          ##\r\n"
-                 "##   ADC/DMA TEST LOG  -  END OF RUN  (copy up to here)     ##\r\n"
-                 "##                                                          ##\r\n"
-                 "##############################################################\r\n"
-                 "\r\n");
+                 "[boot] READY - nothing is converting, the console has the CPU\r\n"
+                 "[boot] type 'help' for all commands, 'test' for the parts of a run,\r\n"
+                 "[boot] 'test all' for the whole thing. Please log this terminal from\r\n"
+                 "[boot] power-up and send it back.\r\n\r\n");
 #endif
     boot_mark(9u);
     led_mode(2u);                     /* heartbeat                       */
@@ -236,7 +161,6 @@ int main(void)
     uint32_t idle = 0;
     uint32_t next_status = STATUS_EVERY_HALVES;
     uint32_t status_lines = 0;
-    uint32_t t_idle_status = timebase_ticks();   /* idle: a line per 10 s */
 
     for (;;) {
         SIM_DMA_TICK();               /* simulator: one half per pass    */
@@ -262,19 +186,12 @@ int main(void)
             if (!dma0_enabled())     { fail(8u); }
             if (++idle > WAIT_LIMIT) { fail(6u); }
         } else {
-            idle = 0;                 /* stopped from the console        */
-            /* Nothing running: a status line every 10 s anyway, so that
-             * the log shows the console alive (rx counts) and the ADC
-             * state (run=0, and after the boot powered=0). */
-            if ((timebase_ticks() - t_idle_status) >= IDLE_STATUS_TICKS) {
-                t_idle_status = timebase_ticks();
-                console_status_line();
-            }
+            idle = 0;                 /* idle: the console has the CPU   */
         }
 
         /* What to look at with the debugger, the "status" command or the
          * [stat] lines:
-         *   blocks_done   x SAMPLES_PER_HALF / elapsed time = actual rate
+         *   blocks_done   x half_len / elapsed time = actual rate
          *                 (includes the re-trigger gap once per buffer)
          *   dma_overrun   must stay 0, otherwise the DMA bus lost samples
          *   late_service  must stay 0, otherwise the ISR is too slow

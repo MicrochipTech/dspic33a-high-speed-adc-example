@@ -40,7 +40,7 @@ void diag_report_reset(void);
 
 /* Build and configuration, so that a log says by itself what ran: build
  * id (date, time, git revision), board, ADC core and input, sample time,
- * pacing, buffer size and the compile-time switches from board.h. Printed
+ * clock ratio, buffer size and the compile-time switches from board.h. Printed
  * at boot and by the "version" command. */
 void diag_report_build(void);
 
