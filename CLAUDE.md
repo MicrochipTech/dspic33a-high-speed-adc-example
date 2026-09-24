@@ -73,12 +73,19 @@ Simulator test, the acceptance check for anything that touches the buffer logic:
 
 ```
 tools\build.bat sim
-python tools\sim_trap.py --run-seconds 600 expect "[simtest] PASS"  (6-8 minutes; the boot alone - register snapshot, time base check, four pacing candidates - takes over 4)
+python tools\sim_trap.py --run-seconds 420 expect "[simtest] PASS"  (about 7 minutes)
+tools\build.bat sim 256 && python tools\sim_trap.py --elf build\adc_dma_40msps_sim256.elf --run-seconds 420
+                                           the same at 256 samples per half (run-time buffer length)
 python tools\sim_trap.py --fault 65536     expect "[simtest] FAIL" with one mismatch at index 0
 ```
 
 The simulator has no PLL, no ADC, no DMA and dispatches no interrupts (any pending
 interrupt aborts with E0110). It proves the ping-pong buffer logic and nothing else.
+It also runs `__delay32()` at a small fraction of real time: the 100 ms time-base check
+(20 M cycles) took longer than the whole test budget and looked like a hang after the
+self-test (24.09.2026, in tools/sim_trap.py and in the MPLAB X simulator alike), so the
+simulator build delays 1 % of that. Keep every other long wait out of the simulator path
+the same way.
 
 ## Rules
 
