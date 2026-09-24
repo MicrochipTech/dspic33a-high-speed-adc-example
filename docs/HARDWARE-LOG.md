@@ -1129,3 +1129,49 @@ shows in the *time* and in `bursts`:
   the trigger defect Microchip acknowledges.
 
 The two are not subtle: 98 against 1000.
+
+## 2026-09-24, run 15 - the rate control confirmed to 0.5 %, the counters still missing
+
+`test sweep`, run by the colleague and relayed through the session working on the GUI. The
+build banner says `7a9331a+local changes` - **three commits before the counters**, so the one
+relation the run was asked for (`bursts` against `blocks`) is not in it. The decisive question
+is still open and the run has to be repeated with master at `7a20674` or later.
+
+**What it does settle, and it settles it well.** The `clean` column, corrected for the fixed
+offset found in run 14 and fixed in `f3143a3` - this build predates that fix, so the offset
+is in every row - lands on the nominal rate everywhere:
+
+```
+postdiv  nominal   clean   window    ideal   offset   corrected   deviation
+  7/7      4081     3985   513.9 us  501.8    12.1 us     4075     -0.16 %
+  5/5      8000     7662   267.3     256.0    11.3        8000     +0.00 %
+  5/4     10000     9488   215.9     204.8    11.1       10012     +0.12 %
+  5/2     20000    18066   113.4     102.4    11.0       20066     +0.33 %
+  5/1     40000    32820    62.4      51.2    11.2       40078     +0.19 %
+```
+
+All fourteen rows are inside 0.5 %, and the offset itself only varies between 11.0 and
+12.2 us across a factor of ten in rate. That is the strong part: **a rate-dependent error
+could not be removed by subtracting a constant.** The fact that one number, the same at
+4 MSPS and at 40, straightens every row is what makes the offset diagnosis and the rate
+control both solid.
+
+So, on the board and measured: **the sample rate is set by PLL1 and follows the setting to
+better than half a percent from 4 to 40 MSPS.** Together with run 14's DAC triangle - samples
+complete and in order - that is the working chain the customer asked about.
+
+Two numbers unchanged from run 14 and still unexplained: `loaded` reads between 40652 and
+42034 kSPS at every setting, and the slowest row shows 70702 overrun observations on
+2 048 000 samples at 4 MSPS. The prediction written down before the next run stands: a
+2000-block sweep point will show about 98 bursts if the handler books stale events, or 1000
+if the counting is honest.
+
+*Provenance: the derivation above was done by the parallel session and re-computed here from
+the relayed figures; the terminal log itself is not in this repository. The rows quoted are
+the five that were passed on, not all fourteen.*
+
+**Practical note for the next attempt.** The banner says `+local changes`, which means the
+working tree in front of the board differs from the commit it names - the same thing happened
+on 23.09. before run 2. Before the repeat: `git status` to see what is modified, then
+`git reset --hard` and `git pull`, and check that the banner afterwards reads the bare
+revision with no `+local changes`. Otherwise the next log is as hard to interpret as this one.
