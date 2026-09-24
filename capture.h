@@ -124,6 +124,47 @@ uint32_t capture_nominal_ksps(uint32_t ignored);
 /* The rate ladder, slowest first. */
 const struct pll_step *capture_sweep_steps(uint32_t *count);
 
+/* ---- The variant matrix ----
+ *
+ * Every documented way to set the sample rate on this device, as
+ * something the board can be asked to try one after another. The point
+ * is not elegance: four of these were tried before and reported as "does
+ * not work", and for three of them the reason turned out to be in our own
+ * code (see sccp.h). Since the documentation has been wrong twice, the
+ * board decides.
+ *
+ * capture_select_variant() takes the target rate in kSPS and translates
+ * it into that variant's registers - a PLL pair, an SCCP period, an
+ * RPTCNT, an accumulation count. It leaves the chain configured and idle;
+ * capture_oneshot() then runs it. False if the variant could not be set
+ * up at all (a clock that did not come, a period out of range).
+ *
+ * capture_trigger_period_ns() is 0 for the untriggered variants and the
+ * exact trigger period for the others. With it, one buffer and the window
+ * length from Timer1, the number of DMA transfers per trigger can be
+ * computed - which is the direct measurement of the issue Microchip
+ * acknowledges for this silicon: "ADC triggers for DMA on this device
+ * have an issue. A few transfers are possible per one trigger." */
+typedef enum {
+    CAP_VAR_B2B = 0,          /* back-to-back, rate from PLL1           */
+    CAP_VAR_SCCP_T_PER,       /* SCCP1 timer + special event, periph clk */
+    CAP_VAR_SCCP_T_G13,       /* SCCP1 timer + special event, CLKGEN13   */
+    CAP_VAR_SCCP_OC_PER,      /* SCCP1 output compare, periph clk        */
+    CAP_VAR_SCCP_OC_G13,      /* SCCP1 output compare, CLKGEN13          */
+    CAP_VAR_SCCP_OLD,         /* the combination that failed in runs 5-7 */
+    CAP_VAR_SCCP_TRG2,        /* SCCP1 as TRG2 inside an Integration burst */
+    CAP_VAR_RPTCNT,           /* the ADC repeat timer                    */
+    CAP_VAR_OVERSAMPLE,       /* MODE 3, ACCNUM divides the event rate   */
+    CAP_VAR_CLKDIV,           /* the CLKGEN6 divider                     */
+    CAP_VAR_COUNT
+} capture_variant_t;
+
+bool        capture_select_variant(capture_variant_t v, uint32_t want_ksps);
+const char *capture_variant_name(capture_variant_t v);
+uint32_t    capture_variant_ksps(void);        /* what it should deliver */
+uint32_t    capture_trigger_period_ns(void);   /* 0 = untriggered        */
+void        capture_variant_regs(void);        /* the defining registers */
+
 /* Sample the ADC's internal 15/16 * VDD reference (ANx6) for a few halves
  * and compare the mean against the expected window. Blocking, bounded.
  * Returns 0 on success, 6 if no data arrived, 7 if the mean is outside the

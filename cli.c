@@ -1100,12 +1100,158 @@ static bool test_dac(uint32_t halves)
     return rc == 0u;
 }
 
+/* ------------------------------------------------------------------ *
+ * "test matrix" - every documented way to set the sample rate, tried
+ *
+ * Four of these were tried before and written off as "does not work".
+ * For three of them the reason turned out to be in our own code: the ADC
+ * trigger number selected a different SCCP module, the auxiliary output
+ * carried the timer rollover instead of the special event trigger, and
+ * the trigger module was clocked from a different PLL than the ADC. Since
+ * the documentation has been wrong about this device twice, every
+ * combination is asked of the board rather than reasoned about.
+ *
+ * Each variant answers the same four questions, with the instruments that
+ * have earned trust:
+ *   converts      does a burst produce halves at all - bounded, so a
+ *                 variant that does nothing costs milliseconds
+ *   rate follows  the delivered rate from ONE CLEAN BURST timed with
+ *                 Timer1, never under load. This is where eleven runs
+ *                 went wrong: measured while the CPU drowned in the
+ *                 overrun interrupt, every rate came out ten times high
+ *   xfer/trigger  transfers per trigger = 2048 / (window / trigger
+ *                 period). Microchip acknowledges "a few transfers are
+ *                 possible per one trigger" on this silicon; this is the
+ *                 direct measurement of it
+ *   data intact   the DAC triangle through the chain, for the variants
+ *                 that got that far - run last and only for those, to
+ *                 keep the log readable
+ * ------------------------------------------------------------------ */
+#define MATRIX_POINTS   3u
+static const uint32_t matrix_ksps[MATRIX_POINTS] = { 4000u, 8000u, 20000u };
+#define MATRIX_TOL_PCT  10u
+
+struct matrix_result {
+    bool converts;
+    bool rate_follows;
+    bool checked;
+};
+
+/* One rate point: select, run one clean burst, report. */
+static bool matrix_point(capture_variant_t v, uint32_t want, bool show_regs)
+{
+    if (!capture_select_variant(v, want)) {
+        console_kv("[matrix]   could not configure for ksps", want);
+        return false;
+    }
+    if (show_regs) { capture_variant_regs(); }
+
+    const uint32_t nominal = capture_variant_ksps();
+    const uint32_t n       = 2u * capture_half_len();
+    const uint32_t t0      = timebase_ticks();
+    const uint32_t rc      = capture_oneshot();
+    const uint32_t ticks   = timebase_ticks() - t0;
+    (void)capture_settle();
+
+    if (rc != 0u) {
+        console_kv("[matrix]   ksps asked", want);
+        console_puts("[matrix]     NO DATA - nothing converted\r\n");
+        return false;
+    }
+    const uint32_t ksps = timebase_ksps(n, ticks);
+    const uint32_t diff = (ksps > nominal) ? (ksps - nominal) : (nominal - ksps);
+    const bool     ok   = (nominal != 0u) && (diff <= (nominal * MATRIX_TOL_PCT / 100u));
+
+    /* Longest line: four numbers of at most 10 digits and about 70
+     * characters of text, well inside 160. */
+    char line[160];
+    char *q = copy_str(line, "[matrix]   asked ");  q = u32_to_str(q, want);
+    q = copy_str(q, "  nominal ");                  q = u32_to_str(q, nominal);
+    q = copy_str(q, "  measured ");                 q = u32_to_str(q, ksps);
+    q = copy_str(q, " ksps  -> ");
+    q = copy_str(q, ok ? "follows" : "DOES NOT FOLLOW");
+    copy_str(q, "\r\n");
+    console_puts(line);
+
+    /* Transfers per trigger, for the triggered variants: the trigger
+     * period is exact, the transfer count is exactly one buffer, and the
+     * window came from Timer1. */
+    const uint32_t trig_ns = capture_trigger_period_ns();
+    if ((trig_ns != 0u) && (ticks != 0u)) {
+        const uint32_t window_ns = (uint32_t)(((uint64_t)ticks * 1000000000ull) / TIMEBASE_HZ);
+        const uint32_t triggers  = window_ns / trig_ns;
+        if (triggers != 0u) {
+            console_kv("[matrix]     triggers in the window", triggers);
+            console_kv("[matrix]     transfers per trigger x100", (n * 100u) / triggers);
+        }
+    }
+    console_kv("[matrix]     overrun during the burst", dma_overrun);
+    return ok;
+}
+
+static void cmd_matrix(void)
+{
+    struct matrix_result res[CAP_VAR_COUNT];
+    console_puts("\r\n[matrix] every documented way to set the sample rate, tried on the board\r\n"
+                 "[matrix] rate measured on one clean burst per point, never under load\r\n"
+                 "[matrix] see sccp.h for the three errors this replaces\r\n");
+
+    for (uint32_t v = 0; v < (uint32_t)CAP_VAR_COUNT; v++) {
+        res[v].converts = false;
+        res[v].rate_follows = false;
+        res[v].checked = false;
+
+        console_puts("\r\n[matrix] ");
+        console_puts(capture_variant_name((capture_variant_t)v));
+        console_puts("\r\n");
+
+        uint32_t good = 0u;
+        for (uint32_t i = 0; i < MATRIX_POINTS; i++) {
+            if (matrix_point((capture_variant_t)v, matrix_ksps[i], i == 0u)) { good++; }
+            if (blocks_done != 0u) { res[v].converts = true; }
+        }
+        res[v].rate_follows = (good == MATRIX_POINTS);
+        console_puts(res[v].rate_follows
+                     ? "[matrix]   VERDICT: the rate follows at every point\r\n"
+                     : "[matrix]   VERDICT: not usable as a rate control\r\n");
+    }
+
+    /* The data check, only for what survived - one DAC capture each, so
+     * the log stays readable. */
+    console_puts("\r\n[matrix] data check on the variants whose rate followed\r\n");
+    for (uint32_t v = 0; v < (uint32_t)CAP_VAR_COUNT; v++) {
+        if (!res[v].rate_follows) { continue; }
+        console_puts("[matrix] ");
+        console_puts(capture_variant_name((capture_variant_t)v));
+        console_puts("\r\n");
+        if (capture_select_variant((capture_variant_t)v, 8000u)) {
+            res[v].checked = (run_dactest(0u) == 0u);
+        }
+    }
+
+    console_puts("\r\n[matrix] SUMMARY\r\n");
+    for (uint32_t v = 0; v < (uint32_t)CAP_VAR_COUNT; v++) {
+        char line[160];
+        char *q = copy_str(line, "[matrix]   ");
+        q = copy_str(q, res[v].rate_follows ? "RATE OK  " : "         ");
+        q = copy_str(q, res[v].checked      ? "DATA OK  " : "         ");
+        q = copy_str(q, capture_variant_name((capture_variant_t)v));
+        copy_str(q, "\r\n");
+        console_puts(line);
+    }
+    /* Back to a known state: the boot setting. */
+    (void)capture_select_variant(CAP_VAR_B2B, capture_nominal_ksps(0u));
+    (void)capture_set_pll(ADC_PLL_POSTDIV1, ADC_PLL_POSTDIV2);
+    console_puts("[matrix] done - back at the boot setting\r\n");
+}
+
 static void test_list(void)
 {
     put_line("test all   [halves]  - self, clock, sweep, dac in that order");
     put_line("test self            - ADC -> DMA -> RAM on the internal reference");
     put_line("test clock           - switch every CLKGEN6 ratio and read it back");
     put_line("test clkoff          - switch CLKGEN6 off: does the ADC still convert?");
+    put_line("test matrix          - every way to set the rate, tried and measured");
     put_line("test rate  [halves]  - delivered rate at the ratio set now");
     put_line("test sweep [halves]  - the rate ladder, slowest first, with the counters");
     put_line("test dac   [halves]  - the DAC2 triangle: is everything there, in order?");
@@ -1117,9 +1263,9 @@ static void cmd_test_fn(int argc, char **argv)
 {
     uint32_t halves = 0u;                  /* 0 = the part's own default */
     if (argc == 1) { test_list(); return; }
-    if (argc > 3) { usage("test <all|self|clock|clkoff|rate|sweep|dac> [halves]"); return; }
+    if (argc > 3) { usage("test <all|self|clock|clkoff|matrix|rate|sweep|dac> [halves]"); return; }
     if ((argc == 3) && !arg_u32(argv[2], 1u, 100000u, &halves)) {
-        usage("test <all|self|clock|clkoff|rate|sweep|dac> [halves]");
+        usage("test <all|self|clock|clkoff|matrix|rate|sweep|dac> [halves]");
         return;
     }
     const char *what = argv[1];
@@ -1130,6 +1276,8 @@ static void cmd_test_fn(int argc, char **argv)
         if (!test_clock()) { cmd_parser_fail(); }
     } else if (strcmp(what, "clkoff") == 0) {
         if (!test_clkoff()) { cmd_parser_fail(); }
+    } else if (strcmp(what, "matrix") == 0) {
+        cmd_matrix();
     } else if (strcmp(what, "rate") == 0) {
         if (!test_rate((halves != 0u) ? halves : TEST_RATE_HALVES)) { cmd_parser_fail(); }
     } else if (strcmp(what, "sweep") == 0) {
@@ -1162,7 +1310,7 @@ static void cmd_test_fn(int argc, char **argv)
         cmd_parser_fail();
     }
 }
-CMD_DEFINE(test, "test", cmd_test_fn, "test [all|self|clock|clkoff|rate|sweep|dac] [halves]");
+CMD_DEFINE(test, "test", cmd_test_fn, "test [all|self|clock|clkoff|matrix|rate|sweep|dac] [halves]");
 
 static void cmd_reset_fn(int argc, char **argv)
 {

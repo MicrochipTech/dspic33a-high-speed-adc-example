@@ -85,6 +85,27 @@ uint32_t clock_adc_div(void);
  * number still reports what the hardware holds. */
 uint32_t clock_adc_hz(void);
 
+/* CLKGEN13 = the clock of the ADC's trigger module (SCCP1).
+ *
+ * It exists as its own entry point because of one sentence from a
+ * Microchip support case: "ADC triggers go through synchronizers. If the
+ * trigger source is clocked from a different clock source than the ADC,
+ * trigger timing can be jittery. To avoid this the ADC trigger source
+ * module must be clocked from the same clock source used for ADC." The
+ * same case describes a working setup in which CLKGEN6 and CLKGEN13 are
+ * both sourced from PLL1 - which is exactly what clock_trig_on() sets up.
+ *
+ * On with OSWEN and CLKRDY awaited, bounded; off. clock_trig_hz() is what
+ * it runs at, read back from the registers. */
+bool     clock_trig_on(void);
+void     clock_trig_off(void);
+uint32_t clock_trig_hz(void);
+
+/* The standard-speed peripheral clock, which is what the SCCP uses when
+ * it is NOT put on CLKGEN13 - it comes from CLKGEN1 and therefore PLL2,
+ * a different source from the ADC's. */
+uint32_t clock_periph_hz(void);
+
 /* CLKGEN7 = DAC clock, from PLL1 (320 MHz; the datasheet's "400 MHz
  * typical" is the design point, the range is not specified). On with
  * OSWEN and CLKRDY awaited, bounded; off. clock_dac_hz() is what it runs
