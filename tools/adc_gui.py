@@ -262,9 +262,23 @@ PACKAGES = {128: Package(pins128), 64: Package(pins64)}
 
 # PINSEL values that stay inside the chip on every core (Table 16-2).
 INTERNAL_INPUTS = {
-    6: "internal 15/16 · VDD reference, the self-test input — no pin",
-    7: "internal UREF input — no pin",
+    6: "internal 15/16 x VDD reference, the self-test input - no pin",
+    7: "internal UREF line - no pin, and the way a DAC reaches any core "
+       "without a wire",
 }
+
+# UREF: one reference line for the whole chip, and AN7 of every core samples
+# it (Table 16-2, "ADC n UREF input"). UREFCON has a single INSEL field -
+# one instance at 0x3B20, one SFR - which picks what sits on the line:
+# 1 AVDD/2, 2 VDD/2, 3 VDDcore, 4 bandgap, 5 temperature, 6..13 DAC1..DAC8,
+# 14 AVSS, 15 AVDD. DAC1 is 6, DAC2 is 7, and because the line is shared
+# only one DAC can be on it at a time. UREFOUTEN would also drive it onto a
+# pin; the internal path does not need that.
+UREF_INSEL_OF_DAC = {1: 6, 2: 7}
+UREF_CHANNEL = 7
+UREF_NOTE = ("one line for the whole chip, so only one DAC at a time; "
+             "measured on core 3 so far, the other four follow from Table 16-2")
+
 
 # Board-level notes the documents do not spell out but this project knows.
 BOARD_NOTES = {
@@ -337,24 +351,30 @@ def dac_channels(board_key, unit):
 
 def wire_hint(board_key, core, pinsel, unit):
     """What it takes to get this DAC into this ADC channel:
-    (needed, headline, detail). `needed` is False when the two are the same
-    pin, which is the one case with nothing to wire."""
+    (needed, headline, detail). `needed` is False for the two routes that
+    need no wire at all - the DAC's own pin, and the internal UREF line."""
     if unit not in DAC_UNITS:
         return (False, "", "")
     dpin = dac_pin(board_key, unit)
     apin = channel_pin(board_key, core, pinsel)
+    if pinsel == UREF_CHANNEL:
+        return (False,
+                f"internal: UREF carries DAC{unit}, read as AN7 - no pin, no wire, any core",
+                f"UREFCON.INSEL = {UREF_INSEL_OF_DAC[unit]} puts DAC{unit} on the line; {UREF_NOTE}")
     if dpin is None:
         return (True, f"DACOUT{unit} is not brought out in this package", "")
     if apin is None:
-        why = "an internal input" if pinsel in INTERNAL_INPUTS else "not brought out"
-        return (True, f"AD{core}AN{pinsel} is {why} - a wire cannot reach it", "")
+        why = "the self-test reference" if pinsel == 6 else "not brought out"
+        return (True, f"AD{core}AN{pinsel} is {why} - a wire cannot reach it",
+                "for a DAC signal without a wire, pick channel AN7: UREF reaches every core")
     if apin.n == dpin.n:
         return (False, f"no wire needed: DAC{unit} drives pin {dpin.n} ({dpin.port}), "
                        f"which is AD{core}AN{pinsel} itself", "")
     dsite = channel_site_of_pin(board_key, dpin)
     asite = channel_site_of_pin(board_key, apin)
-    return (True, f"wire {dsite} \u2192 {asite}",
-            f"DAC{unit} out on pin {dpin.n} ({dpin.port}), ADC in on pin {apin.n} ({apin.port})")
+    return (True, f"wire {dsite} -> {asite}",
+            f"DAC{unit} out on pin {dpin.n} ({dpin.port}), ADC in on pin {apin.n} ({apin.port})"
+            "  -  or pick channel AN7 and take the internal UREF line instead, no wire")
 
 
 def channel_site_of_pin(board_key, pin):
@@ -1551,6 +1571,19 @@ def main_gui(args):
                 ui.space()
                 chips = {k: ui.chip(f"{k} –", color="grey-8").props("dense outline")
                          for k in ("overrun", "late", "missed", "addr_err", "bus_err")}
+                # A burst is CNT = 2 * half_len conversions, one whole
+                # buffer: HALF at the middle, DONE at the end. So blocks
+                # must be exactly twice the bursts - arithmetic, not an
+                # assumption about the silicon. Anything else means the
+                # handler books the same event more than once.
+                ratio_chip = ui.chip("blocks/bursts –", color="grey-8").props("dense outline")
+                with ratio_chip:
+                    ui.tooltip("Completed buffer halves against started bursts. One burst fills "
+                               "one buffer, so it raises HALF once and DONE once: blocks must be "
+                               "exactly 2 x bursts. More than that means an event was counted "
+                               "again - the interrupt saw a flag that had not cleared. Grey while "
+                               "the firmware does not report 'bursts' in status.")\
+                        .style("font-size: 14px; max-width: 24rem;")
             with ui.card().classes("w-full rounded-xl p-2"):
                 time_chart = chart("time signal", "sample", "ADC counts", 0, 4096, ACCENT, second_x_name="time")
             with ui.card().classes("w-full rounded-xl p-2"):
@@ -2098,6 +2131,16 @@ def main_gui(args):
             for k in chips:
                 if k in status:
                     set_chip(k, status[k])
+            blocks = status.get("blocks")
+            bursts = status.get("bursts", status.get("burst_starts"))
+            if blocks is not None and bursts:
+                clean = (blocks == 2 * bursts)
+                ratio_chip.text = (f"blocks/bursts {blocks}/{bursts}"
+                                   + ("" if clean else f"  NOT 1:2 ({blocks / (2 * bursts):.1f}x)"))
+                ratio_chip.props(f'color={"positive" if clean else "negative"}')
+            else:
+                ratio_chip.text = "blocks/bursts –"
+                ratio_chip.props("color=grey-8")
 
             if metrics:
                 eval_chips["fundamental"].text = f"fundamental {metrics['fund_freq']/1e3:.2f} kHz"
