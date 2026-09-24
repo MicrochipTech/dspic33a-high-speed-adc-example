@@ -104,6 +104,12 @@ int main(void)
     cli_init();
     boot_mark(5u);
 
+    /* Timer1 as the stopwatch. It used to be started by timebase_check(),
+     * which only the sweep calls - so a run that only did "test dac"
+     * measured its window as zero ticks (run 12). Nothing else times
+     * itself off it, so starting it here costs nothing and means every
+     * measurement has a clock. */
+    timebase_init();
     adc_init(ADC_PINSEL, ADC_SAMC);
     boot_mark(6u);
     capture_init();

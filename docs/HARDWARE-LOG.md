@@ -834,3 +834,47 @@ samples - the triangle moves well under one count per sample at these rates, so 
 hundreds is a missing sample or a seam. The store shrank from 16 KB to 4 KB with it.
 
 Both builds `-Wall -Wextra` clean.
+
+## 2026-09-24, run 12 - master 528b370, build 13:10:35 - a PASS that does not hold
+
+`dac on`, `test dac`. The one-shot capture works: one contiguous window of 2048 samples, no
+gaps, no torn halves, and the test printed PASS. The PASS is not trustworthy, for three
+reasons, and all three are fixed.
+
+```
+window ticks (12.5 MHz): 0
+min 686   max 758   peak-to-peak 72   largest step 49   slope reversals 0
+overrun during the burst: 664
+first 24 samples: 740 x17, then 747 x7
+every 64th: 740, 724, 695, 686, 717, 717, 717, ... 717
+```
+
+**The reversal check was vacuous.** The hysteresis was a fixed 96 counts and the window moved
+72, so the detector never armed: "reversals 0" said only that the signal was smaller than the
+threshold. It is derived from the measured peak-to-peak now, with a floor of 8.
+
+**Timer1 was never running.** `timebase_init()` was called only from `timebase_check()`, which
+only the sweep calls - a run that types `test dac` and nothing else has no clock, hence zero
+ticks. It is started at boot now.
+
+**And the window barely moved.** At the DAC settings the triangle should cover about 800
+counts in 2048 samples; it covered 72. The raw values show it plainly: 740, a short settle
+down to 686, then 717 for the remaining 1800 samples. Nearly constant, not a ramp.
+
+What does hold: the values change smoothly, in steps of at most 49, with no jumps. A frozen
+result register would give a peak-to-peak of zero. **The ADC converts and the DMA places the
+results in order** - it is what the ADC sees that does not follow the triangle the way the
+arithmetic expects.
+
+Two possibilities remain and they are now separable: either the sample rate is not what the
+window length says, or the DAC clock is not what its registers say. The test computes both
+sides independently - window length from Timer1, slope rate from the DAC registers - and
+prints how far the triangle should have moved next to how far it did. A window that stands
+still cannot pass any more. The same run now also yields the first uncontended rate
+measurement: one burst, no interrupt storm, stopped with Timer1. Every rate in runs 4 to 11
+came from a CPU that was drowning in interrupts.
+
+Next at the board: `dac on 64` then `test dac`. SLPDAT is the step per DAC clock, not the
+period - larger is faster - so 64 shortens the period from 439 us to 55 us and one buffer
+covers nearly two full periods instead of a fifth of one slope. Then a triangle has to be
+visible in the raw dump by eye.

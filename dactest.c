@@ -66,7 +66,13 @@
 #define DACTEST_FLAT_PP       50u
 /* A window of about a fifth of a slope can straddle at most one peak. */
 #define DACTEST_MAX_REVERSALS 1u
-#define DACTEST_HYST          96u     /* LSb, reversal detector hysteresis */
+/* The reversal detector's hysteresis has to be smaller than the signal
+ * it is watching, or it never arms and reports zero reversals whatever
+ * the data do - which is how run 12 produced a vacuous PASS on a window
+ * that moved 72 counts against a hysteresis of 96. It is derived from
+ * the measured peak-to-peak now, with a floor for noise. */
+#define DACTEST_HYST_MIN      8u
+#define DACTEST_HYST_DIV      8u
 #define DACTEST_TOL           150u    /* LSb, min/max window (DA06 + ADC)  */
 /* The triangle moves well under one count per sample at these rates, so
  * a step of this size is a missing sample or a torn window, not signal. */
@@ -113,32 +119,56 @@ uint32_t dactest_run(uint32_t halves)
     (void)capture_settle();
 
     /* ---- judge ------------------------------------------------------ */
-    uint32_t mn = 0xFFFFu, mx = 0u;
-    uint32_t reversals = 0u, maxstep = 0u;
-    uint32_t dir = 0u, ext = 0u, prev = 0u;
-
+    /* First pass: extremes and the largest step. */
+    uint32_t mn = 0xFFFFu, mx = 0u, maxstep = 0u;
     for (uint32_t i = 0; i < n; i++) {
         const uint32_t v = store[i];
         if (v < mn) { mn = v; }
         if (v > mx) { mx = v; }
-        if (i == 0u) { ext = v; prev = v; continue; }
-        const uint32_t d = (v > prev) ? (v - prev) : (prev - v);
-        if (d > maxstep) { maxstep = d; }
-        prev = v;
-        if (dir == 1u) {
-            if (v > ext) { ext = v; }
-            else if ((ext - v) > DACTEST_HYST) { reversals++; dir = 2u; ext = v; }
-        } else if (dir == 2u) {
-            if (v < ext) { ext = v; }
-            else if ((v - ext) > DACTEST_HYST) { reversals++; dir = 1u; ext = v; }
-        } else {
-            if (v > (ext + DACTEST_HYST))      { dir = 1u; ext = v; }
-            else if ((v + DACTEST_HYST) < ext) { dir = 2u; ext = v; }
+        if (i != 0u) {
+            const uint32_t p = store[i - 1u];
+            const uint32_t d = (v > p) ? (v - p) : (p - v);
+            if (d > maxstep) { maxstep = d; }
         }
     }
     const uint32_t pp = mx - mn;
 
+    /* Second pass: reversals, with a hysteresis scaled to this window. */
+    uint32_t hyst = pp / DACTEST_HYST_DIV;
+    if (hyst < DACTEST_HYST_MIN) { hyst = DACTEST_HYST_MIN; }
+    uint32_t reversals = 0u, dir = 0u, ext = store[0];
+    for (uint32_t i = 1; i < n; i++) {
+        const uint32_t v = store[i];
+        if (dir == 1u) {
+            if (v > ext) { ext = v; }
+            else if ((ext - v) > hyst) { reversals++; dir = 2u; ext = v; }
+        } else if (dir == 2u) {
+            if (v < ext) { ext = v; }
+            else if ((v - ext) > hyst) { reversals++; dir = 1u; ext = v; }
+        } else {
+            if (v > (ext + hyst))      { dir = 1u; ext = v; }
+            else if ((v + hyst) < ext) { dir = 2u; ext = v; }
+        }
+    }
+
+    /* How far the triangle should have moved while this window was
+     * captured. The window's length comes from Timer1, the slope rate
+     * from the DAC settings - so this compares two independent things
+     * and is the check that a nearly flat window cannot pass. */
+    const uint32_t window_ns = (uint32_t)(((uint64_t)ticks * 1000000000ull) / TIMEBASE_HZ);
+    const uint32_t span      = (high > low) ? (high - low) : 0u;
+    uint32_t expected_pp = 0u;
+    if ((period_ns != 0u) && (window_ns != 0u)) {
+        expected_pp = (uint32_t)(((uint64_t)2u * span * window_ns) / period_ns);
+        if (expected_pp > span) { expected_pp = span; }
+    }
+
     console_kv("[dactest] window ticks (12.5 MHz)", ticks);
+    console_kv("[dactest] window ns", window_ns);
+    console_kv("[dactest] sample rate ksps in this burst", (window_ns != 0u)
+               ? (uint32_t)(((uint64_t)n * 1000000u) / window_ns) : 0u);
+    console_kv("[dactest] the triangle should move this far in that window", expected_pp);
+    console_kv("[dactest] reversal hysteresis used", hyst);
     console_kv("[dactest] min", mn);
     console_kv("[dactest] max", mx);
     console_kv("[dactest] peak-to-peak", pp);
@@ -158,6 +188,22 @@ uint32_t dactest_run(uint32_t halves)
 
     /* ---- the verdict ------------------------------------------------ */
     bool ok = true;
+    /* The measured swing has to be in the region of what the DAC settings
+     * and the measured window length say it must be. Half of it allows
+     * for a window that straddles a peak, where the signal turns round
+     * and comes back; less than that means the ADC is not following the
+     * signal, whatever the other checks say. */
+    if ((expected_pp != 0u) && (pp < (expected_pp / 2u))) {
+        console_kv("[dactest]   FAIL: the window moved far less than the DAC should have; expected about", expected_pp);
+        console_puts("[dactest]     Either the sample rate is not what the window length says,\r\n"
+                     "[dactest]     or the DAC clock is not what its registers say, or the\r\n"
+                     "[dactest]     signal does not reach this input. Try a faster triangle:\r\n"
+                     "[dactest]     a larger slpdat ('dac on 64') shortens the period.\r\n");
+        ok = false;
+    }
+    if (expected_pp == 0u) {
+        console_puts("[dactest]   note: no window length - nothing to compare the swing against\r\n");
+    }
     if (pp < DACTEST_FLAT_PP) {
         console_puts("[dactest]   FAIL: THE WINDOW IS FLAT - no changing signal arrives.\r\n"
                      "[dactest]     Either the DAC does not reach this input, or the DMA is\r\n"
