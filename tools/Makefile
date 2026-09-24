@@ -21,8 +21,8 @@ OBJDUMP  = $(XC_DSC)/bin/xc-dsc-objdump.exe
 BIN2HEX  = $(XC_DSC)/bin/xc-dsc-bin2hex.exe
 
 TARGET   = adc_dma_40msps
-SRC      = ../main.c ../config_bits.c ../clock.c ../adc.c ../dma.c ../capture.c ../led.c ../diag.c ../timebase.c ../sccp.c ../cli.c ../cmd_parser.c
-HDR      = ../board.h ../clock.h ../adc.h ../dma.h ../capture.h ../led.h ../diag.h ../console.h ../sim.h ../timebase.h ../sccp.h ../cmd_parser.h
+SRC      = ../main.c ../config_bits.c ../clock.c ../adc.c ../dma.c ../capture.c ../led.c ../diag.c ../timebase.c ../sccp.c ../dac.c ../dactest.c ../cli.c ../cmd_parser.c
+HDR      = ../board.h ../clock.h ../adc.h ../dma.h ../capture.h ../led.h ../diag.h ../console.h ../sim.h ../timebase.h ../sccp.h ../dac.h ../dactest.h ../cmd_parser.h
 SRC_SIM  = $(subst ../dma.c,../sim_dma.c,$(SRC))
 OUTDIR   = ../build
 
@@ -32,14 +32,18 @@ OUTDIR   = ../build
 CFLAGS   = -mcpu=$(MCU) -mdfp="$(DFP)" -O1 -Wall -Wextra
 LDFLAGS  = -T"$(GLD)"
 
-.PHONY: all hex sim size clean
+.PHONY: all hex sim size clean version
 
 all: $(OUTDIR)/$(TARGET).elf
 
 $(OUTDIR):
 	mkdir -p $(OUTDIR)
 
-$(OUTDIR)/$(TARGET).elf: $(SRC) $(HDR) | $(OUTDIR)
+# Git revision for the banner -> ../version.h, rewritten only when it changes.
+version:
+	sh $(dir $(lastword $(MAKEFILE_LIST)))version.sh
+
+$(OUTDIR)/$(TARGET).elf: $(SRC) $(HDR) version | $(OUTDIR)
 	"$(CC)" $(CFLAGS) $(LDFLAGS) $(SRC) -o $@
 
 #          make nano       dsPIC33AK512MPS506 Curiosity Nano (BOARD=2) -> ../build/adc_dma_40msps_nano.elf
@@ -53,7 +57,7 @@ $(OUTDIR)/$(TARGET)_nano.elf: $(SRC) $(HDR) | $(OUTDIR)
 
 sim: $(OUTDIR)/$(TARGET)_sim.elf
 
-$(OUTDIR)/$(TARGET)_sim.elf: $(SRC_SIM) $(HDR) | $(OUTDIR)
+$(OUTDIR)/$(TARGET)_sim.elf: $(SRC_SIM) $(HDR) version | $(OUTDIR)
 	"$(CC)" $(CFLAGS) -D__MPLAB_DEBUGGER_SIMULATOR=1 -g $(LDFLAGS) $(SRC_SIM) -o $@
 
 hex: $(OUTDIR)/$(TARGET).elf

@@ -122,6 +122,15 @@ bool dma0_enabled(void)
     return DMA0CHbits.CHEN != 0u;
 }
 
+void dma0_deinit(void)
+{
+    IEC2bits.DMA0IE = 0;
+    DMA0CHbits.CHEN = 0;
+    DMA0STAT = 0u;                          /* all flags cleared (R/C)  */
+    IFS2bits.DMA0IF = 0;
+    DMACONbits.ON = 0;
+}
+
 /* Interrupt masked, channel disabled. Nothing restarts after this. */
 void dma0_halt(void)
 {

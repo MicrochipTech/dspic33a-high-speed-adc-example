@@ -38,6 +38,31 @@ void capture_halt(void);
 
 /* Start the burst stream; a no-op while it runs. */
 void capture_start(void);
+/* Everything off: stream stopped, ADC core down, CLKGEN6 off. No
+ * conversion, no DMA event, no interrupt from the ADC side - the console
+ * has the CPU to itself. capture_start() brings clock and core back with
+ * the pacing and period they had. capture_powered() says which state. */
+void capture_shutdown(void);
+bool capture_powered(void);
+
+/* The defined idle state every test starts from: stream stopped, the
+ * burst in flight finished (or, if it never ends, aborted by taking the
+ * core down and up), stale ADC events cleared, the DMA channel taken
+ * down (dma0_deinit), ready_half 0. capture_start() sets the channel up
+ * again from scratch (dma0_init) before the first transfer. So every
+ * test ends with the DMA off and starts with a freshly initialised one;
+ * no test inherits the buffer position or the leftovers of the one
+ * before - a concern in particular for the single-conversion source,
+ * whose stop (timer off) can fall anywhere in the buffer. Returns
+ * whether the stream was running, for the caller to restart it. */
+bool capture_settle(void);
+
+/* Switch to another ADC core (1..5) with input pinsel and sample time
+ * samc: stream stopped, core down, table row switched, adc_init(), DMA
+ * re-armed on that core's trigger and result register, pacing back to
+ * the repeat timer, clock divider back to 1. Leaves the core powered and
+ * idle. False for a bad core number. */
+bool capture_select_core(uint8_t core, uint8_t pinsel, uint8_t samc);
 /* Let the current burst finish and do not restart it. */
 void capture_stop(void);
 bool capture_running(void);
@@ -55,6 +80,12 @@ uint8_t capture_samc(void);
  * ADC_TRG2_REPEAT: the ADC's repeat timer, period in TAD (12.5 ns), 2..63.
  * ADC_TRG2_SCCP1:  SCCP1 timer, period in ticks of 10 ns, 2..65535.
  * ADC_TRG2_B2B:    back-to-back, no period, as fast as the converter goes.
+ * ADC_PACE_CLKDIV: back-to-back conversions, the rate set by the ADC clock
+ *                  divider (clock.c); period = divide ratio of the 320 MHz
+ *                  clock in hundredths, 100..1000 (40 ... 4 MSPS).
+ * ADC_PACE_SINGLE: one conversion per SCCP1 trigger (Single Conversion
+ *                  mode, TRG1SRC = SCCP1), period in ticks of 10 ns; no
+ *                  burst, no restart. Microchip's 40 MSPS example's way.
  * capture_set_pacing() switches source and default period between two
  * bursts; capture_set_period() sets the period in the active source's
  * unit, applied between two bursts; false for out-of-range or for B2B.
@@ -68,6 +99,9 @@ bool     capture_set_period(uint32_t period);
 uint32_t capture_period(void);
 uint32_t capture_nominal_ksps(uint32_t period);
 const uint32_t *capture_sweep_periods(uint32_t *count);
+/* A second list for a second sweep pass, or NULL (count 0): for the clock
+ * divider the fractional ratios, after the even ones. */
+const uint32_t *capture_sweep_periods2(uint32_t *count);
 
 /* Sample the ADC's internal 15/16 * VDD reference (ANx6) for a few halves
  * and compare the mean against the expected window. Blocking, bounded.
@@ -87,7 +121,8 @@ uint32_t capture_selftest(uint32_t *mean);
 uint32_t capture_ratetest(void);
 
 /* Choose the pacing at boot per ADC_PACING (board.h). AUTO: run the rate
- * test on every candidate - repeat timer, SCCP1, back-to-back - print
+ * test on every candidate - one conversion per SCCP1 trigger, ADC clock
+ * divider, repeat timer, SCCP1 as burst trigger, back-to-back - print
  * each result, then take the first that passed, back-to-back if none.
  * A fixed source is tested once and the boot stops with its code if it
  * fails. Returns 0 or that code. */

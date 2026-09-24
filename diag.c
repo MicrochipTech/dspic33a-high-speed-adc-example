@@ -15,6 +15,7 @@
 #include "adc.h"
 #include "dma.h"
 #include "capture.h"
+#include "dac.h"
 #include "led.h"
 #include "console.h"
 
@@ -126,6 +127,25 @@ static const struct { uint32_t mask; const char *name; } rcon_bits[] = {
     { _RCON_SLEEP_MASK,  "SLEEP"  },   /* woke from Sleep (not a reset)     */
 };
 
+void diag_report_build(void)
+{
+    console_puts("[build] " BUILD_ID "\r\n");
+    console_puts("[build] board: " BOARD_NAME "\r\n");
+    console_kv("[build] adc core", ADC_INSTANCE);
+    console_kv("[build] default input (pinsel)", ADC_PINSEL);
+    console_kv("[build] default samc", ADC_SAMC);
+    console_kv("[build] default rptcnt", ADC_RPTCNT);
+    console_kv("[build] pacing (0 = auto)", ADC_PACING);
+    console_kv("[build] sccp ticks", ADC_SCCP_TICKS);
+    console_kv("[build] adc clock divider x100", ADC_CLKDIV);
+    console_kv("[build] samples per half", SAMPLES_PER_HALF);
+    console_kv("[build] auto_sweep", AUTO_SWEEP);
+    console_kv("[build] boot_verbose", BOOT_VERBOSE);
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+    console_puts("[build] simulator build (sim_dma.c, no ADC, no DMA)\r\n");
+#endif
+}
+
 void diag_report_reset(void)
 {
     const uint32_t rcon = RCON;
@@ -197,10 +217,10 @@ static void trap_report(uint32_t vec)
         } else if ((vec == 9u) || (vec == 10u)) {
             console_puts("[TRAP] vector 9/10 = clock fail / clock error: the FSCM saw"
                          " the system clock stop; OSCCTRL, PLL2CON, CLK1CON below\r\n");
-        } else if ((vec >= ADC_CH0_IRQ) && (vec < ADC_CH0_IRQ + ADC_IRQ_COUNT)) {
+        } else if ((vec >= adc_cur->ch0_irq) && (vec < adc_cur->ch0_irq + ADC_IRQ_COUNT)) {
             console_kv("[TRAP] a channel or comparator event of the ADC core in use"
                        " reached the CPU; it is meant to trigger only the DMA."
-                       " The IECn word in the dump says whether it was enabled. ch0 irq", ADC_CH0_IRQ);
+                       " The IECn word in the dump says whether it was enabled. ch0 irq", adc_cur->ch0_irq);
         } else {
             console_puts("[TRAP] a peripheral raised an interrupt we do not handle;"
                          " look up the number in the ATDF interrupt list\r\n");
@@ -297,6 +317,7 @@ void regs_dump(void)
     adc_regs_dump();
     dma0_regs_dump();
     capture_regs_dump();
+    dac_regs_dump();
     console_regs_dump();
     console_puts("[regs] cpu\r\n");
     console_kv_hex("INTCON1", INTCON1);

@@ -68,6 +68,9 @@
 #include "timebase.h"
 #include "clock.h"
 #include "capture.h"
+#include "adc.h"
+#include "dac.h"
+#include "dactest.h"
 #include "led.h"
 #include "diag.h"
 #include "console.h"
@@ -375,7 +378,7 @@ static void put_line(const char *s)
 /* One status line, blocking, for the periodic trace from main(). */
 void console_status_line(void)
 {
-    char line[240];                       /* 218 used with every field at max */
+    char line[256];                       /* 236 used with every field at max */
     char *p = copy_str(line, "[stat] blocks=");
     p = u32_to_str(p, blocks_done);
     p = copy_str(p, " overrun=");  p = u32_to_str(p, dma_overrun);
@@ -389,11 +392,13 @@ void console_status_line(void)
     p = copy_str(p, " pace=");     p = u32_to_str(p, capture_pacing());
     p = copy_str(p, " per=");      p = u32_to_str(p, capture_period());
     p = copy_str(p, " run=");      p = u32_to_str(p, capture_running() ? 1u : 0u);
+    p = copy_str(p, " pwr=");      p = u32_to_str(p, capture_powered() ? 1u : 0u);
     /* Does the ADC's channel-done event reach the CPU side at all? It is
      * the DMA trigger and stays masked (IEC6 = 0), so this flag being 1
      * while the DMA runs says the event is visible to the CPU - the
      * precondition for the vector-201 trap TROUBLESHOOTING 2.0b describes. */
-    p = copy_str(p, " adif=");     p = u32_to_str(p, adc_ch0_irq_flag());
+    p = copy_str(p, " core=");     p = u32_to_str(p, adc_core());
+    p = copy_str(p, " adif=");     p = u32_to_str(p, adc_ch0_flag() ? 1u : 0u);
     /* Receive diagnostics, see rx_count above. */
     p = copy_str(p, " rx=");       p = u32_to_str(p, rx_count);
     p = copy_str(p, " last=");     p = u32_to_hex(p, rx_last);
@@ -428,20 +433,17 @@ static void usage(const char *text)
 static void cmd_version_fn(int argc, char **argv)
 {
     (void)argc; (void)argv;
-    put_line("adc_dma_40msps " __DATE__ " " __TIME__);
-    put_line("board: " BOARD_NAME);
+    diag_report_build();          /* same block as at boot ([build] ...) */
     put_line("input: " BOARD_INPUT_NAME);
     put_line("console: " CONSOLE_PORT_NAME);
-    put_kv("adc core", ADC_INSTANCE);
-    put_kv("default input", ADC_PINSEL);
-    put_kv("samples per half", SAMPLES_PER_HALF);
 }
-CMD_DEFINE(version, "version", cmd_version_fn, "version - build, board, ADC core");
+CMD_DEFINE(version, "version", cmd_version_fn, "version - build id, git revision, board, configuration");
 
 static void cmd_status_fn(int argc, char **argv)
 {
     (void)argc; (void)argv;
     put_kv("running", capture_running() ? 1u : 0u);
+    put_kv("powered", capture_powered() ? 1u : 0u);
     put_kv("blocks", blocks_done);
     put_kv("overrun", dma_overrun);
     put_kv("late", late_service);
@@ -509,6 +511,50 @@ static void cmd_input_fn(int argc, char **argv)
 }
 CMD_DEFINE(input, "input", cmd_input_fn, "input <0..15> - analog input (PINSEL)");
 
+static void cmd_core_fn(int argc, char **argv)
+{
+    uint32_t core, pinsel = ADC_PINSEL;
+    if ((argc < 2) || (argc > 3) || !arg_u32(argv[1], 1u, 5u, &core) ||
+        ((argc == 3) && !arg_u32(argv[2], 0u, 15u, &pinsel))) {
+        usage("core <1..5> [pinsel]  (switch the ADC core; 5 3 = DAC2's pin RA8)");
+        return;
+    }
+    if (!capture_select_core((uint8_t)core, (uint8_t)pinsel, capture_samc())) { cmd_parser_fail(); return; }
+    put_kv("core", core);
+    put_kv("input", pinsel);
+}
+CMD_DEFINE(core, "core", cmd_core_fn, "core <1..5> [pinsel] - switch the ADC core");
+
+static void cmd_dac_fn(int argc, char **argv)
+{
+    if ((argc == 2) && (argv[1][0] == 'o') && (argv[1][1] == 'f')) {
+        dac2_off();
+        put_line("dac: off");
+        return;
+    }
+    uint32_t slp = 8u;
+    if ((argc < 2) || (argc > 3) || (argv[1][0] != 'o') || (argv[1][1] != 'n') ||
+        ((argc == 3) && !arg_u32(argv[2], 1u, 255u, &slp))) {
+        usage("dac <on [slpdat]|off>  (DAC2 triangle 0x100..0xF00 on RA8; slpdat = counts per DAC clock, 8 = 22 kHz)");
+        return;
+    }
+    if (!dac2_triangle_start(0x100u, 0xF00u, (uint16_t)slp)) { put_line("dac: CLKGEN7 did not come up"); cmd_parser_fail(); return; }
+    put_kv("dac slpdat", slp);
+    put_kv("dac period ns", dac2_period_ns());
+}
+CMD_DEFINE(dac, "dac", cmd_dac_fn, "dac <on [slpdat]|off> - DAC2 triangle on RA8");
+
+static void cmd_dactest_fn(int argc, char **argv)
+{
+    uint32_t halves = 64u;
+    if ((argc > 2) || ((argc == 2) && !arg_u32(argv[1], 1u, 10000u, &halves))) {
+        usage("dactest [halves]  (capture and judge the DAC2 triangle, default 64 halves)");
+        return;
+    }
+    if (dactest_run(halves) != 0u) { cmd_parser_fail(); }
+}
+CMD_DEFINE(dactest, "dactest", cmd_dactest_fn, "dactest [halves] - judge the DAC2 triangle through the chain");
+
 static void cmd_selftest_fn(int argc, char **argv)
 {
     uint32_t mean = 0;
@@ -523,21 +569,45 @@ static void cmd_selftest_fn(int argc, char **argv)
 }
 CMD_DEFINE(selftest, "selftest", cmd_selftest_fn, "selftest - sample the internal reference");
 
-static void cmd_stats_fn(int argc, char **argv)
+/* min/max/mean/pp of the completed half - shared by "stats" and the
+ * periodic [half] line. */
+static void half_stats(uint32_t *mn, uint32_t *mx, uint32_t *mean)
 {
     const volatile uint16_t *b = capture_completed_half();
-    uint32_t mn = 0xFFFFu, mx = 0u, acc = 0u;
-    (void)argc; (void)argv;
+    uint32_t lo = 0xFFFFu, hi = 0u, acc = 0u;
     for (uint32_t i = 0; i < SAMPLES_PER_HALF; i++) {
         const uint16_t v = b[i];
-        if (v < mn) { mn = v; }
-        if (v > mx) { mx = v; }
+        if (v < lo) { lo = v; }
+        if (v > hi) { hi = v; }
         acc += v;
     }
+    *mn = lo; *mx = hi; *mean = acc / SAMPLES_PER_HALF;
+}
+
+void console_half_stats(void)
+{
+    char line[96];
+    uint32_t mn, mx, mean;
+    half_stats(&mn, &mx, &mean);
+    char *p = copy_str(line, "[half] n=");
+    p = u32_to_str(p, ready_half);
+    p = copy_str(p, " min=");  p = u32_to_str(p, mn);
+    p = copy_str(p, " max=");  p = u32_to_str(p, mx);
+    p = copy_str(p, " mean="); p = u32_to_str(p, mean);
+    p = copy_str(p, " pp=");   p = u32_to_str(p, mx - mn);
+    copy_str(p, "\r\n");
+    console_puts(line);
+}
+
+static void cmd_stats_fn(int argc, char **argv)
+{
+    uint32_t mn, mx, mean;
+    (void)argc; (void)argv;
+    half_stats(&mn, &mx, &mean);
     put_kv("half", ready_half);
     put_kv("min", mn);
     put_kv("max", mx);
-    put_kv("mean", acc / SAMPLES_PER_HALF);
+    put_kv("mean", mean);
     put_kv("pp", mx - mn);
 }
 CMD_DEFINE(stats, "stats", cmd_stats_fn, "stats - min/max/mean of the completed half");
@@ -635,9 +705,7 @@ enum sweep_load { SWEEP_IDLE = 0, SWEEP_PROCESS = 1, SWEEP_SFR = 2 };
 static bool sweep_point(uint32_t period, uint32_t halves, enum sweep_load load, uint32_t *ticks)
 {
     uint32_t n = SWEEP_WAIT_LIMIT;
-    capture_stop();
-    while (capture_burst_active() && (--n != 0u)) { SIM_DMA_TICK(); }
-    if (n == 0u) { return false; }
+    (void)capture_settle();                                   /* defined start     */
     if (period != 0u) { (void)capture_set_period(period); }   /* idle: applied now */
     counters_clear();
     const uint32_t target = blocks_done + halves;
@@ -648,14 +716,15 @@ static bool sweep_point(uint32_t period, uint32_t halves, enum sweep_load load, 
         SIM_DMA_TICK();
         if (load == SWEEP_PROCESS)      { (void)capture_service(); }
         else if (load == SWEEP_SFR)     { (void)U2STAT; }
-        if (--n == 0u) { capture_stop(); return false; }
+        if (--n == 0u) { (void)capture_settle(); return false; }
     }
     *ticks = timebase_ticks() - t0;   /* unsigned: wrap-safe             */
-    capture_stop();
+    (void)capture_settle();           /* point over: DMA down            */
     return true;
 }
 
-static void sweep_row(uint32_t period, uint32_t halves)
+/* Returns true if the process run delivered every half with no overrun. */
+static bool sweep_row(uint32_t period, uint32_t halves)
 {
     uint32_t ov[3], ticks[3] = { 0, 0, 0 };
     bool     ok[3];
@@ -683,6 +752,7 @@ static void sweep_row(uint32_t period, uint32_t halves)
     p = copy_str(p, "  missed ");             p = u32_to_str(p, missed);
     copy_str(p, "\r\n");
     console_puts(line);               /* blocking: works from main() too */
+    return ok[SWEEP_PROCESS] && (ov[SWEEP_PROCESS] == 0u) && (missed == 0u) && (late == 0u);
 }
 
 /* The sweep itself, callable from the command and from main() (the
@@ -690,7 +760,7 @@ static void sweep_row(uint32_t period, uint32_t halves)
  * through the blocking console_puts(), not the parser's sink, so it
  * does not depend on the receive path - which is one of the things
  * the automatic run is there to investigate. */
-void console_sweep(uint32_t halves)
+void console_sweep(uint32_t halves, bool choose)
 {
     uint32_t count = 0;
     const uint32_t *periods    = capture_sweep_periods(&count);   /* slowest first */
@@ -710,15 +780,52 @@ void console_sweep(uint32_t halves)
      * ticks. Anything else and the measured rates are off by the same
      * factor - and the assumption about the timer's clock is wrong. */
     console_kv("[sweep] timer check, ticks per 100 ms (expect 1250000)", timebase_check());
+    uint32_t best = 0u, best_ksps = 0u;   /* fastest clean row          */
     for (uint32_t i = 0; i < count; i++) {
         console_puts("[sweep] ");
-        sweep_row(periods[i], halves);
+        if (sweep_row(periods[i], halves) && (periods[i] != 0u) &&
+            (capture_nominal_ksps(periods[i]) > best_ksps)) {
+            best = periods[i]; best_ksps = capture_nominal_ksps(periods[i]);
+        }
+    }
+    /* Second pass, if the source has one (clock divider: the fractional
+     * ratios, the rates the even ones cannot reach). */
+    {
+        uint32_t count2 = 0;
+        const uint32_t *periods2 = capture_sweep_periods2(&count2);
+        if (count2 != 0u) {
+            console_puts("[sweep] second pass: fractional divider ratios (period = ratio x 100)\r\n");
+            for (uint32_t i = 0; i < count2; i++) {
+                console_puts("[sweep] ");
+                if (sweep_row(periods2[i], halves) && (periods2[i] != 0u) &&
+                    (capture_nominal_ksps(periods2[i]) > best_ksps)) {
+                    best = periods2[i]; best_ksps = capture_nominal_ksps(periods2[i]);
+                }
+            }
+        }
     }
 
-    if (keep_period != 0u) { (void)capture_set_period(keep_period); }
+    /* The question the sweep answers: the highest rate at which the CPU
+     * gets every half (missed 0) and the DMA every sample (overrun 0),
+     * with the main-loop processing running. At boot that rate is what
+     * the measurement then runs at; a rate with overruns would also
+     * raise the DMA interrupt for every lost sample (1.6 million per
+     * second at 40 MSPS on the board) and starve the console. */
+    if (choose && (best != 0u)) {
+        (void)capture_set_period(best);
+        console_kv("[sweep] using period", best);
+        console_kv("[sweep]   ksps nominal", capture_nominal_ksps(best));
+        console_puts("[sweep]   the highest rate with overrun 0 and missed 0 in the process run\r\n");
+    } else if (choose && (keep_period != 0u)) {
+        (void)capture_set_period(keep_period);
+        console_kv("[sweep] NO CLEAN RATE - every row lost samples or halves; keeping period", keep_period);
+    } else {
+        if (keep_period != 0u) { (void)capture_set_period(keep_period); }
+    }
     counters_clear();
     if (was_running) { capture_start(); }
-    console_puts("[sweep] done: counters cleared, previous period and run state restored\r\n");
+    console_puts(choose ? "[sweep] done: counters cleared\r\n"
+                        : "[sweep] done: counters cleared, previous period and run state restored\r\n");
 }
 
 static void cmd_sweep_fn(int argc, char **argv)
@@ -728,15 +835,15 @@ static void cmd_sweep_fn(int argc, char **argv)
         usage("sweep [halves per point 10..100000, default 2000]");
         return;
     }
-    console_sweep(halves);
+    console_sweep(halves, false);
 }
-CMD_DEFINE(sweep, "sweep", cmd_sweep_fn, "sweep [halves] - overrun vs sample rate, 1.27..40 MSPS");
+CMD_DEFINE(sweep, "sweep", cmd_sweep_fn, "sweep [halves] - overrun vs sample rate for the active pacing");
 
 static void cmd_period_fn(int argc, char **argv)
 {
     uint32_t v;
     if ((argc != 2) || !arg_u32(argv[1], 2u, 65535u, &v)) {
-        usage("period <n>  (sample period in the active pacing's unit: repeat timer 2..63 TAD, SCCP1 2..65535 x 10 ns)");
+        usage("period <n>  (sample period in the active pacing's unit: SCCP1 trigger 2..65535 x 10 ns, clock divider 100..1000 = ratio x 100, repeat timer 2..63 TAD)");
         return;
     }
     if (!capture_set_period(v)) {
@@ -752,15 +859,15 @@ CMD_DEFINE(period, "period", cmd_period_fn, "period <n> - sample period in the a
 static void cmd_pacing_fn(int argc, char **argv)
 {
     uint32_t v;
-    if ((argc != 2) || !arg_u32(argv[1], 0u, 63u, &v) || !capture_set_pacing((uint8_t)v)) {
-        usage("pacing <3|32|2>  (3 = ADC repeat timer, 32 = SCCP1 timer, 2 = back-to-back)");
+    if ((argc != 2) || !arg_u32(argv[1], 0u, 65u, &v) || !capture_set_pacing((uint8_t)v)) {
+        usage("pacing <65|64|3|34|2>  (65 = one conversion per SCCP1 trigger, 64 = ADC clock divider, 3 = ADC repeat timer, 34 = SCCP1 as burst trigger, 2 = back-to-back)");
         return;
     }
     put_kv("pacing", v);
     put_line(capture_pacing_name());
     put_kv("period", capture_period());
 }
-CMD_DEFINE(pacing, "pacing", cmd_pacing_fn, "pacing <3|32|2> - what triggers the conversions");
+CMD_DEFINE(pacing, "pacing", cmd_pacing_fn, "pacing <65|64|3|34|2> - what paces the conversions");
 
 static void cmd_reset_fn(int argc, char **argv)
 {
@@ -803,6 +910,9 @@ void cli_init(void)
     (void)cmd_register(&cmd_sweep);
     (void)cmd_register(&cmd_period);
     (void)cmd_register(&cmd_pacing);
+    (void)cmd_register(&cmd_core);
+    (void)cmd_register(&cmd_dac);
+    (void)cmd_register(&cmd_dactest);
     (void)cmd_register(&cmd_reset);
 
     /* Banner, once at start-up. A human sees what is talking and which
@@ -812,7 +922,7 @@ void cli_init(void)
                  "adc_dma_40msps - ADC at 40 MSPS into RAM via DMA\r\n"
                  SIM_BANNER_NOTE           /* empty on silicon            */
                  "board: " BOARD_NAME "\r\n"
-                 "build: " __DATE__ " " __TIME__ "\r\n"
+                 "build: " BUILD_ID "\r\n"
                  "type 'help' for the commands\r\n"
                  "please log this terminal from power-up and send it back\r\n");
 

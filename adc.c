@@ -8,10 +8,44 @@
  */
 
 #include <xc.h>
+#include <stdbool.h>
 #include "board.h"
 #include "adc.h"
 #include "capture.h"
 #include "console.h"
+
+/* One row per core: its registers, its interrupt words and CH0 bit, its
+ * DMA trigger code (adc.h explains the numbers). Address constants, so
+ * the table lives in flash. */
+#define ADC_ROW(n, iec, ifs, bit, irq, trig) \
+    { (n), &AD##n##CON, &AD##n##STAT, &AD##n##SWTRG, &AD##n##CH0CON1, \
+      &AD##n##CH0CNT, &AD##n##CH0RES, &AD##n##CH0DATA, &iec, &ifs, 1ul << (bit), (irq), (trig) }
+static const adc_core_t adc_cores[5] = {
+    ADC_ROW(1, IEC4, IFS4, 29, 157u, 0x2Fu),
+    ADC_ROW(2, IEC5, IFS5, 19, 179u, 0x35u),
+    ADC_ROW(3, IEC6, IFS6,  9, 201u, 0x3Bu),
+    ADC_ROW(4, IEC6, IFS6, 29, 221u, 0x41u),
+    ADC_ROW(5, IEC7, IFS7, 17, 241u, 0x48u),
+};
+const adc_core_t *adc_cur = &adc_cores[ADC_INSTANCE - 1];
+
+bool adc_select(uint8_t core)
+{
+    if ((core < 1u) || (core > 5u)) { return false; }
+    adc_cur = &adc_cores[core - 1u];
+    return true;
+}
+
+uint8_t adc_core(void)                    { return adc_cur->core; }
+uint8_t adc_dma_trigger(void)             { return adc_cur->dma_trigger; }
+const volatile void *adc_dma_source(void) { return adc_cur->CH0RES; }
+bool adc_ch0_flag(void)                   { return (*adc_cur->IFS & adc_cur->ch0_mask) != 0u; }
+
+void adc_clear_events(void)
+{
+    (void)ADCREG(CH0DATA);
+    *adc_cur->IFS = 0u;
+}
 #include "diag.h"
 
 /* ------------------------------------------------------------------ *
@@ -61,24 +95,24 @@
  * ------------------------------------------------------------------ */
 void adc_init(uint8_t pinsel, uint8_t samc, uint8_t rptcnt)
 {
-    ADCREG(CONbits).ON = 0;
+    ADCBITS(CON).ON = 0;
 
     /* The repeat timer's period, RPTCNT in ADxCON[23:18], in TAD. The
      * reset value seen on the board was 18 (AD3CON = 0xC34A8000). */
-    ADCREG(CONbits).RPTCNT = rptcnt;
+    ADCBITS(CON).RPTCNT = rptcnt;
 
     /* Channel 0 configuration, ADxCH0CON1 (DS70005591D p1265 f.) */
-    ADCREG(CH0CON1bits).PINSEL  = pinsel;      /* positive input select */
-    ADCREG(CH0CON1bits).NINSEL  = 0u;          /* negative input = AVSS */
-    ADCREG(CH0CON1bits).DIFF    = 0u;          /* single ended, unsigned*/
-    ADCREG(CH0CON1bits).FRAC    = 0u;          /* integer, right aligned*/
-    ADCREG(CH0CON1bits).SAMC    = samc;        /* sample time in TAD    */
-    ADCREG(CH0CON1bits).MODE    = 2u;          /* Integration           */
-    ADCREG(CH0CON1bits).ACCNUM  = 0u;          /* oversampling only     */
-    ADCREG(CH0CON1bits).IRQSEL  = 0u;          /* event per conversion  */
-    ADCREG(CH0CON1bits).EIEN    = 0u;          /* no early IRQ with DMA */
-    ADCREG(CH0CON1bits).TRG1SRC = 0x01u;       /* software trigger      */
-    ADCREG(CH0CON1bits).TRG2SRC = ADC_TRG2_REPEAT; /* capture.c may change it */
+    ADCBITS(CH0CON1).PINSEL  = pinsel;      /* positive input select */
+    ADCBITS(CH0CON1).NINSEL  = 0u;          /* negative input = AVSS */
+    ADCBITS(CH0CON1).DIFF    = 0u;          /* single ended, unsigned*/
+    ADCBITS(CH0CON1).FRAC    = 0u;          /* integer, right aligned*/
+    ADCBITS(CH0CON1).SAMC    = samc;        /* sample time in TAD    */
+    ADCBITS(CH0CON1).MODE    = 2u;          /* Integration           */
+    ADCBITS(CH0CON1).ACCNUM  = 0u;          /* oversampling only     */
+    ADCBITS(CH0CON1).IRQSEL  = 0u;          /* event per conversion  */
+    ADCBITS(CH0CON1).EIEN    = 0u;          /* no early IRQ with DMA */
+    ADCBITS(CH0CON1).TRG1SRC = 0x01u;       /* software trigger      */
+    ADCBITS(CH0CON1).TRG2SRC = ADC_TRG2_REPEAT; /* capture.c may change it */
 
     /* Conversions per burst. One burst fills the whole DMA buffer, so
      * the DMA DONE interrupt is also the moment to start the next one.
@@ -90,22 +124,25 @@ void adc_init(uint8_t pinsel, uint8_t samc, uint8_t rptcnt)
      * it would arrive on every conversion, 40 million times a second.
      * The enables reset to 0, but a previous program or the debugger may
      * have left one set, so clear the enable and the flag of every one
-     * of the core's twelve channel/comparator events (ADC_CH0_IRQ ..
+     * of the core's twelve channel/comparator events (adc_cur->ch0_irq ..
      * + 11; the IEC/IFS words are contiguous from IEC0/IFS0, 32 IRQs
-     * each) before the core starts. If the trap report ever shows one
-     * of those vectors with its enable clear, the event reaches the CPU
-     * regardless of the enable, and this assumption is wrong. */
+     * each - two cores' ranges cross a word boundary, hence the per-
+     * iteration index instead of one word write) before the core starts.
+     * If the trap report ever shows one of those vectors with its enable
+     * clear, the event reaches the CPU regardless of the enable, and
+     * this assumption is wrong. */
     {
         volatile uint32_t *const iec = &IEC0;
         volatile uint32_t *const ifs = &IFS0;
-        for (uint32_t irq = ADC_CH0_IRQ; irq < ADC_CH0_IRQ + ADC_IRQ_COUNT; irq++) {
+        uint32_t irq = adc_cur->ch0_irq;
+        for (uint32_t n = 0; n < ADC_IRQ_COUNT; n++, irq++) {
             iec[irq / 32u] &= ~(1ul << (irq % 32u));
             ifs[irq / 32u] &= ~(1ul << (irq % 32u));
         }
     }
 
-    ADCREG(CONbits).ON = 1;
-    WAIT_WHILE(!ADCREG(CONbits).ADRDY, 5u);    /* wait for the core     */
+    ADCBITS(CON).ON = 1;
+    WAIT_WHILE(!ADCBITS(CON).ADRDY, 5u);    /* wait for the core     */
     console_trace("[adc] core ready, Integration mode, CNT 2048, repeat-timer trigger\r\n");
     console_trace_kv("[adc] pinsel", pinsel);
     console_trace_kv("[adc] samc", samc);
@@ -116,28 +153,61 @@ void adc_init(uint8_t pinsel, uint8_t samc, uint8_t rptcnt)
  * running: capture.c applies a change between two bursts. */
 void adc_set_input(uint8_t pinsel, uint8_t samc)
 {
-    ADCREG(CH0CON1bits).PINSEL = pinsel;
-    ADCREG(CH0CON1bits).SAMC   = samc;
+    ADCBITS(CH0CON1).PINSEL = pinsel;
+    ADCBITS(CH0CON1).SAMC   = samc;
 }
 
 /* Period of the repeat timer, RPTCNT (2..63 TAD). Same rule: between
  * bursts, through capture.c. */
 void adc_set_period(uint8_t rptcnt)
 {
-    ADCREG(CONbits).RPTCNT = rptcnt;
+    ADCBITS(CON).RPTCNT = rptcnt;
 }
 
-uint8_t adc_period(void) { return (uint8_t)ADCREG(CONbits).RPTCNT; }
+uint8_t adc_period(void) { return (uint8_t)ADCBITS(CON).RPTCNT; }
 
 void adc_set_trg2(uint8_t trg2src)
 {
-    ADCREG(CH0CON1bits).TRG2SRC = trg2src;
+    ADCBITS(CH0CON1).TRG2SRC = trg2src;
 }
 
-uint8_t adc_trg2(void) { return (uint8_t)ADCREG(CH0CON1bits).TRG2SRC; }
+uint8_t adc_trg2(void) { return (uint8_t)ADCBITS(CH0CON1).TRG2SRC; }
 
-uint8_t adc_pinsel(void) { return (uint8_t)ADCREG(CH0CON1bits).PINSEL; }
-uint8_t adc_samc(void)   { return (uint8_t)ADCREG(CH0CON1bits).SAMC; }
+bool adc_ready(void) { return ADCBITS(CON).ADRDY != 0u; }
+
+void adc_set_mode_burst(void)
+{
+    ADCBITS(CH0CON1).MODE    = 2u;          /* Integration           */
+    ADCBITS(CH0CON1).TRG1SRC = 0x01u;       /* software trigger      */
+}
+
+void adc_set_mode_single(uint8_t trg1src)
+{
+    ADCBITS(CH0CON1).MODE    = 0u;          /* Single Conversion     */
+    ADCBITS(CH0CON1).TRG1SRC = trg1src;     /* e.g. SCCP1 trigger    */
+}
+
+void adc_deinit(void)
+{
+    ADCBITS(CON).ON = 0;
+    (void)ADCREG(CH0DATA);            /* clears a stale CH0RDY            */
+    *adc_cur->IFS = 0u;               /* this core's event flags          */
+}
+
+bool adc_reinit(void)
+{
+    ADCBITS(CON).ON = 1;
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+    return true;                       /* no core to wait for              */
+#else
+    uint32_t n = WAIT_LIMIT;
+    while (!ADCBITS(CON).ADRDY && (--n != 0u)) { }
+    return n != 0u;
+#endif
+}
+
+uint8_t adc_pinsel(void) { return (uint8_t)ADCBITS(CH0CON1).PINSEL; }
+uint8_t adc_samc(void)   { return (uint8_t)ADCBITS(CH0CON1).SAMC; }
 
 /* Start one burst of SAMPLES_PER_BUF conversions. Reading ADxCH0DATA
  * first clears CH0RDY from the previous burst, as datasheet Example 16-6
@@ -145,12 +215,13 @@ uint8_t adc_samc(void)   { return (uint8_t)ADCREG(CH0CON1bits).SAMC; }
 void adc_start_burst(void)
 {
     (void)ADCREG(CH0DATA);
-    ADCREG(SWTRGbits).CH0TRG = 1u;
+    ADCBITS(SWTRG).CH0TRG = 1u;
 }
 
 void adc_regs_dump(void)
 {
     console_puts("[regs] adc\r\n");
+    console_kv("core", adc_core());
     console_kv_hex("ADxCON", ADCREG(CON));
     console_kv_hex("ADxSTAT", ADCREG(STAT));
     console_kv_hex("ADxCH0CON1", ADCREG(CH0CON1));
@@ -158,12 +229,8 @@ void adc_regs_dump(void)
     console_kv_hex("ADxCH0RES", ADCREG(CH0RES));
     console_kv_hex("ADxCH0DATA", ADCREG(CH0DATA));
     /* The IEC/IFS word that holds the core's channel-0 event. */
-    console_kv("ch0 irq", ADC_CH0_IRQ);
-    console_kv_hex("IECn (word of ch0 irq)", (&IEC0)[ADC_CH0_IRQ / 32u]);
-    console_kv_hex("IFSn (word of ch0 irq)", (&IFS0)[ADC_CH0_IRQ / 32u]);
-}
-
-uint32_t adc_ch0_irq_flag(void)
-{
-    return ((&IFS0)[ADC_CH0_IRQ / 32u] >> (ADC_CH0_IRQ % 32u)) & 1u;
+    console_kv("ch0 irq", adc_cur->ch0_irq);
+    console_kv_hex("IECx (this core's word)", *adc_cur->IEC);
+    console_kv_hex("IFSx (this core's word)", *adc_cur->IFS);
+    console_kv_hex("CH0 IRQ mask in it", adc_cur->ch0_mask);
 }

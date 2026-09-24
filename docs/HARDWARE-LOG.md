@@ -145,3 +145,225 @@ What the whole exercise is for, stated once: continuous sampling, ADC and DMA ru
 in the background into a ping-pong buffer, the CPU processing the half that is not
 being written. The sweep's `process` column is exactly that case, and the highest rate
 at which it shows `overrun 0` and `missed 0` is the answer for this device.
+
+## 2026-09-23, run 5 - master built 15:27 (pacing trial: repeat timer, SCCP1, back-to-back)
+
+The colleague's terminal, as pasted (the log is cut after the sweep header; whether a
+sweep row, `[stat]` lines or another boot followed is not known):
+
+```
+[boot] uart up on FRC, 115200 8N1
+[boot] adc_dma_40msps Sep 23 2026 15:27:16
+[boot] RCON: 0x00000080
+[boot] reset cause: EXTR
+
+adc_dma_40msps - ADC at 40 MSPS into RAM via DMA
+board: EV74H48A, dsPIC33AK512MPS512 GP DIM
+build: Sep 23 2026 15:27:17
+type 'help' for the commands
+please log this terminal from power-up and send it back
+> [boot] self-test on the internal reference
+[selftest] mean on internal 15/16 VDD (expect ~3840): 3819
+[pacing] time base check, ticks per 100 ms (expect 1250000): 1250001
+[ratetest] pacing: ADC repeat timer (period in TAD = 12.5 ns)
+[ratetest]   period: 16
+[ratetest]     nominal ksps: 5000
+[ratetest]     measured ksps: 36493
+[ratetest]     outside the 10 % window
+[ratetest]   FAIL
+[ratetest] pacing: SCCP1 timer (period in ticks of 10 ns)
+[ratetest]   period: 20
+[ratetest]     nominal ksps: 5000
+[ratetest]     measured ksps: 37898
+[ratetest]     outside the 10 % window
+[ratetest]   FAIL
+[ratetest] pacing: back-to-back (no rate control)
+[ratetest]   measured ksps (no period to compare with): 35284
+[ratetest]   PASS
+[pacing] summary: repeat timer FAIL, SCCP1 timer FAIL, back-to-back runs
+[pacing] using: back-to-back (no rate control) - NO PACED SOURCE PASSED, the rate is not under control
+[boot] automatic rate sweep before the measurement (AUTO_SWEEP in board.h)
+[sweep] halves per point: 2000
+[sweep] pacing: back-to-back (no rate control)
+[sweep] idle = CPU polls RAM only, process = main-loop processing, sfr = CPU polls an SFR
+[sweep] overrun must be 0 for a usable rate; late/missed are from the process run
+[sweep] nominal = the rate the period should give, measured = samples per second the DMA
+[sweep] delivered (Timer1), reg = the period read back from the hardware
+[sweep] timer check, ticks per 100 ms (expect 1250000): 1250001
+[sweep]
+```
+
+Reading: the time base is right (1 250 001 ticks per 100 ms, twice), so the measured
+rates are real. Neither paced source paces. With the repeat timer at RPTCNT 16 (nominal
+5 MSPS) the DMA received 36.5 MSPS, with SCCP1 at 20 ticks (nominal 5 MSPS) 37.9 MSPS,
+back-to-back 35.3 MSPS: three trigger sources, one rate, and it is the converter's own
+rate minus the burst-restart gap. Either the `TRG2SRC`/`RPTCNT` writes do not take
+(the register read-back, `reg` in a sweep row and `AD3CH0CON1` in the `regs` dump, would
+show that; neither is in this log), or in Integration mode the conversions inside a
+burst run back-to-back whatever `TRG2SRC` says and the repeat timer only matters for
+single conversions. The datasheet text (16.4.5) does not settle this; the board has.
+
+The log ends with `[sweep] ` and no row: the first (and, for back-to-back, only) sweep
+point did not print within whatever time the colleague waited. At 35 MSPS the three
+loads of 2000 halves take about 0.2 s; `sweep_point()` is bounded by
+`SWEEP_WAIT_LIMIT`, a trap would print `[TRAP]`, a `fail()` would print `[FAIL]`. So
+either the paste was taken while the row was still pending, or the CPU is starved the
+way run 4 described (every overrun raises the DMA interrupt, about 1.6 million per
+second at this rate). Open until the next, complete log.
+
+Changed for the next run, so that a log answers these questions by itself: the banner
+carries the git revision (`tools/version.bat` -> `version.h`, run before every build
+from the IDE and the command line), a `[build]` block prints board and every
+compile-time switch, a `[regs]` snapshot is printed after initialisation and before
+the self-test (`AD3CH0CON1` with `TRG2SRC` and `RPTCNT` included), and every `[stat]`
+line is followed by a `[half]` line with min/max/mean/pp of the last completed half.
+
+## 2026-09-23, run 6 - master 1ebb140 (+local changes), first complete log, about 30 s
+
+`RCON = EXTR`. Self-test 3817. Time base 1 250 011 / 1 250 001. Rate test as in run 5:
+repeat timer at RPTCNT 16 delivered 36 067 ksps, SCCP1 at 20 ticks 37 401, back-to-back
+37 533 - no paced source, back-to-back used. One sweep row (back-to-back): measured
+38 262 ksps, overrun idle/process/sfr 82736/86980/82299 of 2 048 000 samples, missed
+1825 of 2000. Then four `[stat]` lines 5 s apart:
+
+```
+[stat] blocks=195425 overrun=7815329  late=0 missed=187326 ... last=17 ... pace=2 per=0 run=1 ad3if=1 rx=0 last=0x00000000 cr=0 lf=0
+[half] n=0 min=8 max=32 mean=17 pp=24
+[stat] blocks=390651 overrun=15916707 late=0 missed=381793 ...
+[stat] blocks=586133 overrun=24028708 late=0 missed=576515 ...
+[stat] blocks=781391 overrun=32131436 late=0 missed=771014 ...
+```
+
+Register snapshot, decoded with the device header (`_AD1CH0CON1_*_POSITION` etc.):
+`AD3CH0CON1 = 0x05000381` = TRG1SRC 1 (software), MODE 2 (Integration), **TRG2SRC 3
+(repeat timer)**, SAMC 0, PINSEL 5. `AD3CON = 0xC30A8000` = ON, **RPTCNT 2**, ADRDY,
+CALRDY. `DMA0CH = 0x06001C4B` = CHEN, HALFEN, DONEEN, SIZE 1 (16 bit), TRMODE 3,
+DAMODE 1, RELOADD/RELOADC. `U2CON = 0x48008030` = ON, RXEN, TXEN, MODE 0.
+`U2STAT = 0x001E0000` = RXBE, XON, **RCIDL** (receiver idle, line at the idle level),
+TXBF; no FERR/OERR/PERR. `IEC3 = 0x40` (U2RX on), `IPC12` U2RX priority 1, `IPC9` DMA0
+priority 4. `RPINR13 = 0x00320000` (U2RXR = 50 = RD1), `TRISD = 0xFFFF`.
+
+Reading:
+
+1. **The trigger registers hold what the firmware wrote** (TRG2SRC 3, RPTCNT 2, and the
+   rate test rewrites RPTCNT to 16 before measuring), and the rate still does not
+   follow them. In Integration mode on this silicon, the conversions inside a burst
+   run back-to-back whatever TRG2SRC says; the SCCP1 period match does not pace them
+   either. The datasheet text (16.4.5) is not what the board does. The remaining
+   lever for the rate is the ADC clock itself (CLKGEN6 divider, `CLK6DIV`), which
+   scales TAD and with it the back-to-back rate: /2 = 20 MSPS, /4 = 10 MSPS, /8 =
+   5 MSPS. Not built yet.
+
+2. **At 37.5 MSPS the DMA loses 4 % of the samples**, exactly as in runs 4 and 5
+   (7.8 million overruns per 5 s of 195 000 halves x 1024 samples), and every overrun
+   raises the DMA interrupt: 1.56 million per second, priority 4. The main loop gets
+   4 % of the halves (`missed` 96 %), `late` stays 0. This matches Microchip's own
+   example, which copies with a hand-timed 5-cycle loop instead of the DMA at this
+   rate.
+
+3. **The console receives nothing:** `rx=0` after 20 s of typing, no UART error
+   flags, receiver idle with the line high (`RCIDL`), pin routing and enables as
+   intended, JTAG off (RD1 is also TCK). Two explanations remain and the log cannot
+   separate them: the terminal's bytes never reach RD1 (wrong COM port or a terminal
+   that shows the log but does not send), or the priority-1 receive interrupt
+   starves behind the 1.56 million priority-4 interrupts per second. The second one
+   disappears with the rate; if `rx` stays 0 at a rate without overruns, it is the
+   first.
+
+4. `[half]` says the input is at 8...35 counts of 4096, mean 17: nothing is connected
+   to mikroBUS A AN, the pin floats near ground. Expected; the signal source comes later.
+
+Changed after run 6 (no board run yet): the ADC clock divider is the fourth pacing
+candidate (`pacing 64`, `clock_adc_set_div()`: CLKGEN6 `INTDIV`, divided clock =
+F_IN / (2 · INTDIV), switched with `DIVSWEN`, ratios 1/2/4/6/8/10 = 40/20/10/6.7/5/4
+MSPS; 32 MHz is the ADC minimum). The rate test tries it at ratios 8 and 2 after the
+repeat timer and SCCP1. The switch repeats the boot sequence with the ADC core off
+(stream stopped, ADC `ON = 0`, generator `ON = 0`, divider, generator `ON = 1`, `DIVSWEN`,
+`CLKRDY`, ADC `ON = 1`, `ADRDY`), never under a running core or generator. The boot sweep now ends with a decision: the highest rate whose
+`process` run had overrun 0 and missed 0 becomes the measurement rate (`[sweep] using
+period ...`), or `[sweep] NO CLEAN RATE` if none. The overrun interrupt cannot be
+switched off on its own - DS70005591D 13.6.1 says any channel event flag raises the
+channel interrupt and `DMA0CH` has enables only for HALF, DONE and MATCH - so the
+storm at 40 MSPS is avoided by not running there, not by masking it. If the console
+was starved by that storm, `rx` will count at the chosen rate; if it stays 0, the
+bytes never reach RD1.
+
+## 2026-09-23, evening - two defects in the SCCP1 candidate, and Microchip's mechanism added (no board run yet)
+
+Reading Microchip's example for this ADC (github.com/microchip-pic-avr-examples/
+dspic33ak-curiosity-adc-40msps, README only; the code comes through MCC): its "40 MSPS"
+are eight channels of one core at 5 MSPS each, every channel in **Single Sample mode
+with the SCCP1 trigger as first trigger** (MCC: "Single Sample", "SCCP1 Trigger
+Event"; SCCP1 in PWM mode on CLK12 = 160 MHz, PR 31 = 5 MHz), results read by a
+hand-timed assembly loop. CLK6 stays at 320 MHz. Timer pacing works on this silicon,
+but through TRG1 in Single Conversion mode, not through TRG2 inside an Integration
+burst.
+
+Checking our SCCP1 candidate against the datasheet then found two defects, so runs 5
+and 6 never tested SCCP1 at all:
+
+1. `ADC_TRG2_SCCP1` was 32. Tables 16-3 and 16-4 (p1226 f.) list `100010` = 34 as
+   "SCCP1 trigger"; 32 = `100000` is "PTG trigger 12". Fixed to 34.
+2. `CCP1CON2` was 0, i.e. `AUXOUT = 00` = "No signal output on aux_out" (Table 26-10,
+   p1818). The signal the ADC sees as "SCCP1 trigger" is that auxiliary output; in
+   timer mode `AUXOUT = 01` puts the period rollover on it. Fixed.
+
+Added: pacing source 65, `ADC_PACE_SINGLE` - Single Conversion mode, `TRG1SRC = 34`,
+one conversion per SCCP1 period, DMA per conversion, no burst, no `CNT`, no restart in
+the DONE interrupt; `capture_start()` starts the SCCP1, `capture_stop()` stops it.
+Period in ticks of 10 ns as for 34; rate test at 20 and 5 ticks (5 and 20 MSPS); sweep
+80/40/20/10/8/5/4 ticks.
+
+Also: the clock-divider source (64) now takes the ratio in hundredths and uses the
+fractional field (`FRACDIV`, 1/512 steps, Example 12-2's formula). Its sweep has two
+passes: the even ratios 10, 8, 6, 4, 2, 1 (4 ... 40 MSPS), then 9, 7, 5, 3, 2.5, 1.6,
+1.25 (4.4, 5.7, 8, 13.3, 16, 25, 32 MSPS). Ratios below 2 leave INTDIV at 0 with a
+fraction; whether that divides or bypasses is what those rows show. The fastest clean
+row of either pass wins. The AUTO order is now 65, 64, 3, 34, 2: Microchip's mechanism
+first, the divider second, the two burst triggers for the record, back-to-back as the
+reference. Verified in the simulator (boot cycles through all five, ping-pong PASS) and
+in all three builds; not on the board.
+
+Also (24.09., before any board run): after the sweep the boot switches the ADC core
+and CLKGEN6 off (`capture_shutdown()`, `pwr=0` in `[stat]`) and only serves the
+console, with a `[stat]` line every 10 s. That separates the two open questions of
+run 6: if `rx` counts now, the console was starved by the overrun interrupts; if it
+still stays 0 with nothing converting, the bytes never reach RD1. `start` brings
+clock and core back (`clock_adc_on()`, `adc_reinit()`) at the rate the sweep chose.
+
+## 2026-09-24 - two phases at boot, ADC core switch at run time, DAC2 as the signal source (no board run yet)
+
+Wanted by the user: the existing tests run and log their results (phase 1, ADC 3 on the
+mikroBUS input), then a second phase repeats every test with DAC2 driving ADC 5, and the
+ping-pong halves are checked for the DAC signal. Built:
+
+- `adc.c` selects the core at run time: a table row per core (registers, interrupt
+  word and CH0 bit, DMA trigger code), `ADCREG()/ADCBITS()` go through `adc_cur`.
+  `capture_select_core()` stops, takes the core down, switches, re-runs `adc_init()`,
+  re-arms the DMA on the new trigger/result register. `core` command.
+- `dac.c`: DAC2 Triangle Wave mode (Example 18-3), CLKGEN7 from PLL1 (320 MHz), 0x100 ..
+  0xF00, SLPDAT 8 = 44.8 us period = 22.3 kHz (Equation 18-4). DACOUT2 = RA8 = AD5AN3 =
+  DIM P44 = capacitive touch pad 2 on the EV74H48A - the loop closes on the pin, no wire.
+  `dac` command.
+- `dactest.c`: copies each completed half (2 KB) right after completion, judges min/max
+  (150 LSb), reversals vs. period at the measured rate (10 %), jumps > 4 steps + 64.
+  `dactest` command; phase 2 runs 64 halves.
+- Phase 2 ends with `[DONE]` naming both phases and the DAC verdict; everything off
+  afterwards (ADC, CLKGEN6, DAC2, CLKGEN7).
+- `cmd_parser.h`: `CMD_PARSER_MAX_COMMANDS` 16 -> 24 (the one deliberate edit of the
+  vendored parser, see CLAUDE.md).
+
+Open until the board says: whether DACCTRL1/DAC2 come up on CLKGEN7 at 320 MHz (the
+datasheet's design point is 400 MHz), whether the touch pad's network loads the DAC
+buffer, and whether ADC 5 reads the pin the DAC drives (AD5AN3 shares the pad).
+
+Also (24.09.): every test now starts from a defined state, `capture_settle()`: stream
+stopped, the burst in flight finished (or aborted by taking the core down and up if it
+never ends), stale CH0RDY and event flags cleared, the DMA channel taken down
+(`dma0_deinit()`: interrupt masked, channel and module off, flags cleared), `ready_half`
+0; the next `capture_start()` runs `dma0_init()` again from scratch. Every test ends
+with the DMA off and begins with a freshly initialised one (the user's rule). Reason
+(the user's question): a burst always ends at a block boundary, but the
+single-conversion source stops wherever its timer is switched off, and the next test
+would have started in a half-filled half - harmless for a rate, misleading for the DAC
+check. Self-test, rate test, every sweep point and the DAC test call it first.

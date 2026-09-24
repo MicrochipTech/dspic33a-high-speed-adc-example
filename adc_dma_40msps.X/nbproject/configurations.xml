@@ -15,6 +15,8 @@
       <itemPath>../sim.h</itemPath>
       <itemPath>../timebase.h</itemPath>
       <itemPath>../sccp.h</itemPath>
+      <itemPath>../dac.h</itemPath>
+      <itemPath>../dactest.h</itemPath>
       <itemPath>../cmd_parser.h</itemPath>
     </logicalFolder>
     <logicalFolder name="ExternalFiles"
@@ -40,6 +42,8 @@
       <itemPath>../diag.c</itemPath>
       <itemPath>../timebase.c</itemPath>
       <itemPath>../sccp.c</itemPath>
+      <itemPath>../dac.c</itemPath>
+      <itemPath>../dactest.c</itemPath>
       <itemPath>../cli.c</itemPath>
       <itemPath>../cmd_parser.c</itemPath>
     </logicalFolder>

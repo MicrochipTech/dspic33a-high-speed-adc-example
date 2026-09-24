@@ -192,6 +192,114 @@ void __attribute__((interrupt, no_auto_psv)) _CLKFInterrupt(void)
     fail(10u);
 }
 
+/* ------------------------------------------------------------------ *
+ * ADC clock divider at run time (clock.h). INTDIV is bits 30:16 of
+ * CLK6DIV. The generator is taken down and brought up again around the
+ * write (ON, then DIVSWEN until the hardware clears it, then CLKRDY) -
+ * the boot sequence repeated, as datasheet Example 12-2 orders it.
+ * Nothing else in the tree changes: the CPU stays on PLL2, the
+ * peripherals on their own generators. The ADC is off meanwhile
+ * (capture.c): its clock is set before it is enabled, as at boot, not
+ * changed under a running core.
+ * ------------------------------------------------------------------ */
+#define ADC_CLK_HZ        320000000u
+#define DIVSW_WAIT_LIMIT  100000u     /* loop iterations, far above the switch */
+
+bool clock_adc_set_div(uint32_t ratio_h)
+{
+    if ((ratio_h < 100u) || (ratio_h > 1000u)) {
+        return false;
+    }
+    /* ratio/2 = INTDIV + FRACDIV/512, ratio in hundredths: INTDIV is the
+     * integer part of ratio_h/200, FRACDIV the rest scaled to 512. 100
+     * (ratio 1) is INTDIV 0, FRACDIV 0 = straight through. */
+    const uint32_t intdiv  = ratio_h / 200u;
+    const uint32_t fracdiv = ((ratio_h % 200u) * 512u + 100u) / 200u;
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+    (void)intdiv; (void)fracdiv;       /* no clock tree to switch          */
+    return true;
+#else
+    /* The full boot sequence of the generator, not a divider switch
+     * under a running one: generator off, divider written, generator
+     * on, divider switch confirmed, clock ready. Source (NOSC = PLL1)
+     * and backup stay as clock_init() set them. */
+    CLK6CONbits.ON      = 0u;
+    CLK6DIVbits.FRACDIV = fracdiv;
+    CLK6DIVbits.INTDIV  = intdiv;
+    CLK6CONbits.ON      = 1u;
+    CLK6CONbits.DIVSWEN = 1u;
+    uint32_t n = DIVSW_WAIT_LIMIT;
+    while (CLK6CONbits.DIVSWEN && (--n != 0u)) { }
+    if (n == 0u) { return false; }
+    n = DIVSW_WAIT_LIMIT;
+    while (!CLK6CONbits.CLKRDY && (--n != 0u)) { }
+    return n != 0u;
+#endif
+}
+
+void clock_adc_off(void)
+{
+    CLK6CONbits.ON = 0u;
+}
+
+bool clock_adc_on(void)
+{
+    CLK6CONbits.ON = 1u;
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+    return true;
+#else
+    uint32_t n = DIVSW_WAIT_LIMIT;
+    while (!CLK6CONbits.CLKRDY && (--n != 0u)) { }
+    return n != 0u;
+#endif
+}
+
+/* ------------------------------------------------------------------ *
+ * CLKGEN7 for the DAC (clock.h). Same recipe as CLKGEN6 at boot: source
+ * PLL1 Fout, no divider, switch, wait. Table 18-1 (p1385) names Clock
+ * Generator 7 as the DAC clock.
+ * ------------------------------------------------------------------ */
+bool clock_dac_on(void)
+{
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+    return true;
+#else
+    CLK7CON = 0x29500u;             /* NOSC = PLL1 out, ON, backup BFRC  */
+    CLK7DIV = 0u;
+    CLK7CONbits.OSWEN = 1u;
+    uint32_t n = DIVSW_WAIT_LIMIT;
+    while (CLK7CONbits.OSWEN && (--n != 0u)) { }
+    if (n == 0u) { return false; }
+    n = DIVSW_WAIT_LIMIT;
+    while (!CLK7CONbits.CLKRDY && (--n != 0u)) { }
+    return n != 0u;
+#endif
+}
+
+void clock_dac_off(void)
+{
+    CLK7CONbits.ON = 0u;
+}
+
+uint32_t clock_dac_hz(void)
+{
+    return ADC_CLK_HZ;              /* PLL1 Fout, undivided              */
+}
+
+uint32_t clock_adc_div(void)
+{
+    /* Back from the register, in hundredths: 2 * (INTDIV + FRACDIV/512)
+     * * 100 = (INTDIV * 512 + FRACDIV) * 200 / 512. Both fields 0 =
+     * straight through = 100. */
+    const uint32_t raw = CLK6DIVbits.INTDIV * 512u + CLK6DIVbits.FRACDIV;
+    return (raw == 0u) ? 100u : (raw * 200u + 256u) / 512u;
+}
+
+uint32_t clock_adc_hz(void)
+{
+    return (uint32_t)(((uint64_t)ADC_CLK_HZ * 100u) / clock_adc_div());
+}
+
 void clock_regs_dump(void)
 {
     console_puts("[regs] clock\r\n");
@@ -204,6 +312,7 @@ void clock_regs_dump(void)
     console_kv_hex("CLK1DIV", CLK1DIV);
     console_kv_hex("CLK6CON", CLK6CON);
     console_kv_hex("CLK6DIV", CLK6DIV);
+    console_kv_hex("CLK7CON", CLK7CON);     /* DAC clock                 */
     console_kv_hex("IEC0", IEC0);           /* CLKFAIL enable, bit 9     */
     console_kv_hex("IFS0", IFS0);           /* CLKFAIL flag,   bit 9     */
 }

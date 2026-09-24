@@ -35,10 +35,16 @@ void console_trace_kv(const char *key, uint32_t v);
 void console_trace_kv_hex(const char *key, uint32_t v);
 /* One line with every counter, for the periodic trace from main(). */
 void console_status_line(void);
+/* "[half] n=.. min=.. max=.. mean=.. pp=.." of the completed half: the
+ * same figures as the "stats" command, after every [stat] line. */
+void console_half_stats(void);
 /* The rate sweep (the "sweep" command): overrun vs sample rate from
  * 1.25 to 40 MSPS, `halves` buffer halves per point, one line per rate.
  * Blocking, takes a few seconds, restores sample time and run state. */
-void console_sweep(uint32_t halves);
+/* choose: after the table, take the highest rate whose "process" run had
+ * overrun 0 and missed 0 (the boot does); false restores the previous
+ * period (the "sweep" command). */
+void console_sweep(uint32_t halves, bool choose);
 /* UART, its interrupt and its pin routing as "name: 0x........" lines
  * (part of regs_dump()). */
 void console_regs_dump(void);

@@ -137,12 +137,25 @@
 /* What paces the conversions inside a burst (TRG2SRC, DS70005591D Table
  * 16-4 p1227). Three candidates, and the boot can try them in turn:
  *   3   the ADC's repeat timer, period ADC_RPTCNT TAD (12.5 ns)
- *   32  SCCP1 timer period match, period ADC_SCCP_TICKS x 10 ns - what
- *       datasheet Example 16-8 shows with Integration mode
+ *   34  SCCP1 trigger as the burst's second trigger, period
+ *       ADC_SCCP_TICKS x 10 ns (Table 16-4 code 100010; the 32 used
+ *       until 23.09. evening was "PTG trigger 12")
+ *   64  the ADC clock itself: back-to-back conversions, rate set by the
+ *       CLKGEN6 divider (period = divide ratio of the 320 MHz clock in
+ *       hundredths, 100..1000: 100 = 40 MSPS, 200 = 20, 250 = 16, 500 =
+ *       8, 1000 = 4 MSPS; the sweep runs the even ratios first, then a
+ *       second pass with fractional ones). Not a TRG2SRC value; clock.c
+ *       does the switching. The board showed on 23.09.
+ *       (HARDWARE-LOG run 6) that neither 3 nor 32 paces a burst in
+ *       Integration mode, so this is the source that actually works.
  *   2   back-to-back, as fast as the converter goes - no rate control;
  *       what Microchip's 40 MSPS example uses
- *   0   AUTO: try 3, then 32, each with the rate test; the first that
- *       delivers the rate its period says wins; if neither does, 2.
+ *   65  one conversion per SCCP1 trigger: Single Conversion mode, the
+ *       SCCP1 trigger as TRG1SRC, period ADC_SCCP_TICKS x 10 ns. No
+ *       burst, no restart - the mechanism of Microchip's own 40 MSPS
+ *       example (8 channels x 5 MSPS, each one paced exactly so).
+ *   0   AUTO: try 65, 64, 3, 34, each with the rate test; the first that
+ *       delivers the rate its period says wins; if none does, 2.
  *       The log says which ("[pacing] ..."). The default, because the
  *       repeat-timer pairing rests on the datasheet text alone and the
  *       board has the last word.
@@ -153,6 +166,9 @@
 #endif
 #ifndef ADC_SCCP_TICKS
 #define ADC_SCCP_TICKS    5u      /* 5 x 10 ns = 20 MSPS                      */
+#endif
+#ifndef ADC_CLKDIV
+#define ADC_CLKDIV        100u    /* ADC clock divide ratio x 100: 100 = 320 MHz */
 #endif
 
 /* Boot chatter: with 1 every start-up step reports its registers on the
@@ -176,5 +192,33 @@
 #define AUTO_SWEEP        1
 #endif
 #endif
+
+/* Git revision of the working tree, written to version.h by
+ * tools/version.bat (MPLAB X pre-build step, build.bat) or version.sh
+ * (Makefile) before every build. A build that skipped the script says
+ * "unknown" - then the banner's date and time are all there is. */
+#ifdef __has_include
+# if __has_include("version.h")
+#  include "version.h"
+# endif
+#endif
+#ifndef GIT_REV
+#define GIT_REV           "unknown"
+#endif
+#ifndef GIT_BRANCH
+#define GIT_BRANCH        "unknown"
+#endif
+#ifndef GIT_DIRTY
+#define GIT_DIRTY         0
+#endif
+#if GIT_DIRTY
+#define GIT_DIRTY_TAG     "+local changes"
+#else
+#define GIT_DIRTY_TAG     ""
+#endif
+/* One line that identifies the firmware: what was built, when, from
+ * which commit. First line of every log. */
+#define BUILD_ID          "adc_dma_40msps " __DATE__ " " __TIME__ \
+                          " git " GIT_REV GIT_DIRTY_TAG " (" GIT_BRANCH ")"
 
 #endif /* BOARD_H */

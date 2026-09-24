@@ -18,6 +18,35 @@ void clock_init(void);
 bool     clock_cpu_on_pll(void);
 uint32_t clock_cpu_hz(void);
 
+/* ADC clock divider, CLKGEN6. The ratio is given in hundredths: 100 =
+ * 320 MHz straight through (INTDIV 0), 200 = /2, 250 = /2.5, 1000 = /10.
+ * The divided clock is Fin / (2 * (INTDIV + FRACDIV/512)) (DS70005591D
+ * Example 12-2, CLKnDIV description), so INTDIV = ratio/2 and FRACDIV
+ * carries the rest in 1/512 steps; 32 MHz is the ADC's minimum (Table
+ * 16-1, p1223), so 1000 is the largest ratio. Ratios between 100 and 200
+ * mean INTDIV = 0 with a fraction - whether the hardware divides then or
+ * bypasses is for the rate test to say. Repeats the generator's boot
+ * sequence: off, divider, on, DIVSWEN, CLKRDY, every wait bounded. False
+ * for a bad ratio or a wait that ran out; the divider is then whatever
+ * the hardware says (clock_adc_div(), read back in hundredths). The ADC
+ * core must be OFF while this runs: capture.c takes it down, calls this,
+ * brings it back. */
+bool     clock_adc_set_div(uint32_t ratio_h);
+/* CLKGEN6 off (the ADC has no clock then; the core must be off first) and
+ * on again with the divider it had, CLKRDY awaited, bounded. */
+void     clock_adc_off(void);
+bool     clock_adc_on(void);
+uint32_t clock_adc_div(void);
+uint32_t clock_adc_hz(void);
+
+/* CLKGEN7 = DAC clock, from PLL1 (320 MHz; the datasheet's "400 MHz
+ * typical" is the design point, the range is not specified). On with
+ * OSWEN and CLKRDY awaited, bounded; off. clock_dac_hz() is what it runs
+ * at, for the triangle-wave period. */
+bool     clock_dac_on(void);
+void     clock_dac_off(void);
+uint32_t clock_dac_hz(void);
+
 /* The clock registers as "name: 0x........" lines (part of regs_dump()). */
 void clock_regs_dump(void);
 

@@ -23,7 +23,9 @@ before changing anything; the register writes in the code cite the datasheet
 | `capture.c/.h` | the measurement: the DMA buffer (private, with guard words), `dma0_event()`, counters, start/stop/input, self-test, per-half processing | adc, dma, led, console, diag |
 | `led.c/.h` | LED0 | – |
 | `timebase.c/.h` | Timer1 as a stopwatch (12.5 MHz) for measuring the delivered sample rate; not involved in producing it | – |
-| `sccp.c/.h` | SCCP1 as a timer whose period match triggers the ADC (pacing source 32) | – |
+| `sccp.c/.h` | SCCP1 as a timer whose period rollover (AUXOUT = 01) is the ADC's "SCCP1 trigger", code 34: TRG1SRC for pacing 65, TRG2SRC for 34 | – |
+| `dac.c/.h` | DAC2 Triangle Wave mode on DACOUT2 = RA8, CLKGEN7 as its clock; the known signal for phase 2 | – |
+| `dactest.c/.h` | judges captured halves against the DAC settings (min/max, reversals vs period, jumps) | – |
 | `diag.c/.h` | `fail()` codes, trap handler, boot record in persistent RAM, `RCON` report, `regs_dump()` | every module's `*_regs_dump()` |
 | `cli.c`, `console.h` | UART2, the commands, the `sweep` | clock, capture, led, diag |
 | `sim.h` | the hooks the simulator build needs; all empty on silicon | – |
@@ -43,6 +45,18 @@ subdirectory, `-T` at the linker script inside the pack):
 tools\build.bat        hardware  -> build\adc_dma_40msps.elf/.hex   (must be -Wall -Wextra clean)
 tools\build.bat sim    simulator -> build\adc_dma_40msps_sim.elf    (same)
 ```
+
+`version.h` (git-ignored) carries the git revision for the banner. `tools/version.bat`
+writes it before every build: called by `build.bat`, by the `.build-pre` hook in
+`adc_dma_40msps.X/Makefile` (which the IDE runs, so the colleague's build gets it too)
+and, for `tools/Makefile`, by `tools/version.sh`. `board.h` includes it through
+`__has_include` and falls back to "unknown". Two pitfalls, both hit on 23.09.2026 with
+MPLAB X 6.35: do **not** put the step into `configurations.xml`
+(`makeCustomizationPreStep`) - the headless makefile generator then silently writes no
+`Makefile-*.mk` at all; and in the hook use exactly
+`cmd /c "$(subst /,\,$(CURDIR))\..\tools\version.bat"` - the IDE's make reports
+`SHELL=sh.exe` without having one, and neither a quoted relative path nor
+`cd ../tools &&` reached cmd intact (`'..' is not recognized`).
 
 MPLAB X project: configurations `EV74H48A_Curiosity_Platform_MPS512` (the Curiosity
 Platform board, PKOB4, `dma.c`), `EV17P63A_Curiosity_Nano_MPS506` (the Curiosity Nano:
@@ -64,7 +78,7 @@ Simulator test, the acceptance check for anything that touches the buffer logic:
 
 ```
 tools\build.bat sim
-python tools\sim_trap.py                   expect "[simtest] PASS"  (about 4 minutes)
+python tools\sim_trap.py --run-seconds 600 expect "[simtest] PASS"  (6-8 minutes; the boot alone - register snapshot, time base check, four pacing candidates - takes over 4)
 python tools\sim_trap.py --fault 65536     expect "[simtest] FAIL" with one mismatch at index 0
 ```
 
@@ -86,7 +100,10 @@ interrupt aborts with E0110). It proves the ping-pong buffer logic and nothing e
   replies through the parser's sink. A line longer than a buffer is a stack overrun:
   size buffers from the longest possible line and say so in the comment.
 - Commit messages: what changed, why, what was verified. No attribution trailers.
-- Do not edit `cmd_parser.c/.h`.
+- Do not edit `cmd_parser.c/.h` - with one deliberate exception: `CMD_PARSER_MAX_COMMANDS`
+  is 24 instead of upstream's 16 (24.09.2026, the 17th..19th commands `core`, `dac`,
+  `dactest`; 32 bytes of RAM). When updating the parser from github.com/zabooh/cmd_parser,
+  re-apply that one line.
 
 ## Planned, not built
 
@@ -97,21 +114,29 @@ baud limit is proven in the simulator and with the fake target before a board ru
 
 ## Open questions (as of 23.09.2026)
 
-1. The rate is now set by the ADC's repeat timer (`TRG2SRC = 3`, period `RPTCNT` in
-   TAD, DS70005591D Table 16-4 p1227 and 16.4.5 p1322) instead of the back-to-back
-   trigger, after the sweep showed the delivered rate did not follow `SAMC`. Whether
-   the hardware counts `RPTCNT` or `RPTCNT + 1` TAD per period, and whether 40 MSPS
-   (`RPTCNT = 2`) is reached at all, is what the measured column of the next sweep
-   settles. The pacing is chosen at boot (`ADC_PACING` in `board.h`, default AUTO):
-   the rate test runs on the repeat timer, on SCCP1 as trigger (`TRG2SRC = 32`,
-   Example 16-8 p1334, `sccp.c`) and on back-to-back, prints a verdict per source and
-   uses the first paced one that passed. `pacing`/`period` change it at run time. The
-   question the whole project answers: the highest rate at which the sweep's `process`
-   column shows `overrun 0` and `missed 0` - continuous sampling into a ping-pong
-   buffer with the CPU working on the other half.
+1. The ADC's repeat timer (`TRG2SRC = 3`, `RPTCNT`) does not pace a burst in
+   Integration mode on the board: the register holds the written value and the DMA
+   still receives the back-to-back rate (HARDWARE-LOG runs 5 and 6, registers
+   decoded). The SCCP1-as-TRG2 result of those runs is void: code 32 is "PTG trigger
+   12" (SCCP1 is 34, Tables 16-3/16-4) and `AUXOUT` was 00, so SCCP1 emitted no
+   trigger at all; both fixed 23.09. evening. Since then the first candidate is
+   Microchip's own mechanism, one conversion per SCCP1 trigger in Single Conversion
+   mode (`ADC_PACE_SINGLE` = 65, `TRG1SRC = 34`, no burst, no restart), untested on
+   the board. Since 23.09. evening the fourth candidate is the ADC
+   clock divider (`ADC_PACE_CLKDIV` = 64, `clock_adc_set_div()`, CLKGEN6 `INTDIV`,
+   ratios 1/2/4/6/8/10 = 40 … 4 MSPS), tried after the two trigger sources in the
+   AUTO pacing; the boot sweep then steps the divider and **takes the highest rate
+   whose `process` run had overrun 0 and missed 0** for the measurement. Whether the
+   divider switch (`DIVSWEN`) works between bursts and the ADC stays calibrated at a
+   lower clock is what the next log settles (`[ratetest]` for pacing 64, then the
+   sweep rows). `pacing`/`period` change it at run time.
 2. At 40 MSPS about 4 % of the samples are lost as OVERRUN, independent of what the
    CPU does, and every overrun raises the DMA interrupt (~1.6 million per second),
-   which starves the main loop and the console. Whether the DMA bus or something
-   else limits the rate is the measurement the example exists for.
+   which starves the main loop and probably the console (`rx=0` in run 6). The
+   overrun interrupt has no enable bit (DS70005591D 13.6.1: any channel event flag
+   raises the channel interrupt; `DMA0CH` has HALFEN/DONEEN/MATCHEN only), so it
+   cannot be masked on its own - the remedy is to run the measurement at a rate
+   without overruns, which is what the sweep now selects. Whether the DMA bus or
+   something else limits the rate is the measurement the example exists for.
 3. One build (23.09., 11:36) reset right after "measurement running"; the next build
    printed a full sweep. The boot line now reports `RCON`; watch for it.
