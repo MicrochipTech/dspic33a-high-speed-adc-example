@@ -9,7 +9,7 @@
     "size": 2048
   },
   "capture": {
-    "count": 1024,
+    "count": 2048,
     "interval_ms": 500
   },
   "dac": {
@@ -17,13 +17,13 @@
       "high": 3840,
       "low": 256,
       "on": false,
-      "slpdat": 8
+      "slpdat": 35
     },
     "2": {
       "high": 3840,
       "low": 256,
-      "on": false,
-      "slpdat": 8
+      "on": true,
+      "slpdat": 39
     }
   },
   "fake": {

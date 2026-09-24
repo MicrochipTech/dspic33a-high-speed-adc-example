@@ -1544,6 +1544,97 @@ def main_gui(args):
     pll_sel.on_value_change(lambda e: update_rate_label())
     update_rate_label()
 
+    # ---- tooltips ----------------------------------------------------
+    # Every control says what it is and what it changes on the board. The
+    # console command it maps to is named where there is one, so the page
+    # can be read next to cli.c and next to a terminal log.
+    TIPS = [
+        (port_sel, "Which console to talk to. 'fake' is the built-in stand-in: it answers the "
+                   "same commands and makes up a signal, so the page can be tried without a "
+                   "board. A COMx entry is the board's USB-UART at 115200 baud."),
+        (conn_btn, "Open or close that port. Everything else on this page needs it: each control "
+                   "sends a console command and waits for the prompt before the next one."),
+        (conn_chip, "Connection state. It also shows the firmware's build line once connected, "
+                    "which carries the git revision it was built from."),
+        (xfer_chip, "How samples are fetched. 'dump' is the text listing every firmware has; "
+                    "'blk' is the binary block with a CRC, used when the board offers it - "
+                    "same data, far fewer bytes."),
+        (save_btn, "Write every setting on this page back to the settings file named above."),
+        (save_as_btn, "Write the settings to a file you name, without changing which file the "
+                      "page started from."),
+        (load_as_btn, "Read settings from a file you name and put them on the page. Keys the "
+                      "file does not carry keep their built-in default."),
+        (pll_sel, "The sample rate, and the only thing that sets it. The ADC clock is PLL1's "
+                  "1600 MHz divided by the two post-dividers, and back-to-back conversion takes "
+                  "8 ADC clocks. Console: 'pll <p1> <p2>'. The repeat timer, SCCP1 and the "
+                  "CLKGEN6 divider were all measured on the board to leave the rate untouched."),
+        (core_sel, "Which of the five ADC cores converts. They are independent and have different "
+                   "pins, so this also changes which pins the channel list below can reach. "
+                   "Console: 'core <1..5> [pinsel]'."),
+        (input_in, "PINSEL: the analog input of that core. 6 is the internal 15/16 x VDD "
+                   "reference used by the self-test, 7 the internal UREF line. The chip and board "
+                   "tiles show which pin the pair lands on. Console: 'input <0..15>'."),
+        (samc_in, "SAMC: how long the ADC samples before it converts, in steps of 2 x SAMC + 0.5 "
+                  "TAD. It sets the aperture, not the rate - a high source impedance needs more "
+                  "of it. Console: 'samc <0..31>'."),
+        (waveform_sel, "What the stand-in target generates. 'sine' uses the three fields below; "
+                       "'triangle' mirrors a DAC driving the ADC pin and needs a DAC switched on."),
+        (sig_in, "Frequency of the stand-in's sine, in kHz. Only meaningful below half the sample "
+                 "rate - above that the FFT shows the alias, which is itself worth seeing."),
+        (amp_in, "Amplitude of the stand-in's sine in ADC counts, peak. Full scale is 4096 counts, "
+                 "so 2048 is the largest undistorted swing around mid scale."),
+        (noise_in, "Gaussian noise the stand-in adds, standard deviation in counts. This is what "
+                   "sets the SNR the evaluation row reports."),
+        (harm2_in, "Second harmonic the stand-in adds, peak counts. Use it to see what the THD and "
+                   "H2 figures do with a known distortion."),
+        (harm3_in, "Third harmonic the stand-in adds, peak counts."),
+        (apply_btn, "Send the rate, sample time, core and channel above to the board, one command "
+                    "at a time. The line underneath reports each one."),
+        (buf_in, "Total size of the ping-pong buffer in samples; each half is half of it. The DMA "
+                 "fills one half while the CPU works on the other. Console: 'buf <n>'."),
+        (buf_btn, "Send the buffer size. The firmware sets the ADC burst length and the DMA block "
+                  "to match at the next start."),
+        (count_sel, "How many samples one capture fetches. At most one buffer half over 'dump', "
+                    "a whole buffer over 'blk'."),
+        (interval_in, "How often 'live' repeats the capture cycle, in milliseconds."),
+        (single_btn, "One cycle: start, let it run briefly, stop, fetch the samples, plot and "
+                     "transform them."),
+        (live_btn, "Repeat that cycle at the interval above until stopped."),
+    ]
+    for _u, _c in sorted(dac_ui.items()):
+        _pin = "RA1" if _u == 1 else "RA8"
+        TIPS += [
+            (_c["on"], f"Switch DAC{_u} on or off. It drives pin {_pin} with a triangle in "
+                       "hardware, no CPU involved, and that pin is also an ADC input of core 5 - "
+                       "so the ADC can read it back with no wire. Console: "
+                       f"'dac {_u} on|off ...'."),
+            (_c["low"], "Lower end of the triangle, as a 12-bit DAC code. 0 is ground, 4095 is "
+                        "VDD, and the DAC's own limits keep the usable range a little inside that."),
+            (_c["high"], "Upper end of the triangle, as a 12-bit DAC code. Must be above the lower "
+                         "end. The difference is the swing the ADC should see."),
+            (_c["slp"], "SLPDAT: how many DAC codes the slope generator steps per DAC clock. "
+                        "Larger is faster, so the period shown below shrinks."),
+            (_c["btn"], f"Send these settings to DAC{_u}. The line underneath is the board's own "
+                        "answer, including the period it computed."),
+        ]
+    for _sel in board_ctrls:
+        TIPS.append((_sel, "Which evaluation kit is in front of you. It picks the device and so "
+                           "the package drawn above, and it decides where a channel comes out: "
+                           "the EV74H48A has mikroBUS and XPLAINED PRO headers, the Nano two rows "
+                           "of edge pads."))
+    for _sel in core_ctrls:
+        TIPS.append((_sel, "ADC core, the same selection as in the sidebar. Changing it here "
+                           "changes it everywhere and redraws both tiles."))
+    for _sel in chan_ctrls:
+        TIPS.append((_sel, "Analog input of that core, with the pin it sits on. Internal inputs "
+                           "are marked as such: they have no pin and cannot be wired to."))
+    for _sel in dac_ctrls:
+        TIPS.append((_sel, "Which DAC to show as the signal source. The drawings then light its "
+                           "pin, and say whether it reaches the selected channel by itself or "
+                           "what to wire to what."))
+    for _el, _text in TIPS:
+        _el.tooltip(_text)
+
     # ---- settings: the whole page in one dict, and back ----
     def settings_collect():
         return {
