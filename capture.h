@@ -150,6 +150,16 @@ uint32_t capture_measure_rate(uint32_t halves, uint32_t *ksps);
  * the measurement keeps running while a long console reply drains. */
 bool capture_service(void);
 
+/* Fill the buffer exactly once and stop, the stop decided in the DMA
+ * interrupt. Afterwards the whole buffer - 2 * capture_half_len()
+ * samples from capture_buffer() - is one contiguous window that nothing
+ * is writing any more. This is the only way to look at the data at a
+ * rate where the main loop runs tens of milliseconds behind the DMA.
+ * Returns 0, or 6/8 from the wait. */
+uint32_t capture_oneshot(void);
+/* The whole buffer. Only meaningful with the stream stopped. */
+const volatile uint16_t *capture_buffer(void);
+
 /* Pointer to the half that completed last. */
 const volatile uint16_t *capture_completed_half(void);
 

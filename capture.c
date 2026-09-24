@@ -174,6 +174,8 @@ static volatile bool     overrun_abort  = false;
  * very first overrun of every later test tripped it again and every
  * test reported "DMA channel disabled" (run 9). */
 static volatile uint32_t overrun_run    = 0;
+/* One burst and then stop, decided in the ISR (capture_oneshot). */
+static volatile bool     oneshot        = false;
 
 /* capture.h: the defined idle state every test starts from. */
 bool capture_settle(void)
@@ -341,7 +343,17 @@ void dma0_event(uint32_t st)
             adc_set_input(pinsel_next, samc_next);
             switch_pending = false;
         }
-        if (run_enabled) {
+        if (oneshot) {
+            /* One buffer and no more, decided here rather than by the
+             * main loop: at the full rate the main loop can be tens of
+             * milliseconds behind, and by the time it asked for a stop
+             * the buffer would have been overwritten a thousand times
+             * over. Stopping from the ISR leaves exactly the 2 * half_len
+             * samples of this burst standing, contiguous and unmolested. */
+            oneshot      = false;
+            run_enabled  = false;
+            burst_active = false;
+        } else if (run_enabled) {
             start_burst();            /* next 2 * half_len samples      */
         } else {
             burst_active = false;
@@ -721,6 +733,30 @@ uint32_t capture_clkoff_probe(uint32_t halves)
     console_kv("[clkoff]   ADC core reported ready with the generator off", ready_off ? 1u : 0u);
     return rc;
 #endif
+}
+
+uint32_t capture_oneshot(void)
+{
+    /* Fill the buffer exactly once and stop. The ADC burst is CNT =
+     * 2 * half_len conversions, so one burst is one full buffer: HALF at
+     * the middle, DONE at the end, and the ISR does not restart it. The
+     * buffer then holds one contiguous window that nothing is writing
+     * any more, which is the only way to look at the data at a rate
+     * where the main loop cannot keep up (run 11). */
+    (void)capture_settle();
+    counters_clear();
+    const uint32_t target = blocks_done + 2u;   /* HALF and DONE        */
+    oneshot = true;
+    capture_start();
+    const uint32_t rc = wait_for_blocks(target);
+    oneshot = false;
+    capture_stop();
+    return rc;
+}
+
+const volatile uint16_t *capture_buffer(void)
+{
+    return &buf[0];
 }
 
 uint32_t capture_measure_rate(uint32_t halves, uint32_t *ksps)

@@ -777,3 +777,60 @@ Worth taking to the product line either way: an ADC that ignores both its clock 
 divider and its PLL's output dividers, converts with the generator switched off, and delivers
 above its specified maximum is a question for the factory, and the register evidence for it
 is now complete.
+
+## 2026-09-24, run 11 - master 928867d, build 13:03:59 - THE ADC REALLY CONVERTS
+
+`dac on`, then `test dac`. The DAC2 triangle routed to the internal UREF line and sampled as
+AN7 on core 3 - no pin, no wire, no core switch.
+
+**The question this project has been circling since run 4 is answered: the conversions are
+real.**
+
+```
+min 221   max 3864   peak-to-peak 3643
+```
+
+The DAC was set to 256..3840. The buffer holds the full DAC range, so the ADC converts a
+real signal and the DMA moves real results. The stale-register hypothesis raised after run
+10 is dead, and the internal UREF path works.
+
+**What the run could not answer is order and completeness, and the reason is in the numbers:**
+
+```
+halves missed between copies (gaps): 8552   for eight copies
+slope reversals: 430
+largest step between two samples: 3126
+overrun during the capture: 342508
+```
+
+Between two memcpys about a thousand halves completed. At the full rate the main loop runs
+tens of milliseconds behind the DMA, so the half being copied had been overwritten a thousand
+times over: the copy is a mixture of old and new data. That is visible in the raw dump, which
+alternates between two plateaus of about 3100 and 1470 with the step always a few samples
+into the half - the seam between what the DMA had already rewritten and what was left from
+before. Not signal, and not a converter fault: a torn read.
+
+`ksps measured` printed 0, which only says the window was far longer than the sample count
+suggests - the same starvation seen from the other side.
+
+**Changed in reaction (no board run yet): one buffer, and the DMA interrupt stops the stream.**
+
+`capture_oneshot()` fills the buffer exactly once and the ISR ends the run at DONE instead of
+restarting the burst. The main loop being slow no longer matters - it only has to notice,
+eventually, that the burst is over. Afterwards the whole buffer is one contiguous window that
+nothing is writing any more, so there are no gaps to count and no torn halves by construction:
+the ADC burst is CNT = 2 * half_len, which is exactly one buffer, with HALF at the middle and
+DONE at the end.
+
+2048 samples are about 48 us at the rates seen, and one slope of the triangle lasts 220 us at
+the boot clock, so the window covers roughly a fifth of a slope: a monotonic ramp of some 700
+counts, with at most one turning point if it straddles a peak. `dac on <slpdat>` with a
+smaller slpdat makes the triangle faster and the ramp steeper - slpdat 2 gives about a quarter
+of a period per buffer.
+
+The verdict is now three things a torn window cannot fake: peak-to-peak (a frozen register
+gives 0), at most one slope reversal, and no step larger than 200 counts between neighbouring
+samples - the triangle moves well under one count per sample at these rates, so a jump of
+hundreds is a missing sample or a seam. The store shrank from 16 KB to 4 KB with it.
+
+Both builds `-Wall -Wextra` clean.
