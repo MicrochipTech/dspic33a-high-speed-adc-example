@@ -24,7 +24,7 @@ before changing anything; the register writes in the code cite the datasheet
 | `led.c/.h` | LED0 | – |
 | `timebase.c/.h` | Timer1 as a stopwatch (12.5 MHz) for measuring the delivered sample rate; not involved in producing it | – |
 | `sccp.c/.h` | SCCP1 as a timer whose period rollover (AUXOUT = 01) is the ADC's "SCCP1 trigger", code 34: TRG1SRC for pacing 65, TRG2SRC for 34 | – |
-| `dac.c/.h` | DAC2 Triangle Wave mode on DACOUT2 = RA8, CLKGEN7 as its clock; the known signal for phase 2 | – |
+| `dac.c/.h` | DAC1 and DAC2 in Triangle Wave mode (DACOUT1 = RA1, DACOUT2 = RA8), one unit table, shared CLKGEN7; the known signal for phase 2 | – |
 | `dactest.c/.h` | judges captured halves against the DAC settings (min/max, reversals vs period, jumps) | – |
 | `diag.c/.h` | `fail()` codes, trap handler, boot record in persistent RAM, `RCON` report, `regs_dump()` | every module's `*_regs_dump()` |
 | `cli.c`, `console.h` | UART2, the commands, the `sweep` | clock, capture, led, diag |

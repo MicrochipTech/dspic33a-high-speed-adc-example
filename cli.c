@@ -527,22 +527,38 @@ CMD_DEFINE(core, "core", cmd_core_fn, "core <1..5> [pinsel] - switch the ADC cor
 
 static void cmd_dac_fn(int argc, char **argv)
 {
-    if ((argc == 2) && (argv[1][0] == 'o') && (argv[1][1] == 'f')) {
-        dac2_off();
-        put_line("dac: off");
+    uint32_t unit, low = 0x100u, high = 0xF00u, slp = 8u;
+    if ((argc < 3) || !arg_u32(argv[1], 1u, DAC_UNITS, &unit)) {
+        usage("dac <1|2> <on|off> [low] [high] [slpdat]  (triangle on DACOUT1 = RA1 or DACOUT2 = RA8)");
         return;
     }
-    uint32_t slp = 8u;
-    if ((argc < 2) || (argc > 3) || (argv[1][0] != 'o') || (argv[1][1] != 'n') ||
-        ((argc == 3) && !arg_u32(argv[2], 1u, 255u, &slp))) {
-        usage("dac <on [slpdat]|off>  (DAC2 triangle 0x100..0xF00 on RA8; slpdat = counts per DAC clock, 8 = 22 kHz)");
+    if ((argv[2][0] == 'o') && (argv[2][1] == 'f')) {
+        dac_off((uint8_t)unit);
+        put_kv("dac", unit);
+        put_line("off");
         return;
     }
-    if (!dac2_triangle_start(0x100u, 0xF00u, (uint16_t)slp)) { put_line("dac: CLKGEN7 did not come up"); cmd_parser_fail(); return; }
-    put_kv("dac slpdat", slp);
-    put_kv("dac period ns", dac2_period_ns());
+    if ((argv[2][0] != 'o') || (argv[2][1] != 'n') || (argc > 6) ||
+        ((argc >= 4) && !arg_u32(argv[3], 0u, 4095u, &low)) ||
+        ((argc >= 5) && !arg_u32(argv[4], 0u, 4095u, &high)) ||
+        ((argc == 6) && !arg_u32(argv[5], 1u, 255u, &slp)) ||
+        (high <= low)) {
+        usage("dac <1|2> <on|off> [low] [high] [slpdat]  (0..4095, high > low, slpdat 1..255)");
+        return;
+    }
+    if (!dac_triangle_start((uint8_t)unit, (uint16_t)low, (uint16_t)high, (uint16_t)slp)) {
+        put_line("dac: CLKGEN7 did not come up");
+        cmd_parser_fail();
+        return;
+    }
+    put_kv("dac", unit);
+    put_line(dac_pin_name((uint8_t)unit));
+    put_kv("low", low);
+    put_kv("high", high);
+    put_kv("slpdat", slp);
+    put_kv("period ns", dac_period_ns((uint8_t)unit));
 }
-CMD_DEFINE(dac, "dac", cmd_dac_fn, "dac <on [slpdat]|off> - DAC2 triangle on RA8");
+CMD_DEFINE(dac, "dac", cmd_dac_fn, "dac <1|2> <on|off> [low] [high] [slpdat] - triangle on DACOUT1/2");
 
 static void cmd_dactest_fn(int argc, char **argv)
 {
@@ -553,7 +569,7 @@ static void cmd_dactest_fn(int argc, char **argv)
     }
     if (dactest_run(halves) != 0u) { cmd_parser_fail(); }
 }
-CMD_DEFINE(dactest, "dactest", cmd_dactest_fn, "dactest [halves] - judge the DAC2 triangle through the chain");
+CMD_DEFINE(dactest, "dactest", cmd_dactest_fn, "dactest [halves] - judge the running DAC's triangle through the chain");
 
 static void cmd_selftest_fn(int argc, char **argv)
 {

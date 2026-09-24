@@ -36,13 +36,14 @@ static uint16_t copy[SAMPLES_PER_HALF];
 
 uint32_t dactest_run(uint32_t halves)
 {
-    if (!dac2_running()) {
-        console_puts("[dactest] DAC2 is off - nothing to test\r\n");
+    const uint8_t unit = dac_active();
+    if (unit == 0u) {
+        console_puts("[dactest] no DAC is running - nothing to test\r\n");
         return 1u;
     }
-    const uint32_t low       = dac2_low();
-    const uint32_t high      = dac2_high();
-    const uint32_t period_ns = dac2_period_ns();
+    const uint32_t low       = dac_low(unit);
+    const uint32_t high      = dac_high(unit);
+    const uint32_t period_ns = dac_period_ns(unit);
     const uint32_t f_exp_hz  = (period_ns != 0u) ? (uint32_t)(1000000000ull / period_ns) : 0u;
     uint32_t ksps_nom = capture_nominal_ksps(capture_period());
     if (ksps_nom == 0u) { ksps_nom = 40000u; }        /* back-to-back    */
@@ -51,7 +52,11 @@ uint32_t dactest_run(uint32_t halves)
     if (step_exp == 0u) { step_exp = 1u; }
     const uint32_t jump_limit = 4u * step_exp + 64u;
 
-    console_puts("[dactest] DAC2 triangle (RA8) through the ADC/DMA chain\r\n");
+    console_puts("[dactest] DAC triangle through the ADC/DMA chain\r\n");
+    console_kv("[dactest]   DAC unit", unit);
+    console_puts("[dactest]   DAC pin: ");
+    console_puts(dac_pin_name(unit));
+    console_puts("\r\n");
     console_kv("[dactest]   ADC core", adc_core());
     console_kv("[dactest]   halves", halves);
     console_kv("[dactest]   expected min (DACLOW)", low);

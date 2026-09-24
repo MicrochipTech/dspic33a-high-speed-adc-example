@@ -65,6 +65,9 @@
 #define DACTEST_LOW           0x100u
 #define DACTEST_HIGH          0xF00u
 #define DACTEST_SLPDAT        8u
+/* DAC2 (RA8) is AD5AN3, so phase 2 closes the loop on the pin with no
+ * wire. DAC1 (RA1) is AD5AN1 and would do the same on that channel. */
+#define DACTEST_UNIT          2u
 #define DACTEST_HALVES        64u
 
 /* The automatic tests on the active ADC core: register snapshot, self-test
@@ -189,12 +192,16 @@ int main(void)
     /* ---- phase 2: ADC core 5 measuring DAC2 on the same pin (RA8) ---- */
     console_puts("[PHASE 2] ADC core 5, input AD5AN3 = RA8 = DACOUT2: DAC2 triangle on the pin, no wire\r\n");
     (void)capture_select_core(5u, 3u, ADC_SAMC);
-    if (dac2_triangle_start(DACTEST_LOW, DACTEST_HIGH, DACTEST_SLPDAT)) {
-        console_kv("[dac] DAC2 triangle on RA8, DACLOW", dac2_low());
-        console_kv("[dac]   DACDAT", dac2_high());
-        console_kv("[dac]   SLPDAT (counts per DAC clock)", dac2_slpdat());
+    if (dac_triangle_start(DACTEST_UNIT, DACTEST_LOW, DACTEST_HIGH, DACTEST_SLPDAT)) {
+        console_kv("[dac] triangle on DAC unit", DACTEST_UNIT);
+        console_puts("[dac]   pin: ");
+        console_puts(dac_pin_name(DACTEST_UNIT));
+        console_puts("\r\n");
+        console_kv("[dac]   DACLOW", dac_low(DACTEST_UNIT));
+        console_kv("[dac]   DACDAT", dac_high(DACTEST_UNIT));
+        console_kv("[dac]   SLPDAT (counts per DAC clock)", dac_slpdat(DACTEST_UNIT));
         console_kv("[dac]   DAC clock Hz", clock_dac_hz());
-        console_kv("[dac]   period ns", dac2_period_ns());
+        console_kv("[dac]   period ns", dac_period_ns(DACTEST_UNIT));
     } else {
         console_puts("[dac] CLKGEN7 did not come up - DAC2 is off, the DAC test will fail\r\n");
     }
@@ -202,7 +209,7 @@ int main(void)
     const uint32_t dac_rc = dactest_run(DACTEST_HALVES);
 
     /* ---- all done: everything off, the console has the CPU ---------- */
-    dac2_off();
+    dac_all_off();
     capture_shutdown();
     counters_clear();
     /* Unmistakable end marker: the reader of a log must see at a glance

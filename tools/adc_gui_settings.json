@@ -1,0 +1,49 @@
+{
+  "adc": {
+    "core": 3,
+    "pinsel": 5,
+    "samc": 0
+  },
+  "board": "EV74H48A",
+  "buffer": {
+    "size": 2048
+  },
+  "capture": {
+    "count": 1024,
+    "interval_ms": 500
+  },
+  "clock": {
+    "fracdiv": 0,
+    "intdiv": 0
+  },
+  "dac": {
+    "1": {
+      "high": 3840,
+      "low": 256,
+      "on": false,
+      "slpdat": 8
+    },
+    "2": {
+      "high": 3840,
+      "low": 256,
+      "on": false,
+      "slpdat": 8
+    }
+  },
+  "fake": {
+    "amplitude": 1500.0,
+    "harmonic2": 150.0,
+    "harmonic3": 0.0,
+    "noise": 6.0,
+    "signal_khz": 100.0,
+    "waveform": "sine"
+  },
+  "pacing": {
+    "period": 4,
+    "source": 3
+  },
+  "version": 1,
+  "view": {
+    "dac_source": 0
+  }
+}
