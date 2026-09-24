@@ -5,6 +5,7 @@
 #define CONSOLE_H
 
 #include <stdint.h>
+#include <stdbool.h>   /* console_sweep() takes a bool */
 
 /* UART2 up on the FRC, before the clocks are touched. From here on
  * console_puts() works. */

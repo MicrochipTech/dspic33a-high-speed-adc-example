@@ -205,36 +205,68 @@ void __attribute__((interrupt, no_auto_psv)) _CLKFInterrupt(void)
 #define ADC_CLK_HZ        320000000u
 #define DIVSW_WAIT_LIMIT  100000u     /* loop iterations, far above the switch */
 
-bool clock_adc_set_div(uint32_t ratio_h)
+uint32_t clock_adc_set_div(uint32_t ratio_h)
 {
     if ((ratio_h < 100u) || (ratio_h > 1000u)) {
-        return false;
+        return CLKDIV_RANGE;
     }
     /* ratio/2 = INTDIV + FRACDIV/512, ratio in hundredths: INTDIV is the
-     * integer part of ratio_h/200, FRACDIV the rest scaled to 512. 100
-     * (ratio 1) is INTDIV 0, FRACDIV 0 = straight through. */
+     * integer part of ratio_h/200, FRACDIV the rest scaled to 512, half
+     * rounded. Ratio 1 is therefore INTDIV 0, FRACDIV 256 - not both
+     * fields 0, as the comment here claimed until 24.09.2026; both 0 is
+     * what the hardware comes out of reset with and what clock_adc_div()
+     * reports back as ratio 1 as well. Worked examples: 1000 -> 5/0,
+     * 900 -> 4/256, 500 -> 2/256, 450 -> 2/128, 125 -> 0/320. */
     const uint32_t intdiv  = ratio_h / 200u;
     const uint32_t fracdiv = ((ratio_h % 200u) * 512u + 100u) / 200u;
 #ifdef __MPLAB_DEBUGGER_SIMULATOR
     (void)intdiv; (void)fracdiv;       /* no clock tree to switch          */
-    return true;
+    return CLKDIV_OK;
 #else
     /* The full boot sequence of the generator, not a divider switch
      * under a running one: generator off, divider written, generator
      * on, divider switch confirmed, clock ready. Source (NOSC = PLL1)
-     * and backup stay as clock_init() set them. */
+     * and backup stay as clock_init() set them. The caller has taken the
+     * DMA channel and the ADC core down before this - capture.c does it
+     * in that order and brings them back the same way it does at boot.
+     *
+     * Every step is checked, because run 7 (24.09.2026) could not tell a
+     * divider that never switched from one that switched without
+     * changing the rate: the fields are read back before the switch and
+     * again after it, and the two waits report themselves. */
     CLK6CONbits.ON      = 0u;
     CLK6DIVbits.FRACDIV = fracdiv;
     CLK6DIVbits.INTDIV  = intdiv;
+    if ((CLK6DIVbits.INTDIV != intdiv) || (CLK6DIVbits.FRACDIV != fracdiv)) {
+        return CLKDIV_NOT_WRITTEN;     /* the write did not reach CLK6DIV */
+    }
     CLK6CONbits.ON      = 1u;
     CLK6CONbits.DIVSWEN = 1u;
     uint32_t n = DIVSW_WAIT_LIMIT;
     while (CLK6CONbits.DIVSWEN && (--n != 0u)) { }
-    if (n == 0u) { return false; }
+    if (n == 0u) { return CLKDIV_DIVSWEN; }   /* switch never completed  */
     n = DIVSW_WAIT_LIMIT;
     while (!CLK6CONbits.CLKRDY && (--n != 0u)) { }
-    return n != 0u;
+    if (n == 0u) { return CLKDIV_CLKRDY; }    /* generator not ready     */
+    if ((CLK6DIVbits.INTDIV != intdiv) || (CLK6DIVbits.FRACDIV != fracdiv)) {
+        return CLKDIV_LOST;            /* the switch discarded the value  */
+    }
+    return CLKDIV_OK;
 #endif
+}
+
+const char *clock_adc_div_error(uint32_t rc)
+{
+    switch (rc) {
+    case CLKDIV_OK:          return "the configuration arrived";
+    case CLKDIV_RANGE:       return "ratio outside 100..1000";
+    case CLKDIV_NOT_WRITTEN: return "CLK6DIV did not take the value";
+    case CLKDIV_DIVSWEN:     return "DIVSWEN never cleared - no divider switch";
+    case CLKDIV_CLKRDY:      return "CLKRDY never came - generator not running";
+    case CLKDIV_LOST:        return "CLK6DIV lost the value over the switch";
+    case CLKDIV_ADC:         return "ADC core did not report ADRDY after the switch";
+    default:                 return "unknown";
+    }
 }
 
 void clock_adc_off(void)

@@ -45,7 +45,6 @@
 #include "diag.h"
 #include "sim.h"
 #include "timebase.h"
-#include "sccp.h"
 #include "clock.h"
 
 /* Self-test input and window. ADxAN6 is the internal 15/16 * VDD
@@ -140,14 +139,11 @@ static volatile uint32_t half_len    = SAMPLES_PER_HALF_MAX;   /* in use  */
 static volatile bool    switch_pending = false;
 static volatile uint8_t pinsel_next    = ADC_PINSEL;
 static volatile uint8_t samc_next      = ADC_SAMC;
-static volatile bool     period_pending = false;
-static volatile uint32_t period_next    = ADC_RPTCNT;
-static volatile bool     pacing_pending = false;
-static volatile uint8_t  pacing_next    = ADC_TRG2_REPEAT;
-static uint32_t          sccp_ticks     = ADC_SCCP_TICKS;   /* SCCP1 period */
-/* The active pacing. TRG2SRC alone cannot tell the clock-divider source
- * from plain back-to-back: both run the converter back-to-back. */
-static volatile uint8_t  pacing_cur     = ADC_TRG2_REPEAT;   /* adc_init() */
+/* The ADC clock divide ratio in hundredths, as last set successfully.
+ * The hardware's own answer is clock_adc_div(); this is what was asked
+ * for, so that a switch that did not arrive can be told from one that
+ * did (capture_clkdiv_wanted vs capture_clkdiv). */
+static uint32_t          clkdiv_cur     = ADC_CLKDIV;
 
 /* capture.h: the defined idle state every test starts from. */
 bool capture_settle(void)
@@ -171,47 +167,13 @@ bool capture_settle(void)
 }
 static bool quiesce(void) { return capture_settle(); }
 
-/* The ADC clock is not changed under a running core: adc_deinit(),
- * CLKGEN6 divider switched, adc_reinit() and ADRDY back - the same
- * order as at boot. Idle only (quiesce() first). False if the switch or
- * the core did not come back; the log says so through the rate test or
- * the sweep row. */
-static bool adc_clock_switch(uint32_t ratio)
-{
-    adc_deinit();
-    const bool switched = clock_adc_set_div(ratio);
-    const bool ready    = adc_reinit();
-    return switched && ready;
-}
-
-/* Write the period for the active source; the caller guarantees the
- * channel is idle (or that this is the DONE moment). The clock-divider
- * source never gets here from the DONE moment: its changes go through
- * quiesce() and happen at once, because they switch the ADC off. */
-static void apply_period(uint32_t period)
-{
-    switch (pacing_cur) {
-    case ADC_TRG2_REPEAT:  adc_set_period((uint8_t)period); break;
-    case ADC_TRG2_SCCP1:   sccp_ticks = period; sccp1_start(period); break;
-    case ADC_PACE_SINGLE:  sccp_ticks = period;
-                           if (run_enabled) { sccp1_start(period); }
-                           break;
-    case ADC_PACE_CLKDIV:  (void)adc_clock_switch(period); break;
-    default:               break;                /* B2B: nothing to set */
-    }
-}
-
 static uint32_t         seen_blocks    = 0;
 
-/* A burst is in flight from here until the DMA DONE interrupt. For the
- * single-conversion source "burst" means the SCCP1 trigger is running:
- * conversions come one per trigger until capture_stop() stops it. */
+/* A burst is in flight from here until the DMA DONE interrupt. */
 static void start_burst(void)
 {
     burst_active = true;
-    if (pacing_cur == ADC_PACE_SINGLE) {
-        sccp1_start(sccp_ticks);
-    } else {
+    {
         adc_start_burst();
     }
 }
@@ -337,21 +299,7 @@ void dma0_event(uint32_t st)
             adc_set_input(pinsel_next, samc_next);
             switch_pending = false;
         }
-        if (pacing_pending) {
-            /* Never involves the clock-divider or single-conversion
-             * source: those go through quiesce() in capture_set_pacing(). */
-            adc_set_trg2((pacing_next == ADC_PACE_CLKDIV) ? ADC_TRG2_B2B : pacing_next);
-            pacing_cur     = pacing_next;
-            pacing_pending = false;
-        }
-        if (period_pending) {
-            apply_period(period_next);
-            period_pending = false;
-        }
-        if (pacing_cur == ADC_PACE_SINGLE) {
-            /* Nothing to restart: the trigger keeps running and the DMA
-             * has reloaded its block. capture_stop() ends it. */
-        } else if (run_enabled) {
+        if (run_enabled) {
             start_burst();            /* next 2 * half_len samples      */
         } else {
             burst_active = false;
@@ -366,7 +314,7 @@ void capture_start(void)
 {
     if (!powered) {
         /* After capture_shutdown(): clock first, then the core - the boot
-         * order. Registers kept their values, so pacing and period are
+         * order. Registers kept their values, so the divide ratio is
          * what they were. A wait that runs out is reported and the
          * start refused; the counters show nothing moving. */
         const bool clk = clock_adc_on();
@@ -404,20 +352,14 @@ bool capture_select_core(uint8_t core, uint8_t pinsel, uint8_t samc)
 {
     if ((core < 1u) || (core > 5u)) { return false; }
     (void)quiesce();
-    sccp1_stop();
     if (powered) { adc_deinit(); }
     else         { (void)clock_adc_on(); }   /* the new core needs its clock */
-    if (clock_adc_div() != 100u) { (void)clock_adc_set_div(100u); }
     (void)adc_select(core);
-    adc_init(pinsel, samc, ADC_RPTCNT);      /* core on, ADRDY, or fail(5) */
+    adc_init(pinsel, samc);                  /* core on, ADRDY, or fail(5) */
     capture_init();                          /* DMA on this core's trigger */
-    pacing_cur     = ADC_TRG2_REPEAT;
-    pacing_pending = false;
-    period_pending = false;
     switch_pending = false;
     pinsel_next    = pinsel;
     samc_next      = samc;
-    sccp_ticks     = ADC_SCCP_TICKS;
     powered        = true;
     burst_active   = false;
     counters_clear();
@@ -427,10 +369,6 @@ bool capture_select_core(uint8_t core, uint8_t pinsel, uint8_t samc)
 void capture_stop(void)
 {
     run_enabled = false;
-    if (pacing_cur == ADC_PACE_SINGLE) {
-        sccp1_stop();                 /* no trigger, no conversion      */
-        burst_active = false;
-    }
 }
 
 bool capture_running(void)
@@ -463,153 +401,76 @@ uint8_t capture_pinsel(void) { return adc_pinsel(); }
 uint8_t capture_samc(void)   { return adc_samc(); }
 
 /* ------------------------------------------------------------------ *
- * Pacing (capture.h): which trigger sets the rate, and its period
+ * The ADC clock - the only rate control there is (capture.h)
+ *
+ * The conversions run back-to-back, so the sample rate is the ADC clock
+ * divided by the eight clocks one conversion takes: 320 MHz undivided =
+ * 40 MSPS. CLKGEN6's divider is therefore the rate knob, and the ladder
+ * below is walked from the slowest rate to the fastest on purpose. The
+ * slowest point is the one the DMA should manage comfortably, so the
+ * first row of a sweep is the row most likely to pass - and a failure
+ * there means the chain is broken, not the rate.
+ *
+ * Integer and fractional ratios alternate deliberately. 2.5 sits exactly
+ * between 2 and 3, and 4.5 between 4 and 5: if those rows land halfway
+ * between their neighbours, FRACDIV works; if they snap to a neighbour,
+ * the fractional field is ignored and only INTDIV counts. Nothing else
+ * in the log answers that question.
+ *
+ * 500 = 8 MSPS is the rate the customer's application needs; it is in
+ * the ladder for that reason and for no other.
  * ------------------------------------------------------------------ */
-static const uint32_t sweep_repeat[] = { 63u, 32u, 16u, 8u, 4u, 3u, 2u };  /* 1.27..40 MSPS */
-static const uint32_t sweep_sccp[]   = { 80u, 40u, 20u, 10u, 8u, 5u, 4u }; /* 1.25..25 MSPS */
-static const uint32_t sweep_b2b[]    = { 0u };                             /* one row       */
-/* ADC clock divider, ratio in hundredths. First pass the even ratios,
- * INTDIV alone: 10, 8, 6, 4, 2, 1 = 4, 5, 6.7, 10, 20, 40 MSPS (32 MHz is
- * the ADC clock minimum, so 10 is the largest). Second pass with the
- * fractional part: 9, 7, 5, 3, 2.5, 1.6, 1.25 = 4.4, 5.7, 8, 13.3, 16,
- * 25, 32 MSPS - 8 MSPS is the customer's floor, 25 and 32 are the rates
- * the even ratios cannot reach; below 200 INTDIV is 0 and the fraction
- * alone has to divide, which the measured column will confirm or not. */
-static const uint32_t sweep_clkdiv[]  = { 1000u, 800u, 600u, 400u, 200u, 100u };
-static const uint32_t sweep_clkdiv2[] = { 900u, 700u, 500u, 300u, 250u, 160u, 125u };
+static const uint32_t sweep_ratios[] = {
+    1000u,  /* /10   32.0 MHz   4.00 MSPS  slowest the ADC may run       */
+     900u,  /* /9    35.6 MHz   4.44 MSPS                                */
+     800u,  /* /8    40.0 MHz   5.00 MSPS                                */
+     700u,  /* /7    45.7 MHz   5.71 MSPS                                */
+     600u,  /* /6    53.3 MHz   6.67 MSPS                                */
+     500u,  /* /5    64.0 MHz   8.00 MSPS  the customer's floor          */
+     450u,  /* /4.5  71.1 MHz   8.89 MSPS  fractional, between 4 and 5   */
+     400u,  /* /4    80.0 MHz  10.00 MSPS                                */
+     350u,  /* /3.5  91.4 MHz  11.43 MSPS  fractional                    */
+     300u,  /* /3   106.7 MHz  13.33 MSPS                                */
+     250u,  /* /2.5 128.0 MHz  16.00 MSPS  fractional, between 2 and 3   */
+     200u,  /* /2   160.0 MHz  20.00 MSPS                                */
+     150u,  /* /1.5 213.3 MHz  26.67 MSPS  INTDIV 0, fraction alone      */
+     125u,  /* /1.25 256.0 MHz 32.00 MSPS  INTDIV 0, fraction alone      */
+     100u   /* /1   320.0 MHz  40.00 MSPS  undivided                     */
+};
 
-bool capture_set_pacing(uint8_t pacing)
+uint32_t capture_set_clkdiv(uint32_t ratio_h)
 {
-    uint32_t period;
-    switch (pacing) {
-    case ADC_TRG2_REPEAT:  period = ADC_RPTCNT;     break;
-    case ADC_TRG2_SCCP1:   period = ADC_SCCP_TICKS; break;
-    case ADC_PACE_CLKDIV:  period = ADC_CLKDIV;     break;
-    case ADC_PACE_SINGLE:  period = ADC_SCCP_TICKS; break;
-    case ADC_TRG2_B2B:     period = 0u;             break;
-    default:               return false;
-    }
-    /* Into or out of the clock-divider source the ADC is switched off
-     * and on, into or out of the single-conversion source its operating
-     * mode changes: not between two bursts in the ISR, but now, with the
-     * stream stopped and restarted around it. */
-    bool restart = false;
-    if ((pacing == ADC_PACE_CLKDIV) || (pacing_cur == ADC_PACE_CLKDIV) ||
-        (pacing == ADC_PACE_SINGLE) || (pacing_cur == ADC_PACE_SINGLE)) {
-        restart = quiesce();
-    }
-    if (pacing != ADC_TRG2_SCCP1) { sccp1_stop(); }
-    if ((pacing_cur == ADC_PACE_SINGLE) && (pacing != ADC_PACE_SINGLE) && !burst_active) {
-        adc_set_mode_burst();
-    }
-    /* Leaving the clock-divider source: back to the full ADC clock, so
-     * that the other sources' units (TAD, 10 ns ticks) mean what the
-     * comments say. */
-    if ((pacing_cur == ADC_PACE_CLKDIV) && (pacing != ADC_PACE_CLKDIV)) {
-        (void)adc_clock_switch(1u);
-    }
-    pacing_next    = pacing;
-    pacing_pending = true;
-    period_next    = period;
-    period_pending = true;
-    if (!burst_active) {
-        if (pacing == ADC_PACE_SINGLE) {
-            adc_set_mode_single(ADC_TRG2_SCCP1);   /* same code in Table 16-3 */
-            adc_set_trg2(ADC_TRG2_B2B);            /* unused in this mode     */
-        } else {
-            adc_set_trg2((pacing == ADC_PACE_CLKDIV) ? ADC_TRG2_B2B : pacing);
-        }
-        pacing_cur = pacing;
-        apply_period(period);
-        pacing_pending = period_pending = false;
-    }
-    if (restart) { capture_start(); }
-    return true;
+    /* The order the user asked for, and it is the boot order run
+     * backwards and forwards again: DMA channel down and ADC core off
+     * (capture_settle, adc_deinit), CLKGEN6 off, divider written, read
+     * back, generator on, DIVSWEN and CLKRDY awaited, fields read back
+     * once more (clock_adc_set_div), core on and ADRDY awaited
+     * (adc_reinit), DMA set up from scratch on the next capture_start().
+     * Nothing is reconfigured under a running clock or a running core. */
+    const bool restart = capture_settle();      /* DMA down, burst ended */
+    adc_deinit();                               /* core off              */
+    const uint32_t rc    = clock_adc_set_div(ratio_h);
+    const bool     ready = adc_reinit();        /* core on, ADRDY        */
+    if (rc == CLKDIV_OK) { clkdiv_cur = ratio_h; }
+    if (restart) { capture_start(); }           /* dma0_init() again     */
+    if (rc != CLKDIV_OK) { return rc; }
+    return ready ? CLKDIV_OK : CLKDIV_ADC;
 }
 
-uint8_t capture_pacing(void) { return pacing_cur; }
+uint32_t capture_clkdiv(void)        { return clock_adc_div(); }  /* hardware */
+uint32_t capture_clkdiv_wanted(void) { return clkdiv_cur; }       /* asked for */
 
-const char *capture_pacing_name(void)
+uint32_t capture_nominal_ksps(uint32_t ratio_h)
 {
-    switch (pacing_cur) {
-    case ADC_TRG2_REPEAT:  return "ADC repeat timer (period in TAD = 12.5 ns)";
-    case ADC_TRG2_SCCP1:   return "SCCP1 timer (period in ticks of 10 ns)";
-    case ADC_PACE_CLKDIV:  return "ADC clock divider (period = divide ratio of 320 MHz, back-to-back)";
-    case ADC_PACE_SINGLE:  return "one conversion per SCCP1 trigger, no burst (period in ticks of 10 ns)";
-    case ADC_TRG2_B2B:     return "back-to-back (no rate control)";
-    default:               return "unknown pacing";
-    }
+    /* 40 MSPS at ratio 1, and the ratio is in hundredths:
+     * 40 000 ksps * 100 / ratio_h. */
+    return (ratio_h == 0u) ? 0u : (4000000u / ratio_h);
 }
 
-bool capture_set_period(uint32_t period)
+const uint32_t *capture_sweep_ratios(uint32_t *count)
 {
-    switch (pacing_cur) {
-    case ADC_TRG2_REPEAT:  if ((period < 2u) || (period > 63u))    { return false; } break;
-    case ADC_TRG2_SCCP1:   if ((period < 2u) || (period > 65535u)) { return false; } break;
-    case ADC_PACE_SINGLE:  if ((period < 2u) || (period > 65535u)) { return false; } break;
-    case ADC_PACE_CLKDIV:  if ((period < 100u) || (period > 1000u)) { return false; } break;
-    default:               return false;
-    }
-    if (pacing_cur == ADC_PACE_CLKDIV) {
-        /* ADC off and on around the clock switch: stop the stream, do
-         * it now, restart. Not deferred to the DONE moment. */
-        const bool restart = quiesce();
-        const bool ok      = adc_clock_switch(period);
-        period_pending     = false;
-        if (restart) { capture_start(); }
-        return ok;
-    }
-    period_next    = period;
-    period_pending = true;
-    if (!burst_active) {
-        apply_period(period);
-        period_pending = false;
-    }
-    return true;
-}
-
-uint32_t capture_period(void)
-{
-    switch (pacing_cur) {
-    case ADC_TRG2_REPEAT:  return adc_period();
-    case ADC_TRG2_SCCP1:   return sccp_ticks;
-    case ADC_PACE_SINGLE:  return sccp_ticks;
-    case ADC_PACE_CLKDIV:  return clock_adc_div();
-    default:               return 0u;
-    }
-}
-
-uint32_t capture_nominal_ksps(uint32_t period)
-{
-    if (period == 0u) { return 0u; }
-    switch (pacing_cur) {
-    case ADC_TRG2_REPEAT:  return 80000u / period;              /* 320 MHz / 4 / n */
-    case ADC_TRG2_SCCP1:   return SCCP_TICK_HZ / 1000u / period; /* 100 MHz / n     */
-    case ADC_PACE_SINGLE:  return SCCP_TICK_HZ / 1000u / period; /* 100 MHz / n     */
-    case ADC_PACE_CLKDIV:  return 4000000u / period;            /* 40 MSPS / (ratio/100) */
-    default:               return 0u;
-    }
-}
-
-const uint32_t *capture_sweep_periods(uint32_t *count)
-{
-    switch (pacing_cur) {
-    case ADC_TRG2_REPEAT:  *count = sizeof sweep_repeat / sizeof sweep_repeat[0]; return sweep_repeat;
-    case ADC_TRG2_SCCP1:   *count = sizeof sweep_sccp / sizeof sweep_sccp[0];     return sweep_sccp;
-    case ADC_PACE_SINGLE:  *count = sizeof sweep_sccp / sizeof sweep_sccp[0];     return sweep_sccp;
-    case ADC_PACE_CLKDIV:  *count = sizeof sweep_clkdiv / sizeof sweep_clkdiv[0]; return sweep_clkdiv;
-    default:               *count = 1u;                                          return sweep_b2b;
-    }
-}
-
-const uint32_t *capture_sweep_periods2(uint32_t *count)
-{
-    if (pacing_cur == ADC_PACE_CLKDIV) {
-        *count = sizeof sweep_clkdiv2 / sizeof sweep_clkdiv2[0];
-        return sweep_clkdiv2;
-    }
-    *count = 0u;
-    return NULL;
+    *count = sizeof sweep_ratios / sizeof sweep_ratios[0];
+    return sweep_ratios;
 }
 
 const volatile uint16_t *capture_completed_half(void)
@@ -736,152 +597,31 @@ uint32_t capture_selftest(uint32_t *mean)
 }
 
 /* ------------------------------------------------------------------ *
- * Rate self-test and the choice of pacing
+ * Delivered rate
  *
- * Timer1 (timebase.c) is only the stopwatch; the pacing source is what
- * produces the rate. For the active source: RATETEST_HALVES halves at
- * a slow period and at one four times shorter, ticks counted, delivered
- * rate compared with the nominal one (10 %) and the two with each other
- * (3..5x). The second check is the one that catches "the rate does not
- * move", which is what the board showed with back-to-back and SAMC.
- * The burst restart from the DMA interrupt costs a little per 2048
- * samples; the tolerance covers it.
- *
- * capture_autopace() runs this for every candidate when ADC_PACING is
- * AUTO and prints one verdict per source, so the log shows what each
- * one delivered - not only which one won.
+ * Timer1 (timebase.c) is only the stopwatch; the ADC clock produces the
+ * rate. Measuring it is one thing and one thing only now: run `halves`
+ * halves at whatever the divider is set to and divide the sample count
+ * by the elapsed time. The judgement - does this rate match the ratio,
+ * and did anything get lost - belongs to the caller, which prints it.
  * ------------------------------------------------------------------ */
-#define RATETEST_HALVES   200u
-#define RATETEST_TOL_PCT  10u
-
-#ifndef __MPLAB_DEBUGGER_SIMULATOR
-/* Delivered rate at `period` (0 = leave the period alone, for B2B). */
-static uint32_t rate_measure(uint32_t period, uint32_t *ksps)
+uint32_t capture_measure_rate(uint32_t halves, uint32_t *ksps)
 {
-    (void)capture_settle();                 /* defined start            */
-    if (period != 0u) { (void)capture_set_period(period); }  /* idle: now */
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+    (void)halves;
+    if (ksps != NULL) { *ksps = 0u; }
+    return 0u;                        /* no ADC clock to measure        */
+#else
+    (void)capture_settle();           /* defined start                  */
     counters_clear();
-    const uint32_t target = blocks_done + RATETEST_HALVES;
+    const uint32_t target = blocks_done + halves;
     const uint32_t t0     = timebase_ticks();
     capture_start();
     const uint32_t rc     = wait_for_blocks(target);
     const uint32_t ticks  = timebase_ticks() - t0;
-    (void)capture_settle();                 /* test over: DMA down      */
+    (void)capture_settle();           /* test over: DMA down            */
     if (rc != 0u) { return rc; }
-    *ksps = timebase_ksps(RATETEST_HALVES * half_len, ticks);
-    return 0u;
-}
-#endif
-
-uint32_t capture_ratetest(void)
-{
-#ifdef __MPLAB_DEBUGGER_SIMULATOR
-    console_puts("[ratetest] skipped: the simulator has no ADC clock to measure\r\n");
-    return 0u;
-#else
-    const uint8_t  pacing      = pacing_cur;
-    const uint32_t keep        = capture_period();
-    const bool     was_running = capture_running();
-    uint32_t       ksps[2]     = { 0u, 0u };
-    uint32_t       rc          = 0u;
-    uint32_t       periods[2]  = { 0u, 0u };
-
-    console_puts("[ratetest] pacing: ");
-    console_puts(capture_pacing_name());
-    console_puts("\r\n");
-
-    switch (pacing) {
-    case ADC_TRG2_REPEAT: periods[0] = 16u; periods[1] = 4u; break;  /* 5 / 20 MSPS */
-    case ADC_TRG2_SCCP1:  periods[0] = 20u; periods[1] = 5u; break;  /* 5 / 20 MSPS */
-    case ADC_PACE_CLKDIV: periods[0] = 800u; periods[1] = 200u; break; /* 5 / 20 MSPS */
-    case ADC_PACE_SINGLE: periods[0] = 20u; periods[1] = 5u; break;  /* 5 / 20 MSPS */
-    default:
-        /* Back-to-back: nothing to judge against, just say what it delivers. */
-        rc = rate_measure(0u, &ksps[0]);
-        if (rc == 0u) {
-            console_kv("[ratetest]   measured ksps (no period to compare with)", ksps[0]);
-        } else {
-            console_puts("[ratetest]   no data\r\n");
-        }
-        goto restore;
-    }
-
-    for (uint32_t i = 0; (i < 2u) && (rc == 0u); i++) {
-        rc = rate_measure(periods[i], &ksps[i]);
-        if (rc == 0u) {
-            const uint32_t nominal = capture_nominal_ksps(periods[i]);
-            const uint32_t diff    = (ksps[i] > nominal) ? ksps[i] - nominal : nominal - ksps[i];
-            console_kv("[ratetest]   period", periods[i]);
-            console_kv("[ratetest]     nominal ksps", nominal);
-            console_kv("[ratetest]     measured ksps", ksps[i]);
-            if (diff > nominal * RATETEST_TOL_PCT / 100u) {
-                console_puts("[ratetest]     outside the 10 % window\r\n");
-                rc = 12u;
-            }
-        } else {
-            console_kv("[ratetest]   no data at period", periods[i]);
-        }
-    }
-    if (rc == 0u) {
-        /* The short period must deliver four times the rate (3..5x). */
-        if ((ksps[1] < 3u * ksps[0]) || (ksps[1] > 5u * ksps[0])) {
-            console_puts("[ratetest]   the rate does not follow the period\r\n");
-            rc = 12u;
-        }
-    }
-
-restore:
-    if (keep != 0u) { (void)capture_set_period(keep); }
-    counters_clear();
-    if (was_running) { capture_start(); }
-    console_puts((rc == 0u) ? "[ratetest]   PASS\r\n" : "[ratetest]   FAIL\r\n");
-    return rc;
-#endif
-}
-
-uint32_t capture_autopace(void)
-{
-    console_kv("[pacing] time base check, ticks per 100 ms (expect 1250000)", timebase_check());
-#if ADC_PACING != 0u
-    (void)capture_set_pacing((uint8_t)ADC_PACING);
-    console_puts("[pacing] fixed by ADC_PACING: ");
-    console_puts(capture_pacing_name());
-    console_puts("\r\n");
-    return capture_ratetest();
-#else
-    /* Order = preference: the first paced source that passes is used.
-     * Microchip's own mechanism first (one conversion per SCCP1 trigger),
-     * then the clock divider, then the two burst triggers the board did
-     * not follow in runs 5 and 6, back-to-back last as the reference. */
-    static const uint8_t candidates[5] = { ADC_PACE_SINGLE, ADC_PACE_CLKDIV, ADC_TRG2_REPEAT, ADC_TRG2_SCCP1, ADC_TRG2_B2B };
-    uint32_t result[5];
-    uint8_t  chosen = ADC_TRG2_B2B;
-    bool     have   = false;
-
-    for (uint32_t i = 0; i < 5u; i++) {
-        (void)capture_set_pacing(candidates[i]);
-        result[i] = capture_ratetest();
-        if ((result[i] == 0u) && !have && (candidates[i] != ADC_TRG2_B2B)) {
-            chosen = candidates[i];
-            have   = true;
-        }
-    }
-    (void)capture_set_pacing(chosen);
-
-    console_puts("[pacing] summary: single per SCCP1 trigger ");
-    console_puts((result[0] == 0u) ? "PASS" : "FAIL");
-    console_puts(", ADC clock divider ");
-    console_puts((result[1] == 0u) ? "PASS" : "FAIL");
-    console_puts(", repeat timer ");
-    console_puts((result[2] == 0u) ? "PASS" : "FAIL");
-    console_puts(", SCCP1 as burst trigger ");
-    console_puts((result[3] == 0u) ? "PASS" : "FAIL");
-    console_puts(", back-to-back ");
-    console_puts((result[4] == 0u) ? "runs" : "no data");
-    console_puts("\r\n[pacing] using: ");
-    console_puts(capture_pacing_name());
-    console_puts(have ? "\r\n"
-                      : " - NO PACED SOURCE PASSED, the rate is not under control\r\n");
+    if (ksps != NULL) { *ksps = timebase_ksps(halves * half_len, ticks); }
     return 0u;
 #endif
 }

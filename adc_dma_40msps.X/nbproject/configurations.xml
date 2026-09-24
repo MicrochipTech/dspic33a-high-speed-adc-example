@@ -14,7 +14,6 @@
       <itemPath>../console.h</itemPath>
       <itemPath>../sim.h</itemPath>
       <itemPath>../timebase.h</itemPath>
-      <itemPath>../sccp.h</itemPath>
       <itemPath>../dac.h</itemPath>
       <itemPath>../dactest.h</itemPath>
       <itemPath>../cmd_parser.h</itemPath>
@@ -41,7 +40,6 @@
       <itemPath>../led.c</itemPath>
       <itemPath>../diag.c</itemPath>
       <itemPath>../timebase.c</itemPath>
-      <itemPath>../sccp.c</itemPath>
       <itemPath>../dac.c</itemPath>
       <itemPath>../dactest.c</itemPath>
       <itemPath>../cli.c</itemPath>

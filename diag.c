@@ -48,7 +48,7 @@ volatile uint32_t trap_stage __attribute__((persistent));
  *   9     CPU trap or unhandled interrupt            _DefaultInterrupt()
  *   10    clock fail: FSCM moved the CPU to BFRC     _CLKFInterrupt()
  *   11    guard words behind the buffer changed      capture.c guard_check()
- *   12    measured rate does not follow RPTCNT       capture_ratetest()
+ *   12    (free - the rate test is part of the "test" command now)
  *
  * Pattern: <code> short blinks, one long pause, repeat. The blink speed
  * depends on which clock the CPU is on at the time; the count is what
@@ -134,13 +134,9 @@ void diag_report_build(void)
     console_kv("[build] adc core", ADC_INSTANCE);
     console_kv("[build] default input (pinsel)", ADC_PINSEL);
     console_kv("[build] default samc", ADC_SAMC);
-    console_kv("[build] default rptcnt", ADC_RPTCNT);
-    console_kv("[build] pacing (0 = auto)", ADC_PACING);
-    console_kv("[build] sccp ticks", ADC_SCCP_TICKS);
     console_kv("[build] adc clock divider x100", ADC_CLKDIV);
     console_kv("[build] samples per half (max)", SAMPLES_PER_HALF_MAX);
     console_kv("[build] samples per half (in use)", capture_half_len());
-    console_kv("[build] auto_sweep", AUTO_SWEEP);
     console_kv("[build] boot_verbose", BOOT_VERBOSE);
 #ifdef __MPLAB_DEBUGGER_SIMULATOR
     console_puts("[build] simulator build (sim_dma.c, no ADC, no DMA)\r\n");

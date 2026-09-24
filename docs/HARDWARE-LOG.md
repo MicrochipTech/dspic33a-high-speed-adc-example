@@ -361,3 +361,159 @@ behind the region in use - for that size. All consumers (stats, dump, sweep and 
 maths, DAC test, self-test mean) read the length. No heap: the array stays static at
 its maximum. The simulator build takes `build.bat sim <n>` to run the ping-pong check
 at another size.
+
+## 2026-09-24, run 7 - master 1817f6d (+local changes), build 09:39:31, both phases
+
+`RCON = EXTR`. The first run with the two boot phases. Self-test 3815 on core 3,
+3824 on core 5.
+
+**What the board confirmed for the first time.** The ADC core switch works at run
+time: phase 2 reports `core: 5`, `DMA0SEL 0x3B -> 0x48` and `DMA0SRC 0x0B64 ->
+0x0DA4`, so the DMA follows the core to the other trigger and the other result
+register, and the self-test passes on both cores. DAC2 comes up on CLKGEN7 at
+320 MHz: `DACCTRL1 = 0x3F7F8000`, `DAC2CON = 0x8100`, `DAC2DAT = 0x0F000100`
+(3840/256), `DAC2SLPDAT = 8`, `CLK7CON` equal to `CLK6CON`. Two of the three
+questions the 24.09. entry left open are answered; the third - whether ADC 5 reads
+the pin the DAC drives - is not, because the DAC test never printed a verdict (below).
+
+**All four paced sources failed, in two different ways.**
+
+1. Both SCCP1 paths, `ADC_PACE_SINGLE` (65) and `ADC_TRG2_SCCP1` (34), printed
+   `no data at period: 20` - not a wrong rate, no conversion at all. After the
+   23.09. fixes (code 34 instead of 32, `AUXOUT = 01`) that points at SCCP1 still
+   emitting nothing, and the log cannot say more: the register snapshot had no SCCP
+   block at all.
+2. The clock divider (64) at ratio 8 (`period 800`, nominal 5000 ksps) delivered
+   37 350 ksps, and the repeat timer (3) at RPTCNT 16 delivered 36 028 ksps - both
+   the unpaced rate. `CLK6DIV` was 0x0000 in the phase-1 snapshot and 0x8000 in the
+   phase-2 one (`INTDIV 0, FRACDIV 256` = the ratio 1 written back after the test),
+   so writes do reach the register; what the log does not show is the value that
+   stood there *while* the divider was measured. `rate_measure()` discarded the
+   return of `capture_set_period()`, so a divider switch that failed
+   (`DIVSWEN`/`CLKRDY` never coming) produced a normal looking row.
+
+So `[pacing] using: back-to-back - NO PACED SOURCE PASSED, the rate is not under
+control`, and the sweep has one row.
+
+**The measurement, now confirmed a fourth time and in two independent runs.**
+Back-to-back 38 167 ksps, overrun 83 083 of 2 048 000 samples = **4.06 %**, missed
+1969 of 2000, late 0. Phase 1 and phase 2 printed these figures **digit for digit
+identical** - with a floating mikroBUS pin in phase 1 and the DAC driving the pin in
+phase 2. The loss is therefore set by the clock alone and has nothing to do with the
+signal: at ~38 MSPS the DMA does not keep up. That is the number this example exists
+to produce.
+
+**The run stops inside the DAC test, silently.** The log ends after
+`[dactest]   jump limit LSb: 76`, the last of the header lines; no verdict, no
+`[PHASE 2 DONE]`, no `[DONE]`, no END banner, no boot banner, no `[TRAP]` block. The
+colleague repeated the run with a second terminal program (TeraTerm, then Hercules)
+and it stopped at the same line both times, with `help` having no effect afterwards -
+so it is the board, not the copy. Between that line and the next output there are
+only `capture_settle()`, `counters_clear()`, `capture_start()` and the collecting
+loop, and **every wait on that path is bounded**: `capture_settle()` waits at most
+`WAIT_LIMIT` (~30 ms) and then takes the core down and up, `adc_reinit()` bounds
+ADRDY, `dma0_deinit()` has no loop, and the loop itself leaves with `[dactest] no
+data` (6) or `DMA channel switched itself off` (8). An ordinary wait can therefore
+not be the cause.
+
+The one mechanism that fits every observation: the DMA interrupt runs at priority 4
+and fires ~1.56 million times a second at 38 MSPS (every 640 ns), U2RX at priority 1
+sits below it. If the handler takes longer than the gap between events, the CPU never
+reaches the main loop again - no output, no trap, no reset, and the console deaf,
+which is also what `rx = 0` in run 6 was. Against it: the sweep, which runs the same
+start/stop sequence, completed. Unproven either way.
+
+Changed in reaction (no board run yet):
+
+- `dactest.c` traces the four steps and flushes after each line
+  (`settling`, `settled`, `starting the stream`, `stream started, collecting`,
+  `first half copied`), so the next log names the call that swallows the CPU.
+  Flushed because an unflushed line sits in the transmit FIFO when the CPU stops.
+- `sccp.c/.h`: `sccp1_regs_dump()` - `CCP1CON1`, `CCP1CON2`, `CCP1PR` and `CCP1TMR`
+  read twice. Both reads 0 means the timer never started and no aux-out pulse can
+  reach the ADC. It is in the boot snapshot (`diag.c`) and in the rate test, in the
+  `no data` branch as well - which is the only witness when nothing converts.
+- `capture.c`: `pacing_readback()` prints, next to each measured row, what the
+  hardware holds - divide ratio and ADC clock for 64, RPTCNT and TRG2SRC for 3, the
+  SCCP registers for 34/65. `rate_measure()` now reports a refused period (code 13)
+  instead of measuring anyway.
+- `console.h` includes `<stdbool.h>`; it declares `console_sweep(uint32_t, bool)`
+  and was not self-contained, which only showed when `sccp.c` included it.
+
+## 2026-09-24, after run 7 - back-to-back only, nothing runs by itself (no board run yet)
+
+The user's decision after run 7: concentrate on back-to-back, remove everything else from
+the code, and let the firmware do nothing until someone types a command.
+
+**Removed.** `sccp.c/.h`; the pacing sources 3 (ADC repeat timer), 34 (SCCP1 as second
+trigger) and 65 (one conversion per SCCP1 trigger); `capture_autopace()`, the pacing
+selection and the whole `pacing`/`period` mechanism including the ISR path that applied a
+period between two bursts; `ADC_PACING`, `ADC_RPTCNT`, `ADC_SCCP_TICKS` and `AUTO_SWEEP`
+in `board.h`; the `rptcnt` argument of `adc_init()` and the `adc_set_period`/`adc_trg2`/
+`adc_set_mode_single` helpers; the two automatic boot phases with their register
+snapshots. `TRG2SRC` is wired to 2 and nothing writes it again.
+
+Why: all four were configured correctly, read back correctly and ignored (runs 4 to 7).
+Keeping them meant every log carried four failing blocks before the one measurement that
+works.
+
+**The rate is now the ADC clock alone.** `clock_adc_set_div()` returns `CLKDIV_OK` or the
+step that failed - `CLKDIV_NOT_WRITTEN` (the write did not reach CLK6DIV),
+`CLKDIV_DIVSWEN` (the switch never completed), `CLKDIV_CLKRDY`, `CLKDIV_LOST` (the value
+was discarded over the switch), `CLKDIV_ADC` (the core did not come back). The fields are
+read back before and after the switch. `capture_set_clkdiv()` does the sequence the user
+asked for and it is the boot order run backwards and forwards again: DMA channel down and
+burst finished (`capture_settle`), ADC core off (`adc_deinit`), CLKGEN6 off, divider
+written and read back, generator on, `DIVSWEN`, `CLKRDY`, fields read back, core on with
+`ADRDY` (`adc_reinit`), DMA set up from scratch on the next `capture_start()`. Run 7 could
+not distinguish a divider that never switched from one that switched without effect,
+because `rate_measure()` discarded the return value of `capture_set_period()`.
+
+Also corrected: the comment in `clock_adc_set_div()` claimed ratio 1 was `INTDIV 0,
+FRACDIV 0`. The arithmetic in the same block gives `INTDIV 0, FRACDIV 256`, which is what
+the phase-2 snapshot of run 7 showed (`CLK6DIV = 0x8000`).
+
+**Nothing runs at boot.** The firmware brings LED, console, clocks, ADC core and DMA
+channel up, sets the slowest ratio (`ADC_CLKDIV` = 1000 = /10 = 32 MHz = 4 MSPS), prints
+about a dozen lines and waits. No conversion is triggered, so no DMA event and no
+interrupt can come from the ADC side. That is what settles `rx = 0`: with nothing
+converting, a character that does not echo cannot be blamed on interrupt starvation.
+
+**`test` runs the parts.** `test` alone lists them; `test all [halves]` runs self, clock,
+sweep, dac in that order and prints a four-line verdict at the end. Only `test self`
+failing stops `all` - without a working chain every number after it is meaningless.
+
+- `test self`  - the self-test on the internal reference at the slowest clock.
+- `test clock` - every ratio of the ladder switched and read back, **nothing measured**.
+  This is the test that separates "the switch does not happen" from "the switch happens
+  and the rate does not follow".
+- `test rate [halves]` - delivered rate at the ratio set now, judged against the nominal
+  one within 10 %.
+- `test sweep [halves]` - the ladder with overrun/late/missed per point.
+- `test dac [halves]` - the DAC2 triangle through the chain.
+
+Plus `clk <100..1000>` to set a single ratio by hand, and `regs` as before.
+
+**The sweep runs from the slowest rate upwards** (the user's decision), because the
+slowest point is the one the DMA should manage: the first row is the row most likely to
+pass, and a failure there is the chain, not the rate. The ladder is
+1000, 900, 800, 700, 600, **500**, 450, 400, 350, 300, 250, 200, 150, 125, 100 - that is
+4.00, 4.44, 5.00, 5.71, 6.67, **8.00**, 8.89, 10.0, 11.4, 13.3, 16.0, 20.0, 26.7, 32.0,
+40.0 MSPS. 500 = 8 MSPS is in it because that is the customer's floor. The fractional
+ratios are there for a second reason: 2.5 sits exactly between 2 and 3, and 4.5 between
+4 and 5, so a row that lands halfway between its neighbours proves `FRACDIV` works and a
+row that snaps to a neighbour proves only `INTDIV` counts. Ratio 1 is `FRACDIV 256`, so
+that question is not academic.
+
+**Still in, unchanged in purpose:** the self-test, the counters, the guard words, the trap
+handler and the `RCON` report, `dac.c`/`dactest.c` (the only way to show that the samples
+arrive complete and in order - counters cannot), and the DAC test's step trace from
+earlier today.
+
+Verified: both builds (`build.bat` and `build.bat sim`) are `-Wall -Wextra` clean. The
+simulator acceptance run was not made - it is run on request now. **Nothing of this has
+been on the board.**
+
+The expected log is much shorter than run 7's: the boot prints about a dozen lines
+instead of two full register snapshots and five rate-test blocks per phase, and the
+register dump is a command (`regs`) rather than an automatism.

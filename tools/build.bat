@@ -38,7 +38,7 @@ if /i "%1"=="sim" (
     set OUT=..\build\%TARGET%_sim%2
   )
 )
-set SOURCES=..\main.c ..\config_bits.c ..\clock.c ..\adc.c %DMA% ..\capture.c ..\led.c ..\diag.c ..\timebase.c ..\sccp.c ..\dac.c ..\dactest.c ..\cli.c ..\cmd_parser.c
+set SOURCES=..\main.c ..\config_bits.c ..\clock.c ..\adc.c %DMA% ..\capture.c ..\led.c ..\diag.c ..\timebase.c ..\dac.c ..\dactest.c ..\cli.c ..\cmd_parser.c
 
 if not exist ..\build mkdir ..\build
 
