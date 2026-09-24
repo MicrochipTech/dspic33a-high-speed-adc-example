@@ -11,8 +11,12 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#define SAMPLES_PER_HALF  1024u
-#define SAMPLES_PER_BUF   (2u * SAMPLES_PER_HALF)
+/* The buffer is allocated at this maximum; the length in use is set at
+ * run time (capture_set_half_len, "buf" command) and defaults to the
+ * maximum, so nothing changes unless someone asks. */
+#define SAMPLES_PER_HALF_MAX  1024u
+#define SAMPLES_PER_BUF_MAX   (2u * SAMPLES_PER_HALF_MAX)
+#define SAMPLES_PER_HALF_MIN  16u
 
 /* ---- Measurement state (defined in capture.c) ---- */
 /* The sample buffer itself is private to capture.c (it sits in a struct
@@ -56,6 +60,13 @@ bool capture_powered(void);
  * whose stop (timer off) can fall anywhere in the buffer. Returns
  * whether the stream was running, for the caller to restart it. */
 bool capture_settle(void);
+
+/* Samples per buffer half in use. Changing it: only with the stream
+ * stopped; the call settles (DMA down), the next capture_start() sets
+ * ADC burst length, DMA block and guard words up for the new size.
+ * 16..SAMPLES_PER_HALF_MAX. False if out of range or while running. */
+uint32_t capture_half_len(void);
+bool     capture_set_half_len(uint32_t n);
 
 /* Switch to another ADC core (1..5) with input pinsel and sample time
  * samc: stream stopped, core down, table row switched, adc_init(), DMA

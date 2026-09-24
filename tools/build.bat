@@ -4,6 +4,7 @@ rem  dsPIC33AK512MPS512 (EV74H48A) ADC/DMA demo - build without MPLAB X
 rem
 rem    build.bat          firmware for the board -> ..\build\adc_dma_40msps.elf/.hex
 rem    build.bat sim      simulator build        -> ..\build\adc_dma_40msps_sim.elf
+rem    build.bat sim 256  simulator build with 256 samples per half -> ..\build\adc_dma_40msps_sim256.elf
 rem
 rem  The simulator build compiles sim_dma.c instead of dma.c, defines
 rem  __MPLAB_DEBUGGER_SIMULATOR (as MPLAB X does for a Simulator
@@ -31,6 +32,11 @@ if /i "%1"=="sim" (
   set DMA=..\sim_dma.c
   set EXTRA=-D__MPLAB_DEBUGGER_SIMULATOR=1 -g
   set OUT=..\build\%TARGET%_sim
+  rem build.bat sim <n>: run the ping-pong check at n samples per half
+  if not "%2"=="" (
+    set EXTRA=-D__MPLAB_DEBUGGER_SIMULATOR=1 -g -DSIM_HALF_LEN=%2
+    set OUT=..\build\%TARGET%_sim%2
+  )
 )
 set SOURCES=..\main.c ..\config_bits.c ..\clock.c ..\adc.c %DMA% ..\capture.c ..\led.c ..\diag.c ..\timebase.c ..\sccp.c ..\dac.c ..\dactest.c ..\cli.c ..\cmd_parser.c
 

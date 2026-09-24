@@ -483,6 +483,7 @@ The console is the [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser) mod
 | `regs` | the clock, ADC, DMA, interrupt and UART registers as hex, plus the counters — the dump `docs/TROUBLESHOOTING.md` Part 4 asks for |
 | `start`, `stop` | start the burst stream / let the current buffer finish and stop |
 | `samc <0..31>` | sample time in TAD steps: (2·SAMC + 0.5) TAD — the aperture, not the rate. Applied between two bursts |
+| `buf [n]` | samples per buffer half in use, 16…1024 (allocated at 1024, default 1024); only while stopped, the next `start` sets ADC burst, DMA block and guard words up for it |
 | `core <1..5> [pinsel]` | switch the ADC core at run time (stream stopped, core down, DMA re-armed on the new core's trigger): `core 5 3` = AD5AN3 = RA8, the pin DAC2 drives; `core 3 5` = back to mikroBUS A AN |
 | `dac <on [slpdat]\|off>` | DAC2 triangle 0x100…0xF00 on RA8; `slpdat` = counts per DAC clock (8 = 22 kHz at 320 MHz) |
 | `dactest [halves]` | capture and judge the DAC2 triangle through the chain on the active core (see phase 2 below) |

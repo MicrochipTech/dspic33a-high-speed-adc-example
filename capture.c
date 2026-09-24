@@ -98,7 +98,7 @@
  * So a DMA transfer cannot collide with the rest of memory: not by
  * layout, not by the hardware, and if it somehow did, not unnoticed. */
 static volatile struct {
-    uint16_t data[SAMPLES_PER_BUF];
+    uint16_t data[SAMPLES_PER_BUF_MAX];
     uint32_t guard[BUF_GUARD_WORDS];
 } dma_buffer __attribute__((section(".dma_buffer"), aligned(4)));
 #define buf (dma_buffer.data)
@@ -133,6 +133,7 @@ static volatile bool    run_enabled  = false;
 static volatile bool    burst_active = false;
 static volatile bool    powered      = true;    /* ADC core + CLKGEN6 on */
 static volatile bool    dma_armed    = false;   /* dma0_init() done, not deinit */
+static volatile uint32_t half_len    = SAMPLES_PER_HALF_MAX;   /* in use  */
 
 /* Channel reconfiguration requested by the console or the self-test,
  * applied by the ISR between two bursts, when the channel is idle. */
@@ -218,27 +219,54 @@ static void start_burst(void)
 /* ------------------------------------------------------------------ *
  * Set-up: the DMA channel, wired to this ADC core and this buffer
  * ------------------------------------------------------------------ */
+/* The guard words sit right behind the region in use: the struct's own
+ * guard when the whole array is used, otherwise the words of the array
+ * that follow the used region (a DMA writing one transaction too many
+ * hits them first either way). 16 words = 8 samples' worth of 32-bit
+ * words = 32 samples; the minimum half length keeps room for them. */
+static volatile uint32_t *guard_word(uint32_t i)
+{
+    const uint32_t used = 2u * half_len;
+    if (used + 2u * BUF_GUARD_WORDS <= SAMPLES_PER_BUF_MAX) {
+        return (volatile uint32_t *)&dma_buffer.data[used] + i;
+    }
+    return &dma_buffer.guard[i];
+}
+
 void capture_init(void)
 {
     for (uint32_t i = 0; i < BUF_GUARD_WORDS; i++) {
         dma_buffer.guard[i] = BUF_GUARD_PATTERN(i);
+        *guard_word(i)      = BUF_GUARD_PATTERN(i);
     }
-    /* The buffer object itself and its size - not a constant that has to
-     * agree with it. The ADC's burst length (adc_init, SAMPLES_PER_BUF)
-     * must equal the block, which the check below pins down. */
-    dma0_init(adc_dma_trigger(), adc_dma_source(), dma_buffer.data, sizeof dma_buffer.data);
+    /* Burst length and DMA block are the same number, set here from the
+     * length in use: 2 * half_len conversions per burst, 2 * half_len
+     * transactions per block, both re-done before every start. */
+    adc_set_burst_len(2u * half_len);
+    dma0_init(adc_dma_trigger(), adc_dma_source(), dma_buffer.data, 2u * half_len * sizeof(uint16_t));
     dma_armed = true;
 }
-_Static_assert(sizeof dma_buffer.data == SAMPLES_PER_BUF * sizeof(uint16_t),
-               "ADC burst length and DMA buffer size must be the same thing");
+_Static_assert(sizeof dma_buffer.data == SAMPLES_PER_BUF_MAX * sizeof(uint16_t),
+               "buffer allocation and its maximum must be the same thing");
+
+uint32_t capture_half_len(void) { return half_len; }
+
+bool capture_set_half_len(uint32_t n)
+{
+    if ((n < SAMPLES_PER_HALF_MIN) || (n > SAMPLES_PER_HALF_MAX)) { return false; }
+    if (run_enabled || burst_active) { return false; }      /* stop first */
+    (void)capture_settle();           /* DMA down; the next start re-inits */
+    half_len = n;
+    return true;
+}
 
 /* Stop with code 11 if anything wrote past the end of the buffer. */
 static void guard_check(void)
 {
     for (uint32_t i = 0; i < BUF_GUARD_WORDS; i++) {
-        if (dma_buffer.guard[i] != BUF_GUARD_PATTERN(i)) {
+        if (*guard_word(i) != BUF_GUARD_PATTERN(i)) {
             console_kv("[guard] word behind the buffer changed, index", i);
-            console_kv_hex("[guard] value", dma_buffer.guard[i]);
+            console_kv_hex("[guard] value", *guard_word(i));
             console_kv_hex("[guard] expected", BUF_GUARD_PATTERN(i));
             fail(11u);
         }
@@ -294,13 +322,13 @@ void dma0_event(uint32_t st)
     if (st & DMA0_HALF) {
         dma0_clear(DMA0_HALF);
         ready_half  = 0u;
-        last_sample = buf[SAMPLES_PER_HALF - 1u];
+        last_sample = buf[half_len - 1u];
         blocks_done++;
     }
     if (st & DMA0_DONE) {
         dma0_clear(DMA0_DONE);
         ready_half  = 1u;
-        last_sample = buf[SAMPLES_PER_BUF - 1u];
+        last_sample = buf[2u * half_len - 1u];
         blocks_done++;
 
         /* The channel is idle between bursts: this is the only safe
@@ -324,7 +352,7 @@ void dma0_event(uint32_t st)
             /* Nothing to restart: the trigger keeps running and the DMA
              * has reloaded its block. capture_stop() ends it. */
         } else if (run_enabled) {
-            start_burst();            /* next SAMPLES_PER_BUF samples   */
+            start_burst();            /* next 2 * half_len samples      */
         } else {
             burst_active = false;
         }
@@ -586,7 +614,7 @@ const uint32_t *capture_sweep_periods2(uint32_t *count)
 
 const volatile uint16_t *capture_completed_half(void)
 {
-    return &buf[ready_half ? SAMPLES_PER_HALF : 0u];
+    return &buf[ready_half ? half_len : 0u];
 }
 
 void counters_clear(void)
@@ -638,7 +666,7 @@ bool capture_service(void)
         proc_missed += (done - seen_blocks) - 1u;
     }
     seen_blocks = done;
-    process_buffer(capture_completed_half(), SAMPLES_PER_HALF);
+    process_buffer(capture_completed_half(), half_len);
     guard_check();                    /* did the DMA stay inside buf?    */
 
     /* Heartbeat: slow while clean, fast once any error counter moved. */
@@ -681,7 +709,7 @@ uint32_t capture_selftest(uint32_t *mean)
      * reference and nothing else. */
     rc = wait_for_blocks(blocks_done + SELFTEST_HALVES);
     if (rc == 0u) {
-        const uint32_t m = half_mean(capture_completed_half(), SAMPLES_PER_HALF);
+        const uint32_t m = half_mean(capture_completed_half(), half_len);
         selftest_mean = m;
         if (mean != NULL) { *mean = m; }
         if ((m < SELFTEST_MIN) || (m > SELFTEST_MAX)) { rc = 7u; }
@@ -740,7 +768,7 @@ static uint32_t rate_measure(uint32_t period, uint32_t *ksps)
     const uint32_t ticks  = timebase_ticks() - t0;
     (void)capture_settle();                 /* test over: DMA down      */
     if (rc != 0u) { return rc; }
-    *ksps = timebase_ksps(RATETEST_HALVES * SAMPLES_PER_HALF, ticks);
+    *ksps = timebase_ksps(RATETEST_HALVES * half_len, ticks);
     return 0u;
 }
 #endif
@@ -870,7 +898,8 @@ void capture_regs_dump(void)
     console_kv("selftest_mean", selftest_mean);
     /* The guard words behind the buffer: all must read 0xA5C3F00D + i. */
     console_kv_hex("buf", (uint32_t)buf);
-    console_kv_hex("buf_end", (uint32_t)&buf[SAMPLES_PER_BUF]);
+    console_kv("half_len", half_len);
+    console_kv_hex("buf_end (in use)", (uint32_t)&buf[2u * half_len]);
     console_kv_hex("guard0", dma_buffer.guard[0]);
     console_kv_hex("guard1", dma_buffer.guard[1]);
     console_kv_hex("guard15", dma_buffer.guard[BUF_GUARD_WORDS - 1u]);

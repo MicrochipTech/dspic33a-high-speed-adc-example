@@ -117,7 +117,7 @@ void adc_init(uint8_t pinsel, uint8_t samc, uint8_t rptcnt)
     /* Conversions per burst. One burst fills the whole DMA buffer, so
      * the DMA DONE interrupt is also the moment to start the next one.
      * CNT[15:0] in ADxCH0CNT (p1272), max 65535. */
-    ADCREG(CH0CNT) = SAMPLES_PER_BUF;
+    ADCREG(CH0CNT) = SAMPLES_PER_BUF_MAX;      /* capture_init() sets the length in use */
 
     /* The channel-done event of this core is the DMA trigger. It must not
      * also reach the CPU: there is no handler for it, and with IRQSEL = 0
@@ -164,6 +164,11 @@ uint8_t adc_trg2(void) { return (uint8_t)ADCBITS(CH0CON1).TRG2SRC; }
 
 bool adc_ready(void) { return ADCBITS(CON).ADRDY != 0u; }
 
+void adc_set_burst_len(uint32_t count)
+{
+    ADCREG(CH0CNT) = count;
+}
+
 void adc_set_mode_burst(void)
 {
     ADCBITS(CH0CON1).MODE    = 2u;          /* Integration           */
@@ -198,7 +203,7 @@ bool adc_reinit(void)
 uint8_t adc_pinsel(void) { return (uint8_t)ADCBITS(CH0CON1).PINSEL; }
 uint8_t adc_samc(void)   { return (uint8_t)ADCBITS(CH0CON1).SAMC; }
 
-/* Start one burst of SAMPLES_PER_BUF conversions. Reading ADxCH0DATA
+/* Start one burst of CNT conversions. Reading ADxCH0DATA
  * first clears CH0RDY from the previous burst, as datasheet Example 16-6
  * does before re-triggering. */
 void adc_start_burst(void)

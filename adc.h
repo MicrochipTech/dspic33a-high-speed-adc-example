@@ -49,13 +49,13 @@ bool     adc_ch0_flag(void);                 /* its CH0 interrupt flag          
  * the core's event flags. Between tests, with the core idle. */
 void     adc_clear_events(void);
 
-/* ADC core ADC_INSTANCE, channel 0, Integration mode, CNT = SAMPLES_PER_BUF,
+/* ADC core ADC_INSTANCE, channel 0, Integration mode, CNT = the DMA block length,
  * conversions inside a burst paced by the ADC's repeat timer with period
  * `rptcnt` TAD (TAD = 12.5 ns at 320 MHz: 2 = 40 MSPS, 63 = 1.27 MSPS).
  * Stops in fail(5) if the core never reports ready. */
 void adc_init(uint8_t pinsel, uint8_t samc, uint8_t rptcnt);
 
-/* Trigger one burst of SAMPLES_PER_BUF conversions. */
+/* Trigger one burst of CNT conversions. */
 void adc_start_burst(void);
 
 /* Input pin (PINSEL 0..15) and sample time (SAMC 0..31) of channel 0.
@@ -103,6 +103,9 @@ bool    adc_ready(void);
  * per TRG1 trigger from the given source, TRG2 unused. Only while no
  * burst is in flight and no trigger is running. */
 void    adc_set_mode_burst(void);
+/* Conversions per burst (CNT, up to 65535): the DMA block length. Set
+ * by capture_init() before every start, idle only. */
+void    adc_set_burst_len(uint32_t count);
 void    adc_set_mode_single(uint8_t trg1src);
 
 /* The core's registers as "name: 0x........" lines (part of regs_dump()). */

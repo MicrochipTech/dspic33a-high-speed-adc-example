@@ -32,7 +32,7 @@
 #define DACTEST_HYST      96u        /* LSb, reversal detector hysteresis */
 #define DACTEST_FREQ_PCT  10u
 
-static uint16_t copy[SAMPLES_PER_HALF];
+static uint16_t copy[SAMPLES_PER_HALF_MAX];
 
 uint32_t dactest_run(uint32_t halves)
 {
@@ -44,6 +44,7 @@ uint32_t dactest_run(uint32_t halves)
     const uint32_t high      = dac2_high();
     const uint32_t period_ns = dac2_period_ns();
     const uint32_t f_exp_hz  = (period_ns != 0u) ? (uint32_t)(1000000000ull / period_ns) : 0u;
+    const uint32_t half = capture_half_len();
     uint32_t ksps_nom = capture_nominal_ksps(capture_period());
     if (ksps_nom == 0u) { ksps_nom = 40000u; }        /* back-to-back    */
     /* expected step per sample, LSb: 2 * span * f / Fs */
@@ -54,6 +55,7 @@ uint32_t dactest_run(uint32_t halves)
     console_puts("[dactest] DAC2 triangle (RA8) through the ADC/DMA chain\r\n");
     console_kv("[dactest]   ADC core", adc_core());
     console_kv("[dactest]   halves", halves);
+    console_kv("[dactest]   samples per half", half);
     console_kv("[dactest]   expected min (DACLOW)", low);
     console_kv("[dactest]   expected max (DACDAT)", high);
     console_kv("[dactest]   expected period ns", period_ns);
@@ -86,9 +88,9 @@ uint32_t dactest_run(uint32_t halves)
         }
         last = blocks_done;
         n    = WAIT_LIMIT;
-        memcpy(copy, (const void *)capture_completed_half(), sizeof copy);
+        memcpy(copy, (const void *)capture_completed_half(), half * sizeof copy[0]);
         got++;
-        for (uint32_t i = 0; i < SAMPLES_PER_HALF; i++) {
+        for (uint32_t i = 0; i < half; i++) {
             const uint32_t v = copy[i];
             if (v < mn) { mn = v; }
             if (v > mx) { mx = v; }
@@ -113,7 +115,7 @@ uint32_t dactest_run(uint32_t halves)
     const uint32_t ticks = timebase_ticks() - t0;
     (void)capture_settle();                 /* test over: DMA down      */
 
-    const uint32_t samples = halves * SAMPLES_PER_HALF;
+    const uint32_t samples = halves * half;
     const uint32_t ksps    = timebase_ksps(samples, ticks);
     /* f = reversals / 2 / (samples / Fs) = reversals * Fs / (2 * samples) */
     const uint32_t f_meas  = (uint32_t)(((uint64_t)reversals * ksps * 1000u) / ((uint64_t)2u * samples));

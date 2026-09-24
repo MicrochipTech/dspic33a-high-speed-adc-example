@@ -375,7 +375,7 @@ static void put_line(const char *s)
 /* One status line, blocking, for the periodic trace from main(). */
 void console_status_line(void)
 {
-    char line[256];                       /* 236 used with every field at max */
+    char line[256];                       /* 246 used with every field at max */
     char *p = copy_str(line, "[stat] blocks=");
     p = u32_to_str(p, blocks_done);
     p = copy_str(p, " overrun=");  p = u32_to_str(p, dma_overrun);
@@ -390,6 +390,7 @@ void console_status_line(void)
     p = copy_str(p, " per=");      p = u32_to_str(p, capture_period());
     p = copy_str(p, " run=");      p = u32_to_str(p, capture_running() ? 1u : 0u);
     p = copy_str(p, " pwr=");      p = u32_to_str(p, capture_powered() ? 1u : 0u);
+    p = copy_str(p, " half=");     p = u32_to_str(p, capture_half_len());
     /* Does the ADC's channel-done event reach the CPU side at all? It is
      * the DMA trigger and stays masked (IEC6 = 0), so this flag being 1
      * while the DMA runs says the event is visible to the CPU - the
@@ -520,6 +521,27 @@ static void cmd_core_fn(int argc, char **argv)
 }
 CMD_DEFINE(core, "core", cmd_core_fn, "core <1..5> [pinsel] - switch the ADC core");
 
+static void cmd_buf_fn(int argc, char **argv)
+{
+    uint32_t n;
+    if (argc == 1) {
+        put_kv("samples per half", capture_half_len());
+        put_kv("maximum", SAMPLES_PER_HALF_MAX);
+        return;
+    }
+    if ((argc != 2) || !arg_u32(argv[1], SAMPLES_PER_HALF_MIN, SAMPLES_PER_HALF_MAX, &n)) {
+        usage("buf [samples per half 16..1024]  (stop first; the next start uses the new size)");
+        return;
+    }
+    if (!capture_set_half_len(n)) {
+        put_line("buf: stop the stream first");
+        cmd_parser_fail();
+        return;
+    }
+    put_kv("samples per half", capture_half_len());
+}
+CMD_DEFINE(buf, "buf", cmd_buf_fn, "buf [n] - samples per buffer half (16..1024)");
+
 static void cmd_dac_fn(int argc, char **argv)
 {
     if ((argc == 2) && (argv[1][0] == 'o') && (argv[1][1] == 'f')) {
@@ -570,13 +592,14 @@ static void half_stats(uint32_t *mn, uint32_t *mx, uint32_t *mean)
 {
     const volatile uint16_t *b = capture_completed_half();
     uint32_t lo = 0xFFFFu, hi = 0u, acc = 0u;
-    for (uint32_t i = 0; i < SAMPLES_PER_HALF; i++) {
+    const uint32_t n = capture_half_len();
+    for (uint32_t i = 0; i < n; i++) {
         const uint16_t v = b[i];
         if (v < lo) { lo = v; }
         if (v > hi) { hi = v; }
         acc += v;
     }
-    *mn = lo; *mx = hi; *mean = acc / SAMPLES_PER_HALF;
+    *mn = lo; *mx = hi; *mean = acc / n;
 }
 
 void console_half_stats(void)
@@ -611,13 +634,13 @@ static void cmd_dump_fn(int argc, char **argv)
 {
     uint32_t count = 64u, offset = 0u;
     if ((argc > 3) ||
-        ((argc >= 2) && !arg_u32(argv[1], 1u, SAMPLES_PER_HALF, &count)) ||
-        ((argc == 3) && !arg_u32(argv[2], 0u, SAMPLES_PER_HALF - 1u, &offset))) {
+        ((argc >= 2) && !arg_u32(argv[1], 1u, capture_half_len(), &count)) ||
+        ((argc == 3) && !arg_u32(argv[2], 0u, capture_half_len() - 1u, &offset))) {
         usage("dump [count 1..1024] [offset 0..1023]");
         return;
     }
-    if (offset + count > SAMPLES_PER_HALF) {
-        count = SAMPLES_PER_HALF - offset;
+    if (offset + count > capture_half_len()) {
+        count = capture_half_len() - offset;
     }
     const volatile uint16_t *b = capture_completed_half();
     char line[80];
@@ -730,7 +753,7 @@ static bool sweep_row(uint32_t period, uint32_t halves)
         if (l == SWEEP_PROCESS) { late = late_service; missed = proc_missed; }
     }
     /* Measured rate of the idle run. */
-    const uint32_t meas_ksps = ok[0] ? timebase_ksps(halves * SAMPLES_PER_HALF, ticks[0]) : 0u;
+    const uint32_t meas_ksps = ok[0] ? timebase_ksps(halves * capture_half_len(), ticks[0]) : 0u;
     /* Longest line: 150 characters plus NUL; every number is at most
      * 10 digits, "STOPPED" is shorter. */
     char line[176];
@@ -906,6 +929,7 @@ void cli_init(void)
     (void)cmd_register(&cmd_period);
     (void)cmd_register(&cmd_pacing);
     (void)cmd_register(&cmd_core);
+    (void)cmd_register(&cmd_buf);
     (void)cmd_register(&cmd_dac);
     (void)cmd_register(&cmd_dactest);
     (void)cmd_register(&cmd_reset);

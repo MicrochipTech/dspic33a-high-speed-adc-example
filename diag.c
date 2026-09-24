@@ -138,7 +138,8 @@ void diag_report_build(void)
     console_kv("[build] pacing (0 = auto)", ADC_PACING);
     console_kv("[build] sccp ticks", ADC_SCCP_TICKS);
     console_kv("[build] adc clock divider x100", ADC_CLKDIV);
-    console_kv("[build] samples per half", SAMPLES_PER_HALF);
+    console_kv("[build] samples per half (max)", SAMPLES_PER_HALF_MAX);
+    console_kv("[build] samples per half (in use)", capture_half_len());
     console_kv("[build] auto_sweep", AUTO_SWEEP);
     console_kv("[build] boot_verbose", BOOT_VERBOSE);
 #ifdef __MPLAB_DEBUGGER_SIMULATOR

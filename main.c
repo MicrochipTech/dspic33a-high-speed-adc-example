@@ -172,7 +172,14 @@ int main(void)
     boot_mark(8u);
 
 #ifdef __MPLAB_DEBUGGER_SIMULATOR
-    /* The simulator's job is the ping-pong check, which needs the stream. */
+    /* The simulator's job is the ping-pong check, which needs the stream.
+     * SIM_HALF_LEN (build.bat sim <n>) runs it at another buffer size, to
+     * show the run-time length reaches ADC burst, DMA block and the
+     * consumers. */
+#ifdef SIM_HALF_LEN
+    console_kv("[boot] simulator: samples per half set to", SIM_HALF_LEN);
+    (void)capture_set_half_len(SIM_HALF_LEN);
+#endif
     console_puts("[boot] self-test passed, measurement running on the external input\r\n");
     counters_clear();                 /* the self-test halves were not serviced */
     capture_start();
@@ -267,7 +274,7 @@ int main(void)
 
         /* What to look at with the debugger, the "status" command or the
          * [stat] lines:
-         *   blocks_done   x SAMPLES_PER_HALF / elapsed time = actual rate
+         *   blocks_done   x half_len / elapsed time = actual rate
          *                 (includes the re-trigger gap once per buffer)
          *   dma_overrun   must stay 0, otherwise the DMA bus lost samples
          *   late_service  must stay 0, otherwise the ISR is too slow

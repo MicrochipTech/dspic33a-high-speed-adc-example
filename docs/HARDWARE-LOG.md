@@ -352,3 +352,12 @@ with the DMA off and begins with a freshly initialised one (the user's rule). Re
 single-conversion source stops wherever its timer is switched off, and the next test
 would have started in a half-filled half - harmless for a rate, misleading for the DAC
 check. Self-test, rate test, every sweep point and the DAC test call it first.
+
+Also (24.09.): the buffer half length is a run-time value, `capture_half_len()`,
+default = the allocation maximum of 1024 samples, so nothing changes unless asked.
+`buf <16..1024>` (stream stopped) sets it; the next `capture_start()` sets the ADC burst
+length (`adc_set_burst_len`), the DMA block and the guard words - which now sit right
+behind the region in use - for that size. All consumers (stats, dump, sweep and rate
+maths, DAC test, self-test mean) read the length. No heap: the array stays static at
+its maximum. The simulator build takes `build.bat sim <n>` to run the ping-pong check
+at another size.
