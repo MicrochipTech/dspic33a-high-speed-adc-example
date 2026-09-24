@@ -1121,8 +1121,11 @@ class FakeTarget:
                               f"adc clock Hz: {int(adc_clock_hz(self.pll1, self.pll2, self.fbdiv))}",
                               "ok (and the rate does not change)"]
             if c == "status":
-                self.counters["blocks"] += 17
-                return True, [f"running: {int(self.running)}", f"blocks: {self.counters['blocks']}",
+                # 'start' streams without anyone counting bursts; keep the
+                # two in step so the ratio stays the 1:2 a sound chain has.
+                self.counters["blocks"] += 34
+                self.counters["bursts"] = self.counters.get("bursts", 0) + 17
+                return True, [f"running: {int(self.running)}", f"blocks: {self.counters['blocks']}", f"bursts: {self.counters.get('bursts', 0)}",
                               "overrun: 0", "late: 0", "missed: 0", "addr_err: 0", "bus_err: 0",
                               f"core: {self.core}", f"input: {self.input}", f"samc: {self.samc}",
                               f"postdiv1: {self.pll1}", f"postdiv2: {self.pll2}",
@@ -1149,6 +1152,12 @@ class FakeTarget:
                 fs = self._fs_hz()
                 window_ns = int(n / fs * 1e9) if fs > 0 else 0
                 self.running = False
+                # One burst is one buffer: two halves, so two blocks. The
+                # stand-in models a chain without the double-booking the
+                # board is suspected of, which is what makes it the
+                # reference the GUI's blocks/bursts chip is read against.
+                self.counters["bursts"] = self.counters.get("bursts", 0) + 1
+                self.counters["blocks"] = self.counters.get("bursts", 0) * 2
                 return True, [f"samples: {n}", f"window ns: {window_ns}",
                               f"ksps measured: {int(fs / 1e3)}",
                               f"ksps nominal: {int(rate_ksps(self.pll1, self.pll2, self.fbdiv))}",
@@ -1350,11 +1359,10 @@ def capture_cycle(target, count: int, settle_s: float = 0.02, blk: bool = False)
     ok, st = target.cmd("status")
     status = parse_status(st) if ok else {}
     # 'snap' measures the window with Timer1, so it knows the delivered
-    # rate better than any nominal figure - carry it through.
-    for line in snap_lines:
-        k, _, v = line.partition(":")
-        if k.strip() == "ksps measured" and v.strip().isdigit():
-            status["ksps_measured"] = int(v.strip())
+    # rate better than any nominal figure, and it also reports the
+    # overruns of that one burst. Carry all of it: none of its keys
+    # collide with 'status', which owns blocks and bursts.
+    status.update(parse_status(snap_lines))
     return samples, status
 
 
@@ -1577,12 +1585,22 @@ def main_gui(args):
                 # assumption about the silicon. Anything else means the
                 # handler books the same event more than once.
                 ratio_chip = ui.chip("blocks/bursts –", color="grey-8").props("dense outline")
+                rate_chip = ui.chip("rate –", color="grey-8").props("dense outline")
                 with ratio_chip:
                     ui.tooltip("Completed buffer halves against started bursts. One burst fills "
                                "one buffer, so it raises HALF once and DONE once: blocks must be "
                                "exactly 2 x bursts. More than that means an event was counted "
-                               "again - the interrupt saw a flag that had not cleared. Grey while "
-                               "the firmware does not report 'bursts' in status.")\
+                               "again - the interrupt saw a flag that had not cleared, and that "
+                               "grows with the overrun rate while a clean burst stays at 1:2. "
+                               "Grey while the firmware does not report 'bursts' in status.")\
+                        .style("font-size: 14px; max-width: 24rem;")
+                with rate_chip:
+                    ui.tooltip("What the burst really delivered, timed with Timer1 by 'snap', "
+                               "against the rate the PLL setting asks for. This is the other half "
+                               "of the same question: if the counters stay at 1:2 and the rate "
+                               "still falls short, the conversions are producing more DMA "
+                               "transfers than results - the silicon's trigger fault - rather "
+                               "than the handler counting one event twice.")\
                         .style("font-size: 14px; max-width: 24rem;")
             with ui.card().classes("w-full rounded-xl p-2"):
                 time_chart = chart("time signal", "sample", "ADC counts", 0, 4096, ACCENT, second_x_name="time")
@@ -2141,6 +2159,14 @@ def main_gui(args):
             else:
                 ratio_chip.text = "blocks/bursts –"
                 ratio_chip.props("color=grey-8")
+            meas, nom = status.get("ksps_measured"), status.get("ksps_nominal")
+            if meas and nom:
+                dev = (meas - nom) / nom * 100.0
+                rate_chip.text = f"rate {meas/1000:.2f} of {nom/1000:.2f} MSPS ({dev:+.1f} %)"
+                rate_chip.props(f'color={"positive" if abs(dev) <= 5.0 else "negative"}')
+            else:
+                rate_chip.text = "rate –"
+                rate_chip.props("color=grey-8")
 
             if metrics:
                 eval_chips["fundamental"].text = f"fundamental {metrics['fund_freq']/1e3:.2f} kHz"
