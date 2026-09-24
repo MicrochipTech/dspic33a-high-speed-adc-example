@@ -700,9 +700,7 @@ enum sweep_load { SWEEP_IDLE = 0, SWEEP_PROCESS = 1, SWEEP_SFR = 2 };
 static bool sweep_point(uint32_t period, uint32_t halves, enum sweep_load load, uint32_t *ticks)
 {
     uint32_t n = SWEEP_WAIT_LIMIT;
-    capture_stop();
-    while (capture_burst_active() && (--n != 0u)) { SIM_DMA_TICK(); }
-    if (n == 0u) { return false; }
+    (void)capture_settle();                                   /* defined start     */
     if (period != 0u) { (void)capture_set_period(period); }   /* idle: applied now */
     counters_clear();
     const uint32_t target = blocks_done + halves;
@@ -713,10 +711,10 @@ static bool sweep_point(uint32_t period, uint32_t halves, enum sweep_load load, 
         SIM_DMA_TICK();
         if (load == SWEEP_PROCESS)      { (void)capture_service(); }
         else if (load == SWEEP_SFR)     { (void)U2STAT; }
-        if (--n == 0u) { capture_stop(); return false; }
+        if (--n == 0u) { (void)capture_settle(); return false; }
     }
     *ticks = timebase_ticks() - t0;   /* unsigned: wrap-safe             */
-    capture_stop();
+    (void)capture_settle();           /* point over: DMA down            */
     return true;
 }
 

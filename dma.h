@@ -31,6 +31,14 @@ void dma0_init(uint32_t trigger, const volatile void *src,
 bool dma0_enabled(void);
 /* Interrupt masked, channel disabled. Nothing restarts after this. */
 void dma0_halt(void);
+
+/* The channel taken down: interrupt masked and its flag cleared, channel
+ * disabled, every status flag cleared, DMA module off. After a test;
+ * dma0_init() before the next one sets everything up again from scratch,
+ * so no test inherits the position or the leftovers of the one before.
+ * Only while no trigger comes (the ADC idle), otherwise a transfer is
+ * torn. */
+void dma0_deinit(void);
 /* Clear the given status flags (DMA0_* above). */
 void dma0_clear(uint32_t flags);
 

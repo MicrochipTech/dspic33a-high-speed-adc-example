@@ -40,6 +40,12 @@ uint8_t adc_core(void)                    { return adc_cur->core; }
 uint8_t adc_dma_trigger(void)             { return adc_cur->dma_trigger; }
 const volatile void *adc_dma_source(void) { return adc_cur->CH0RES; }
 bool adc_ch0_flag(void)                   { return (*adc_cur->IFS & adc_cur->ch0_mask) != 0u; }
+
+void adc_clear_events(void)
+{
+    (void)ADCREG(CH0DATA);
+    *adc_cur->IFS = 0u;
+}
 #include "diag.h"
 
 /* ------------------------------------------------------------------ *

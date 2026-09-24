@@ -45,6 +45,18 @@ void capture_start(void);
 void capture_shutdown(void);
 bool capture_powered(void);
 
+/* The defined idle state every test starts from: stream stopped, the
+ * burst in flight finished (or, if it never ends, aborted by taking the
+ * core down and up), stale ADC events cleared, the DMA channel taken
+ * down (dma0_deinit), ready_half 0. capture_start() sets the channel up
+ * again from scratch (dma0_init) before the first transfer. So every
+ * test ends with the DMA off and starts with a freshly initialised one;
+ * no test inherits the buffer position or the leftovers of the one
+ * before - a concern in particular for the single-conversion source,
+ * whose stop (timer off) can fall anywhere in the buffer. Returns
+ * whether the stream was running, for the caller to restart it. */
+bool capture_settle(void);
+
 /* Switch to another ADC core (1..5) with input pinsel and sample time
  * samc: stream stopped, core down, table row switched, adc_init(), DMA
  * re-armed on that core's trigger and result register, pacing back to

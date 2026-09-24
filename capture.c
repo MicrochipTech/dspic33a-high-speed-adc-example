@@ -132,6 +132,7 @@ volatile int32_t  proc_result   = 0;   /* output of process_buffer()       */
 static volatile bool    run_enabled  = false;
 static volatile bool    burst_active = false;
 static volatile bool    powered      = true;    /* ADC core + CLKGEN6 on */
+static volatile bool    dma_armed    = false;   /* dma0_init() done, not deinit */
 
 /* Channel reconfiguration requested by the console or the self-test,
  * applied by the ISR between two bursts, when the channel is idle. */
@@ -147,17 +148,27 @@ static uint32_t          sccp_ticks     = ADC_SCCP_TICKS;   /* SCCP1 period */
  * from plain back-to-back: both run the converter back-to-back. */
 static volatile uint8_t  pacing_cur     = ADC_TRG2_REPEAT;   /* adc_init() */
 
-/* Stop the stream and wait for the burst in flight to end - at most one
- * buffer, 52 us at 40 MSPS, bounded. Returns whether it was running, so
- * the caller can restart it. For changes that need an idle ADC. */
-static bool quiesce(void)
+/* capture.h: the defined idle state every test starts from. */
+bool capture_settle(void)
 {
     const bool was_running = run_enabled;
     capture_stop();
+    /* The burst in flight ends at a block boundary by itself - at most
+     * one buffer, 52 us at 40 MSPS. One that never ends (no clock, no
+     * trigger) is aborted: core down and up. */
     uint32_t n = WAIT_LIMIT;
     while (burst_active && (--n != 0u)) { SIM_DMA_TICK(); }
+    if (burst_active) {
+        if (powered) { adc_deinit(); (void)adc_reinit(); }
+        burst_active = false;
+    }
+    if (powered) { adc_clear_events(); }
+    dma0_deinit();                    /* channel down; capture_start() */
+    dma_armed  = false;               /* re-initialises it from scratch */
+    ready_half = 0u;
     return was_running;
 }
+static bool quiesce(void) { return capture_settle(); }
 
 /* The ADC clock is not changed under a running core: adc_deinit(),
  * CLKGEN6 divider switched, adc_reinit() and ADRDY back - the same
@@ -216,6 +227,7 @@ void capture_init(void)
      * agree with it. The ADC's burst length (adc_init, SAMPLES_PER_BUF)
      * must equal the block, which the check below pins down. */
     dma0_init(adc_dma_trigger(), adc_dma_source(), dma_buffer.data, sizeof dma_buffer.data);
+    dma_armed = true;
 }
 _Static_assert(sizeof dma_buffer.data == SAMPLES_PER_BUF * sizeof(uint16_t),
                "ADC burst length and DMA buffer size must be the same thing");
@@ -337,6 +349,9 @@ void capture_start(void)
             return;
         }
         powered = true;
+    }
+    if (!dma_armed) {
+        capture_init();               /* fresh DMA set-up for this run  */
     }
     run_enabled = true;
     if (!burst_active) {
@@ -655,7 +670,7 @@ uint32_t capture_selftest(uint32_t *mean)
 {
     const uint8_t  keep_pinsel = adc_pinsel();
     const uint8_t  keep_samc   = adc_samc();
-    const bool     was_running = run_enabled;
+    const bool     was_running = capture_settle();   /* defined start   */
     uint32_t       rc;
 
     (void)capture_set_input(SELFTEST_PINSEL, SELFTEST_SAMC);
@@ -715,10 +730,7 @@ uint32_t capture_selftest(uint32_t *mean)
 /* Delivered rate at `period` (0 = leave the period alone, for B2B). */
 static uint32_t rate_measure(uint32_t period, uint32_t *ksps)
 {
-    uint32_t n = WAIT_LIMIT;
-    capture_stop();
-    while (burst_active && (--n != 0u)) { SIM_DMA_TICK(); }
-    if (n == 0u) { return 6u; }
+    (void)capture_settle();                 /* defined start            */
     if (period != 0u) { (void)capture_set_period(period); }  /* idle: now */
     counters_clear();
     const uint32_t target = blocks_done + RATETEST_HALVES;
@@ -726,7 +738,7 @@ static uint32_t rate_measure(uint32_t period, uint32_t *ksps)
     capture_start();
     const uint32_t rc     = wait_for_blocks(target);
     const uint32_t ticks  = timebase_ticks() - t0;
-    capture_stop();
+    (void)capture_settle();                 /* test over: DMA down      */
     if (rc != 0u) { return rc; }
     *ksps = timebase_ksps(RATETEST_HALVES * SAMPLES_PER_HALF, ticks);
     return 0u;

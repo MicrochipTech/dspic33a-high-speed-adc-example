@@ -68,6 +68,7 @@ volatile uint32_t sim_fault_once = 0;
 static volatile uint16_t *sim_dst      = NULL;
 static uint32_t           sim_half_len = 0;     /* count / 2              */
 static bool               sim_enabled  = false; /* CHEN of the real one   */
+static uint32_t           half         = 0u;    /* next half it fills     */
 
 /* ------------------------------------------------------------------ *
  * The first thing a simulator log must say
@@ -98,6 +99,7 @@ void dma0_init(uint32_t trigger, const volatile void *src,
     (void)src;                            /* no source: a table          */
     sim_dst      = (volatile uint16_t *)dst;
     sim_half_len = dst_bytes / 2u / 2u;   /* 16-bit samples, two halves  */
+    half         = 0u;                    /* buffer start, like the DMA  */
     sim_enabled  = true;
     console_puts("[dma] simulator stand-in armed: halves come from sim_dma_tick()\r\n");
 }
@@ -108,6 +110,11 @@ bool dma0_enabled(void)
 }
 
 void dma0_halt(void)
+{
+    sim_enabled = false;
+}
+
+void dma0_deinit(void)
 {
     sim_enabled = false;
 }
@@ -130,7 +137,6 @@ void dma0_regs_dump(void)
  * ------------------------------------------------------------------ */
 void sim_dma_tick(void)
 {
-    static uint32_t half  = 0u;
     static uint32_t phase = 0u;
 
     if (!sim_enabled || !capture_burst_active()) {

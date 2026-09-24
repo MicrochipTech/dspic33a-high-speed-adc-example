@@ -61,12 +61,9 @@ uint32_t dactest_run(uint32_t halves)
     console_kv("[dactest]   expected step per sample LSb", step_exp);
     console_kv("[dactest]   jump limit LSb", jump_limit);
 
-    /* Stop, let the burst in flight end, then measure from a clean start. */
-    capture_stop();
-    {
-        uint32_t n = WAIT_LIMIT;
-        while (capture_burst_active() && (--n != 0u)) { SIM_DMA_TICK(); }
-    }
+    /* The defined start: stream stopped, DMA at the buffer start, no
+     * leftovers from the tests before (capture_settle). */
+    (void)capture_settle();
     counters_clear();
 
     uint32_t mn = 0xFFFFu, mx = 0u, reversals = 0u, jumps = 0u;
@@ -83,8 +80,8 @@ uint32_t dactest_run(uint32_t halves)
     while (got < halves) {
         SIM_DMA_TICK();
         if (blocks_done == last) {
-            if (!dma0_enabled()) { capture_stop(); console_puts("[dactest] DMA channel switched itself off\r\n"); return 8u; }
-            if (--n == 0u)       { capture_stop(); console_puts("[dactest] no data\r\n"); return 6u; }
+            if (!dma0_enabled()) { (void)capture_settle(); console_puts("[dactest] DMA channel switched itself off\r\n"); return 8u; }
+            if (--n == 0u)       { (void)capture_settle(); console_puts("[dactest] no data\r\n"); return 6u; }
             continue;
         }
         last = blocks_done;
@@ -114,7 +111,7 @@ uint32_t dactest_run(uint32_t halves)
         }
     }
     const uint32_t ticks = timebase_ticks() - t0;
-    capture_stop();
+    (void)capture_settle();                 /* test over: DMA down      */
 
     const uint32_t samples = halves * SAMPLES_PER_HALF;
     const uint32_t ksps    = timebase_ksps(samples, ticks);

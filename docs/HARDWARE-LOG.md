@@ -341,3 +341,14 @@ ping-pong halves are checked for the DAC signal. Built:
 Open until the board says: whether DACCTRL1/DAC2 come up on CLKGEN7 at 320 MHz (the
 datasheet's design point is 400 MHz), whether the touch pad's network loads the DAC
 buffer, and whether ADC 5 reads the pin the DAC drives (AD5AN3 shares the pad).
+
+Also (24.09.): every test now starts from a defined state, `capture_settle()`: stream
+stopped, the burst in flight finished (or aborted by taking the core down and up if it
+never ends), stale CH0RDY and event flags cleared, the DMA channel taken down
+(`dma0_deinit()`: interrupt masked, channel and module off, flags cleared), `ready_half`
+0; the next `capture_start()` runs `dma0_init()` again from scratch. Every test ends
+with the DMA off and begins with a freshly initialised one (the user's rule). Reason
+(the user's question): a burst always ends at a block boundary, but the
+single-conversion source stops wherever its timer is switched off, and the next test
+would have started in a half-filled half - harmless for a rate, misleading for the DAC
+check. Self-test, rate test, every sweep point and the DAC test call it first.

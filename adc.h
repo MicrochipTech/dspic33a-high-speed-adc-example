@@ -45,6 +45,9 @@ uint8_t  adc_core(void);
 uint8_t  adc_dma_trigger(void);              /* DMA_SEL code of the active core */
 const volatile void *adc_dma_source(void);   /* &ADxCH0RES of the active core   */
 bool     adc_ch0_flag(void);                 /* its CH0 interrupt flag          */
+/* Leftovers of a stopped stream: CH0RDY (cleared by reading CH0DATA) and
+ * the core's event flags. Between tests, with the core idle. */
+void     adc_clear_events(void);
 
 /* ADC core ADC_INSTANCE, channel 0, Integration mode, CNT = SAMPLES_PER_BUF,
  * conversions inside a burst paced by the ADC's repeat timer with period
