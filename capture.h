@@ -76,6 +76,12 @@ bool capture_select_core(uint8_t core, uint8_t pinsel, uint8_t samc);
 /* Let the current burst finish and do not restart it. */
 void capture_stop(void);
 bool capture_running(void);
+/* True if the overrun brake fired during the last measurement: the
+ * handler saw more overruns than any usable rate can produce, masked
+ * its own interrupt and took the channel down, so that the storm could
+ * not lock the CPU out of the main loop. The rate that caused it is
+ * unusable by definition. Cleared by counters_clear(). */
+bool capture_overrun_aborted(void);
 /* True from the burst trigger until the DMA DONE event. */
 bool capture_burst_active(void);
 

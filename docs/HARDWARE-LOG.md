@@ -517,3 +517,94 @@ been on the board.**
 The expected log is much shorter than run 7's: the boot prints about a dozen lines
 instead of two full register snapshots and five rate-test blocks per phase, and the
 register dump is a command (`regs`) rather than an automatism.
+
+## 2026-09-24, run 8 - master afc5e00 (+local changes), build 11:31:46 - THE CONSOLE WORKS
+
+`RCON = EXTR`. The first run of the reworked firmware, and the first run in which anyone
+typed anything at the board.
+
+**The console receives.** `help` answered with the full command list, `test all` started.
+That closes the question the last three runs left open: **the bytes do reach RD1, and
+`rx = 0` in runs 6 and 7 was the receive interrupt (priority 1) being starved behind the
+DMA interrupt (priority 4, 1.6 million per second at full rate)**. Pin routing, PPS,
+terminal and COM port were never the problem. The idle boot was worth it on its own: from
+here on experiments cost a command, not a build and a colleague.
+
+**Self-test 3829** on the internal reference at the slowest clock setting. PASS.
+
+**`test clock` passed all fifteen ratios** - every one written, read back identically,
+`DIVSWEN` cleared, `CLKRDY` came, the ADC core came back with `ADRDY`. And that turned out
+to be a **false positive**: it proves the register holds the value, nothing more.
+
+**The sweep showed the rate does not follow the divider at all.** Twelve rows before the
+log was cut, every one of them at the full rate:
+
+```
+ratio 1000 (read back 1000)  ksps nominal 4000  measured 39729   overrun 73157/80633/77511  missed 1735
+ratio  900 (read back  900)  ksps nominal 4444  measured 39818   overrun 72663/79459/77114  missed 1705
+ratio  800 (read back  800)  ksps nominal 5000  measured 39693   overrun 74019/89791/76741  missed 1929
+ratio  700 (read back  700)  ksps nominal 5714  measured 40675   overrun 66681/89308/75017  missed 1925
+ratio  600 (read back  600)  ksps nominal 6666  measured 39248   overrun 76987/76983/76727  missed 1568
+ratio  500 (read back  500)  ksps nominal 8000  measured 39311   overrun 77307/84700/73206  missed 1754
+ratio  450 (read back  450)  ksps nominal 8888  measured 40356   overrun 69259/69892/69215  missed 1930
+ratio  400 (read back  400)  ksps nominal 10000 measured 40338   overrun 69762/86856/76987  missed 1802
+ratio  350 (read back  350)  ksps nominal 11428 measured 40390   overrun 67316/67767/67359  missed 1921
+ratio  300 (read back  300)  ksps nominal 13333 measured 40761   overrun 65538/77950/77035  missed 1346
+ratio  250 (read back  250)  ksps nominal 16000 measured 40433  overrun 64324/64459/63702  missed 1913
+ratio  200 (read back  200)  ksps nominal 20000 measured 41119   overrun 61112/90055/77496  missed 1552
+```
+
+Timer check 1250001 of 1250000, so the stopwatch is right. Asked for 4 MSPS, got 39.7.
+The scatter between rows is about 5 % and does not correlate with the ratio - it is run to
+run noise, not a trend. Overrun stays at 3 to 4.5 % of 2 048 000 samples throughout, and
+`missed` at 1300 to 1930 of 2000, exactly as in runs 4 to 7.
+
+**The cause, found in the datasheet afterwards (12.4.2 step 4 and Example 12-2, p771).**
+The documented procedure changes the divider **with the clock generator running**:
+
+```
+CLK6CONbits.ON = 1;                  // the generator is ON throughout
+CLK6DIVbits.INTDIV  = 1;             // 4a: integer factor
+CLK6DIVbits.FRACDIV = 128;           // 4b: fraction
+CLK6CONbits.DIVSWEN = 1;             // 4c: apply
+while (CLK6CONbits.DIVSWEN != 0);
+```
+
+Our sequence switched CLKGEN6 **off** first (`ON = 0`), wrote the divider, switched it back
+on and then set `DIVSWEN`. The bit cleared, `CLKRDY` came, the register kept the value -
+and the divide factor was never taken over. Fixed: the generator stays on, `INTDIV` is
+written before `FRACDIV`, then `DIVSWEN`. The ADC core and the DMA channel are still taken
+down by the caller; they are what needs protecting, the generator is not.
+
+**Second finding in the same paragraph:** "FRACDIV will not work if INTDIV is configured
+to 0" (12.4.2 4b). INTDIV is ratio/2, so **no ratio between 1 and 2 can be realised** -
+`FRACDIV` alone does nothing and the clock comes out undivided. Ratios 1.25 and 1.5 are
+therefore out of the ladder, 20 MSPS is the fastest divided rate, and the step above it is
+the undivided 40 MSPS. `clock_adc_set_div()` now refuses 101..199 with `CLKDIV_INTDIV0`
+instead of silently running at full speed. Ratio 1 is written as both fields 0.
+
+**Not known yet:** the log ends inside the sweep, so there is no DAC test result and no
+verdict block. The three remaining rows (150, 125, 100) are gone from the ladder anyway.
+
+Nothing of the fix has been on the board.
+
+**Why the run stops dead, and the brake against it.** After the ratio-200 row the log ends
+mid-line and the parser stops answering - the same picture as run 7's DAC test. The
+explanation that fits everything: at the undivided rate the overrun interrupt fires every
+625 ns, which is 125 CPU cycles at 200 MHz, and an interrupt entry with its context save
+plus the handler costs about the same. The CPU sits exactly on the edge of never returning
+to the main loop, and twice it fell off. No trap, no reset, no banner, because the CPU is
+executing valid code - it just never leaves the handler; and the console dies with it
+because U2RX is priority 1 and the DMA channel 4. Run 6 shows the same effect one step
+weaker: `missed` 96 %, so the main loop still got 4 % of the halves.
+
+The overrun event cannot be masked on its own (13.6.1; `DMA0CH` has HALFEN, DONEEN and
+MATCHEN only). So the handler stops itself: past `OVERRUN_LIMIT` (500 000) in one
+measurement it masks its own interrupt, takes the channel down and ends the stream
+(`capture_overrun_aborted()`). A healthy full-rate point produces about 82 000 overruns per
+2000 halves, so the limit never fires in normal use; a runaway reaches it within a third of
+a second. The sweep row, the rate test and the DAC test all report it instead of the board
+going quiet. `counters_clear()` re-arms it, and every test calls that first.
+
+This does not make a flooding rate usable - it makes it survivable, so the run continues
+and the log gets written. The cure for the flood itself is the divider fix above.

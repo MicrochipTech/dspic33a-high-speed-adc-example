@@ -44,6 +44,7 @@ uint32_t clock_cpu_hz(void);
 #define CLKDIV_CLKRDY       4u
 #define CLKDIV_LOST         5u
 #define CLKDIV_ADC          6u   /* capture.c: core did not come back */
+#define CLKDIV_INTDIV0      7u   /* ratio 1 < r < 2: FRACDIV alone does nothing */
 uint32_t    clock_adc_set_div(uint32_t ratio_h);
 const char *clock_adc_div_error(uint32_t rc);
 /* CLKGEN6 off (the ADC has no clock then; the core must be off first) and

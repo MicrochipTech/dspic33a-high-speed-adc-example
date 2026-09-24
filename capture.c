@@ -145,6 +145,30 @@ static volatile uint8_t samc_next      = ADC_SAMC;
  * did (capture_clkdiv_wanted vs capture_clkdiv). */
 static uint32_t          clkdiv_cur     = ADC_CLKDIV;
 
+/* Emergency brake against the overrun interrupt storm.
+ *
+ * At the undivided rate the DMA loses about 4 % of the samples, and
+ * every lost sample raises the channel interrupt: 1.6 million per
+ * second, one every 625 ns, which is 125 CPU cycles at 200 MHz. An
+ * interrupt entry with its context save plus this handler costs about
+ * as much, so the CPU sits exactly on the edge of never returning to
+ * the main loop - and twice it fell off: run 7 stopped in the DAC test,
+ * run 8 in the sweep, both silently, both with the console dead (U2RX
+ * is priority 1, the DMA channel 4). There is no enable bit for the
+ * overrun event on its own (13.6.1; DMA0CH has HALFEN, DONEEN and
+ * MATCHEN only), so it cannot be masked away.
+ *
+ * The handler is the only code still running when that happens, so the
+ * handler is what stops it: past OVERRUN_LIMIT in one measurement it
+ * masks its own interrupt, takes the channel down and ends the stream.
+ * The rate is then reported as unusable instead of the board going
+ * quiet. The limit is well above what a healthy full-rate point
+ * produces (about 82 000 per 2000 halves, run 8) and is reached within
+ * a third of a second once the storm runs away. counters_clear(), which
+ * every test calls first, re-arms it. */
+#define OVERRUN_LIMIT     500000u
+static volatile bool     overrun_abort  = false;
+
 /* capture.h: the defined idle state every test starts from. */
 bool capture_settle(void)
 {
@@ -264,6 +288,16 @@ void dma0_event(uint32_t st)
          * (p816): the bus did not keep up. This is the measurement. */
         dma_overrun++;
         dma0_clear(DMA0_OVERRUN);
+        if (dma_overrun >= OVERRUN_LIMIT) {
+            /* The brake (see OVERRUN_LIMIT above). Masking the interrupt
+             * and disabling the channel here, from inside the storm, is
+             * what gives the main loop the CPU back. */
+            dma0_halt();              /* IEC2.DMA0IE = 0, CHEN = 0      */
+            run_enabled   = false;
+            burst_active  = false;
+            overrun_abort = true;
+            return;
+        }
     }
     if (st & DMA0_ADRERR) {
         dma_addr_err++;
@@ -376,6 +410,11 @@ bool capture_running(void)
     return run_enabled;
 }
 
+bool capture_overrun_aborted(void)
+{
+    return overrun_abort;
+}
+
 bool capture_burst_active(void)
 {
     return burst_active;
@@ -417,26 +456,33 @@ uint8_t capture_samc(void)   { return adc_samc(); }
  * the fractional field is ignored and only INTDIV counts. Nothing else
  * in the log answers that question.
  *
+ * There is a gap between 20 and 40 MSPS and it is not an oversight: the
+ * datasheet says FRACDIV does nothing while INTDIV is 0 (12.4.2 4b),
+ * so no ratio between 1 and 2 can be realised at all. 20 MSPS is the
+ * fastest divided rate; the next step up is the undivided clock.
+ *
  * 500 = 8 MSPS is the rate the customer's application needs; it is in
  * the ladder for that reason and for no other.
  * ------------------------------------------------------------------ */
 static const uint32_t sweep_ratios[] = {
     1000u,  /* /10   32.0 MHz   4.00 MSPS  slowest the ADC may run       */
-     900u,  /* /9    35.6 MHz   4.44 MSPS                                */
+     900u,  /* /9    35.6 MHz   4.44 MSPS  INTDIV 4, FRACDIV 256         */
      800u,  /* /8    40.0 MHz   5.00 MSPS                                */
-     700u,  /* /7    45.7 MHz   5.71 MSPS                                */
+     700u,  /* /7    45.7 MHz   5.71 MSPS  INTDIV 3, FRACDIV 256         */
      600u,  /* /6    53.3 MHz   6.67 MSPS                                */
      500u,  /* /5    64.0 MHz   8.00 MSPS  the customer's floor          */
-     450u,  /* /4.5  71.1 MHz   8.89 MSPS  fractional, between 4 and 5   */
+     450u,  /* /4.5  71.1 MHz   8.89 MSPS  INTDIV 2, FRACDIV 128         */
      400u,  /* /4    80.0 MHz  10.00 MSPS                                */
-     350u,  /* /3.5  91.4 MHz  11.43 MSPS  fractional                    */
-     300u,  /* /3   106.7 MHz  13.33 MSPS                                */
-     250u,  /* /2.5 128.0 MHz  16.00 MSPS  fractional, between 2 and 3   */
-     200u,  /* /2   160.0 MHz  20.00 MSPS                                */
-     150u,  /* /1.5 213.3 MHz  26.67 MSPS  INTDIV 0, fraction alone      */
-     125u,  /* /1.25 256.0 MHz 32.00 MSPS  INTDIV 0, fraction alone      */
-     100u   /* /1   320.0 MHz  40.00 MSPS  undivided                     */
+     350u,  /* /3.5  91.4 MHz  11.43 MSPS  INTDIV 1, FRACDIV 384         */
+     300u,  /* /3   106.7 MHz  13.33 MSPS  INTDIV 1, FRACDIV 256         */
+     250u,  /* /2.5 128.0 MHz  16.00 MSPS  INTDIV 1, FRACDIV 128         */
+     200u,  /* /2   160.0 MHz  20.00 MSPS  INTDIV 1, FRACDIV 0 - the
+             *      fastest the divider can do: anything between this and
+             *      undivided would need INTDIV 0, and FRACDIV does not
+             *      work then (12.4.2 4b)                                */
+     100u   /* /1   320.0 MHz  40.00 MSPS  undivided, both fields 0      */
 };
+
 
 uint32_t capture_set_clkdiv(uint32_t ratio_h)
 {
@@ -480,6 +526,7 @@ const volatile uint16_t *capture_completed_half(void)
 
 void counters_clear(void)
 {
+    overrun_abort = false;            /* re-arm the brake               */
     dma_overrun = 0; dma_addr_err = 0; dma_bus_err = 0;
     late_service = 0; proc_missed = 0;
     /* Halves completed up to now are not "missed" from here on. Without

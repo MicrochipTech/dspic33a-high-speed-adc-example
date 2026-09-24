@@ -735,6 +735,9 @@ static bool sweep_point(uint32_t halves, enum sweep_load load, uint32_t *ticks)
         SIM_DMA_TICK();
         if (load == SWEEP_PROCESS)      { (void)capture_service(); }
         else if (load == SWEEP_SFR)     { (void)U2STAT; }
+        /* The brake fired: this rate floods the CPU with overrun
+         * interrupts and is unusable. Not an error of the point. */
+        if (capture_overrun_aborted()) { (void)capture_settle(); return false; }
         if (--n == 0u) { (void)capture_settle(); return false; }
     }
     *ticks = timebase_ticks() - t0;   /* unsigned: wrap-safe             */

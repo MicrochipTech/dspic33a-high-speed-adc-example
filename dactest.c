@@ -100,6 +100,7 @@ uint32_t dactest_run(uint32_t halves)
     while (got < halves) {
         SIM_DMA_TICK();
         if (blocks_done == last) {
+            if (capture_overrun_aborted()) { (void)capture_settle(); console_puts("[dactest] stopped by the overrun brake - this rate floods the CPU with interrupts\r\n"); return 9u; }
             if (!dma0_enabled()) { (void)capture_settle(); console_puts("[dactest] DMA channel switched itself off\r\n"); return 8u; }
             if (--n == 0u)       { (void)capture_settle(); console_puts("[dactest] no data\r\n"); return 6u; }
             continue;

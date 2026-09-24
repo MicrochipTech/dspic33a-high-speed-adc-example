@@ -149,12 +149,17 @@ customer's application needs.
 2. **Does `FRACDIV` divide, or only `INTDIV`?** Ratio 1 is `INTDIV 0, FRACDIV 256` by the
    formula, and that ran at full rate - which is also what an ignored `FRACDIV` would look
    like. The fractional rows of the sweep settle it.
-3. **Why is `rx` 0?** Either the bytes never reach RD1, or the receive interrupt is
-   starved. The idle boot separates the two.
+3. ~~Why is `rx` 0?~~ **Answered in run 8:** the bytes do reach RD1. `help` and `test all`
+   worked from the idle boot, so `rx = 0` in runs 6 and 7 was the receive interrupt
+   (priority 1) starved behind the DMA interrupt (priority 4). Nothing to fix in the
+   wiring; the fix is not to measure at a rate that floods the CPU.
 4. **What stops the DAC test?** Run 7 stopped silently between the last header line and
    the first result line, twice, with two different terminals. Every wait on that path is
    bounded, so it is not an ordinary wait. `dactest.c` now traces and flushes each step.
 5. At 40 MSPS about 4 % of the samples are lost as OVERRUN, and every overrun raises the
-   DMA interrupt. The overrun event has no enable bit of its own (DS70005591D 13.6.1;
-   `DMA0CH` has HALFEN/DONEEN/MATCHEN only), so it cannot be masked - the remedy is to run
-   at a rate without overruns, which is what the sweep looks for.
+   DMA interrupt - 1.6 million per second, one every 625 ns, against an interrupt entry
+   that costs about as much. That is why runs 7 and 8 stopped dead with the console gone:
+   the CPU never left the handler. The event has no enable bit of its own (DS70005591D
+   13.6.1; `DMA0CH` has HALFEN/DONEEN/MATCHEN only), so the handler brakes itself past
+   `OVERRUN_LIMIT` and the rate is reported as unusable. The real remedy is to measure
+   where there are no overruns, which is what the sweep looks for.
