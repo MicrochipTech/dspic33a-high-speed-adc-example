@@ -76,6 +76,7 @@
 #include "console.h"
 #include "sim.h"
 #include "cmd_parser.h"
+#include "crc16.h"
 
 /* ------------------------------------------------------------------ *
  * UART2 transport
@@ -207,11 +208,32 @@ void console_sync_baud(void)
 /* Output sink for the parser: take what fits into the transmit FIFO and
  * report how much that was. The parser re-offers the rest (see
  * cmd_parser.h, "Flow control"). */
+static void console_yield(void);
+
 static size_t console_write(const char *data, size_t len)
 {
     size_t n = 0;
     while ((n < len) && !U2STATbits.TXBF) {
         U2TXB = (uint8_t)data[n++];
+    }
+    return n;
+}
+
+/* Bytes that are not a string (console.h). The wait for FIFO space is
+ * the same one the parser does, and it looks for Ctrl+C in the same
+ * place - a 4 KB block takes 360 ms at 115200 baud and must stay
+ * abortable. An abort ends the block early and the caller finishes the
+ * frame anyway, so the client sees a short read, not silence. */
+size_t console_write_raw(const uint8_t *data, size_t len)
+{
+    size_t n = 0;
+    while (n < len) {
+        if (U2STATbits.TXBF) {
+            console_yield();          /* FIFO full: drain, watch Ctrl+C */
+            if (cmd_parser_aborted()) { break; }
+            continue;
+        }
+        U2TXB = data[n++];
     }
     return n;
 }
@@ -1392,6 +1414,94 @@ static void cmd_rate_fn(int argc, char **argv)
 }
 CMD_DEFINE(rate, "rate", cmd_rate_fn, "rate <ksps> - the sample rate, 4000..40000");
 
+/* ------------------------------------------------------------------ *
+ * "blk <n>" - the sample block as binary
+ *
+ * `dump` prints decimal text: about 5.9 bytes per sample, so a full
+ * buffer is 12 KB and takes a second at 115200 baud. The same block in
+ * binary is 4 KB and 360 ms, and it arrives as one contiguous window
+ * rather than a half. The frame is documented in
+ * docs/PLAN-BINARY-TRANSFER.md and decoded by parse_blk_frame() in
+ * tools/adc_gui.py; both ends are pinned to CRC-16/CCITT-FALSE by the
+ * check value 0x29B1 of "123456789".
+ *
+ *   BIN n=<count> p1=<postdiv1> p2=<postdiv2> samc=<samc> in=<pinsel>CRLF
+ *   <2*count bytes, uint16 little endian, 12-bit value in bits 11:0>
+ *   CRLF CRC <hex4> CRLF
+ *
+ * The header is text so that a human on a terminal sees what is coming
+ * and a machine knows exactly how many bytes to read. On failure the
+ * header says n=0, no payload follows, and the command fails - the
+ * client's synchronisation on the prompt and ACK/NAK does not change.
+ * ------------------------------------------------------------------ */
+#define BLK_CHUNK   64u              /* bytes per console_write_raw call */
+
+static void cmd_blk_fn(int argc, char **argv)
+{
+    const uint32_t total = 2u * capture_half_len();
+    uint32_t n = total;
+    if ((argc > 2) || ((argc == 2) && !arg_u32(argv[1], 1u, total, &n))) {
+        usage("blk [n 1..2048] - the sample block as binary, with a CRC");
+        return;
+    }
+
+    /* One fresh burst, stopped by the DMA interrupt, so the block is a
+     * contiguous window and not a half that the DMA is still writing. */
+    const uint32_t rc = capture_oneshot();
+    (void)capture_settle();
+
+    char head[96];
+    char *p = copy_str(head, "BIN n=");
+    p = u32_to_str(p, (rc == 0u) ? n : 0u);
+    p = copy_str(p, " p1=");   p = u32_to_str(p, clock_adc_pll_postdiv1());
+    p = copy_str(p, " p2=");   p = u32_to_str(p, clock_adc_pll_postdiv2());
+    p = copy_str(p, " samc="); p = u32_to_str(p, capture_samc());
+    p = copy_str(p, " in=");   p = u32_to_str(p, capture_pinsel());
+    copy_str(p, "\r\n");
+    cmd_parser_write(head);
+
+    if (rc != 0u) {
+        cmd_parser_write("CRC 0000\r\n");
+        cmd_parser_fail();
+        return;
+    }
+
+    /* The payload, and the CRC computed while it goes out - no second
+     * copy of the buffer anywhere. The device is little endian, so the
+     * low byte of each sample is sent first, which is what the client
+     * reads with dtype "<u2". */
+    const volatile uint16_t *b = capture_buffer();
+    uint8_t  chunk[BLK_CHUNK];
+    uint16_t crc  = CRC16_INIT;
+    uint32_t sent = 0u;
+    for (uint32_t i = 0; i < n; ) {
+        uint32_t k = 0u;
+        while ((k < (BLK_CHUNK - 1u)) && (i < n)) {
+            const uint16_t v = b[i++];
+            chunk[k++] = (uint8_t)(v & 0xFFu);
+            chunk[k++] = (uint8_t)((v >> 8) & 0x0Fu);   /* 12-bit result */
+        }
+        crc = crc16_ccitt_false(crc, chunk, k);
+        sent += (uint32_t)console_write_raw(chunk, k);
+        if (cmd_parser_aborted()) { break; }
+    }
+
+    char tail[32];
+    p = copy_str(tail, "\r\nCRC ");
+    for (int d = 12; d >= 0; d -= 4) {
+        const uint32_t nib = ((uint32_t)crc >> d) & 0xFu;
+        *p++ = (char)((nib < 10u) ? ('0' + nib) : ('A' + (nib - 10u)));
+    }
+    copy_str(p, "\r\n");
+    cmd_parser_write(tail);
+
+    /* A short block is not a protocol error - the client compares the
+     * byte count against the header and says so - but it is not a
+     * success either. */
+    if (sent != (2u * n)) { cmd_parser_fail(); }
+}
+CMD_DEFINE(blk, "blk", cmd_blk_fn, "blk [n] - the sample block as binary, with a CRC");
+
 static void cmd_reset_fn(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -1440,6 +1550,7 @@ void cli_init(void)
     (void)cmd_register(&cmd_dactest);
     (void)cmd_register(&cmd_snap);
     (void)cmd_register(&cmd_rate);
+    (void)cmd_register(&cmd_blk);
     (void)cmd_register(&cmd_reset);
 
     /* Banner, once at start-up. A human sees what is talking and which

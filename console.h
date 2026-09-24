@@ -5,7 +5,8 @@
 #define CONSOLE_H
 
 #include <stdint.h>
-#include <stdbool.h>   /* console_sweep() takes a bool */
+#include <stdbool.h>
+#include <stddef.h>   /* console_sweep() takes a bool */
 
 /* UART2 up on the FRC, before the clocks are touched. From here on
  * console_puts() works. */
@@ -25,6 +26,15 @@ void console_force_up(void);
  * a message must call this first, or the tail of the message goes out
  * at the wrong rate. */
 void console_flush(void);
+
+/* Send bytes that are not a C string. cmd_parser_write() takes a
+ * NUL-terminated string and therefore cannot carry a 0x00 byte, which
+ * every block of samples is full of. Same transmit FIFO loop as the
+ * parser's own sink, with the same Ctrl+C check while it drains: a block
+ * that is aborted simply ends early, the CRC line and the prompt still
+ * come, and the client reports a short read rather than hanging.
+ * Returns how many bytes went out. */
+size_t console_write_raw(const uint8_t *data, size_t len);
 /* Blocking trace output, safe from main() and from fail(). */
 void console_puts(const char *s);
 void console_kv(const char *key, uint32_t v);        /* "key: 123"        */

@@ -2060,7 +2060,9 @@ def main_gui(args):
         try:
             count = int(count_sel.value)
             buf = state["buf_size"]
-            count = min(count, buf if state["use_blk"] else buf // 2)
+            # Both paths deliver the whole buffer now: "blk" always did,
+            # and "dump" follows a "snap", after which all of it is valid.
+            count = min(count, buf)
             samples, status = await run.io_bound(capture_cycle, t, count, 0.02, state["use_blk"])
             # The board reports its own clock; fall back to the setting.
             fs = float(status.get("ksps_nominal", 0)) * 1e3

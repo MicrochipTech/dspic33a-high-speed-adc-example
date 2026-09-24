@@ -50,6 +50,7 @@
 #include "diag.h"
 #include "timebase.h"
 #include "console.h"
+#include "crc16.h"
 #include "sim.h"
 
 /* Status line every ~5 s for the first minute, then every ~60 s, while a
@@ -110,6 +111,13 @@ int main(void)
      * itself off it, so starting it here costs nothing and means every
      * measurement has a clock. */
     timebase_init();
+    /* One line, because the block transfer stands or falls with both ends
+     * agreeing on the CRC variant, and "CRC-16 CCITT" names at least four
+     * of them. The check value of "123456789" is what pins it down; the
+     * Python side asserts the same constant. */
+    console_puts(crc16_selfcheck()
+                 ? "[boot] crc16/ccitt-false self-check: ok (0x29B1)\r\n"
+                 : "[boot] crc16/ccitt-false self-check: FAILED\r\n");
     adc_init(ADC_PINSEL, ADC_SAMC);
     boot_mark(6u);
     capture_init();

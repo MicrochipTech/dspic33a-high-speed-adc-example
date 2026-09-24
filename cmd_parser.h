@@ -152,7 +152,9 @@ extern "C" {
    without growing the per-line stack frame much - it's an array of pointers
    on the dispatcher's stack frame, not static RAM. */
 #define CMD_PARSER_MAX_ARGS      12
-#define CMD_PARSER_MAX_COMMANDS  24   /* upstream: 16; raised 24.09.2026 for core/dac/dactest (CLAUDE.md) */
+#define CMD_PARSER_MAX_COMMANDS  28   /* upstream: 16; raised 24.09.2026 - the table
+                                       * was exactly full at 24 and cmd_register()
+                                       * fails silently once it is (CLAUDE.md) */
 #define CMD_PARSER_LINE_MAX_LEN  64
 
 /* History is a single packed byte pool, not one fixed-size slot per line: each
