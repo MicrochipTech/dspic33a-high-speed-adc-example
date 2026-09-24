@@ -878,3 +878,53 @@ Next at the board: `dac on 64` then `test dac`. SLPDAT is the step per DAC clock
 period - larger is faster - so 64 shortens the period from 439 us to 55 us and one buffer
 covers nearly two full periods instead of a fifth of one slope. Then a triangle has to be
 visible in the raw dump by eye.
+
+## 2026-09-24, run 13 - master b57e310, build 13:22:59 - THE CHAIN IS PROVEN
+
+`dac on 64`, `test dac`. The raw dump is the result this project exists for:
+
+```
+2418 2541 2603 2714 2816 2960 3044 3128 3260 3386 3496 3581 3706 3789 3851
+3688 3581 3512 3397 3281 3195 3063 2998 2861 2755 2666 2539 2416
+```
+
+A triangle. Clean rise to 3851, clean fall to 2416, one turning point, largest step between
+two neighbouring samples 113 counts out of a swing of 1440, no jump anywhere, no gap.
+
+**The ADC converts a real changing signal and the DMA places every result in the ping-pong
+buffer, complete and in the order it was converted.** That is the statement the customer
+needs, and it is now on silicon.
+
+**Second finding, and it overturns eleven runs of measurements:**
+
+```
+window ns 513280   sample rate ksps in this burst: 3990   (nominal 4081)
+```
+
+2.2 % off the setting. **The PLL rate control works.** The 42 to 44 MSPS that every sweep from
+run 8 onwards reported at every setting are an artefact of measuring while the CPU drowns in
+the overrun interrupt. A single clean burst with Timer1 around it says something completely
+different - and it says the ADC follows the PLL.
+
+**The FAIL was our own yardstick.** The test compared the swing against a triangle period
+computed from the DAC registers, 54.9 us at slpdat 64. The capture contains exactly one period
+in 513 us, so the real period is about 449 us - a factor of eight out. And the triangle runs
+between 2416 and 3851: the upper end matches `DACDAT` 3840 exactly, the lower end has nothing
+to do with `DACLOW` 256. Both are properties of the DAC that `dac2_period_ns()` models wrongly,
+and a chain that works must not fail on them.
+
+Changed in reaction (no board run yet):
+
+- **The DAC test judges from the data.** The period is derived from the distance between
+  turning points and printed next to the computed one, which is marked as not matching this
+  hardware and is not judged against. What is judged is what the test is for: a changing
+  signal (peak-to-peak above a floor) whose steps between neighbouring samples stay below an
+  eighth of the swing. Relative, so it holds at any rate and any triangle speed - the absolute
+  limits only ever fitted one setting. Run 13's numbers pass it: step limit 180, largest step
+  113.
+- **The sweep measures its rate on a clean single burst.** Each row now runs one `capture_
+  oneshot()` with Timer1 around it before the three loaded runs, and prints `clean` next to
+  `loaded`. The difference between the two columns is the artefact itself, so both stay in the
+  table.
+
+Both builds `-Wall -Wextra` clean.

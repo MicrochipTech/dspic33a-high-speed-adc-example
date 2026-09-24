@@ -795,6 +795,24 @@ static bool sweep_row(struct pll_step st, uint32_t halves)
         return false;
     }
 
+    /* The rate, measured on ONE burst with nothing else running. The
+     * three loaded runs below cannot measure it: at a rate that overruns,
+     * the CPU drowns in the overrun interrupt and the loaded figure came
+     * out ten times too high at every setting (runs 8 to 11 reported
+     * 42 MSPS everywhere, while a clean burst at the same setting
+     * measured 3990 ksps against 4081 nominal - run 13). Both are printed,
+     * because the difference is the artefact. */
+    uint32_t clean_ksps = 0u;
+    {
+        const uint32_t nn = 2u * capture_half_len();
+        const uint32_t t0 = timebase_ticks();
+        if (capture_oneshot() == 0u) {
+            const uint32_t dt = timebase_ticks() - t0;
+            clean_ksps = timebase_ksps(nn, dt);
+        }
+        (void)capture_settle();
+    }
+
     uint32_t ov[3], ticks[3] = { 0, 0, 0 };
     bool     ok[3];
     uint32_t late = 0, missed = 0;
@@ -807,12 +825,13 @@ static bool sweep_row(struct pll_step st, uint32_t halves)
     const uint32_t meas_ksps = ok[0] ? timebase_ksps(halves * capture_half_len(), ticks[0]) : 0u;
     /* Longest line: 150 characters plus NUL; every number is at most
      * 10 digits, "STOPPED" is shorter. */
-    char line[176];
+    char line[208];
     char *p = copy_str(line, "postdiv ");      p = u32_to_str(p, st.p1);
     *p++ = '/';                                p = u32_to_str(p, st.p2);
     p = copy_str(p, "  adc clock Hz ");        p = u32_to_str(p, clock_adc_hz());
-    p = copy_str(p, "  ksps nominal ");        p = u32_to_str(p, capture_nominal_ksps(0u));
-    p = copy_str(p, " measured ");             p = u32_to_str(p, meas_ksps);
+    p = copy_str(p, "  ksps nom ");            p = u32_to_str(p, capture_nominal_ksps(0u));
+    p = copy_str(p, " clean ");                p = u32_to_str(p, clean_ksps);
+    p = copy_str(p, " loaded ");               p = u32_to_str(p, meas_ksps);
     p = copy_str(p, "  overrun idle/process/sfr ");
     for (int l = 0; l < 3; l++) {
         if (l) { *p++ = '/'; }
@@ -837,7 +856,10 @@ void console_sweep(uint32_t halves, bool choose)
                  "[sweep] so a failure there is the chain, not the rate\r\n"
                  "[sweep] idle = CPU polls RAM only, process = main-loop processing, sfr = CPU polls an SFR\r\n"
                  "[sweep] overrun must be 0 for a usable rate; late/missed are from the process run\r\n"
-                 "[sweep] postdiv = PLL1 POSTDIV1/POSTDIV2; the adc clock is read back from the registers\r\n");
+                 "[sweep] postdiv = PLL1 POSTDIV1/POSTDIV2; the adc clock is read back from the registers\r\n"
+                 "[sweep] clean = rate of one burst with nothing else running; loaded = rate while\r\n"
+                 "[sweep] the three runs below are going. Trust clean: the loaded figure is\r\n"
+                 "[sweep] measured by a CPU drowning in overrun interrupts\r\n");
 
     /* Time base check: 100 ms of CPU time (200 MHz) must be 1 250 000
      * ticks. Anything else and the measured rates are off by the same
