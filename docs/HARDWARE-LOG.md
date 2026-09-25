@@ -1534,3 +1534,55 @@ conversions, the stepped codes in every buffer index). S4 passes at least up to 
 time decide. S5 shows triangles, and the slope/model ratio answers open question 4.
 S1's output-compare mode and S0's PLL-output codes stay failing (instrument, not chain).
 
+## 2026-09-25, run 19 - master fbfd883 (+ local changes), `chain all` - THE CHAIN STREAMS
+
+The first run with the DMA in Repeated One-Shot mode. Complete log, S0 to @END.
+
+**The example's sentence holds up to 8 MSPS, on silicon.**
+
+- S3: 6144 transfers for 6144 conversions, overrun 0; every buffer index holds exactly the
+  code the CPU stepped for it, across the block restart. One transfer per trigger.
+- S4, triggers against transfers in 50 ms: 100 kSPS, 1 and 4 MSPS exact; 8 MSPS 400 004
+  against 400 011 expected with overrun 0 (an instrument deficit, below); 10 MSPS overrun
+  732 of 0.5 M; 16 and 20 MSPS overrun ~2000 to 2700; 26.7 MSPS and up, transfers far
+  below the triggers and the brake at 32 MSPS.
+- S5, the triangle through the chain: grid clean (slip 0.03 to 0.09 samples) at 100 kSPS,
+  1, 4, 8 and 10 MSPS; **slope against the model 1.000 at every one of them, and 1.000 with
+  the DAC on PLL2 at 500 MHz** - open question 4 is closed: the triangle model was right,
+  the DAC was not (clock below spec, no update trigger). 16 and 20 MSPS: slip 6.2 and 5.0 -
+  samples lost. 26.7, 32, 40 MSPS: slope 0.666, 0.554, 0.499 of the model - the ADC
+  converts only at about 18 to 20 MSPS and drops the triggers in between; at 40 MSPS every
+  second one.
+- S6 and S9, stream with the CPU processing every half: 100 kSPS, 1 MSPS, 4 MSPS for 1 s,
+  **8 MSPS for 15 s: 120 000 509 transfers, overrun 0, late 0, missed 0, isr = half + done**.
+  Processing load (a plain sum of the half) 92 % at 8 MSPS, 46 % at 4 MSPS: 118 us per
+  half at every rate, about 23 CPU cycles per sample.
+- S7: first sample at buf[0], nothing written after stop, restart identical, rate change
+  2.001 - all pass.
+- S8: **the CLKGEN6 divider divides** - the clock monitor reads 320.0, 160.0 and 80.0 MHz at
+  ratios 1, 2 and 4 (open question 3 is closed: "no effect" was the DMA mode). With
+  `CLK6CON.ON = 0` the monitor still reads 320 MHz - the generator does not stop, which is
+  why "the ADC converts with CLKGEN6 off". Back-to-back at 8 MSPS: one burst and the 100th
+  of a stream give the same slope (127.67 / 127.69 samples, model 127.47) and 7864 / 7963
+  kSPS - **the rate is selectable in streaming (open question 1 closed)**. Back-to-back at
+  40 MSPS: no data (rc 6).
+- Instruments: S0's three PLL-output readings and S1/S2's output-compare mode fail as in
+  run 18 (CM codes, OC mode) - not the chain. S2's CPU-stepped check: 1 of 256 samples off.
+
+**Why the summary said "NO RATE":** the counts were judged against a trigger rate taken
+from S1's 10 ms measurement, which read +4.9 ppm (its resolution is 8 ppm). Every expected
+count was that much too high - 589 of 120 M at 8 MSPS - and about 0.6 to 0.9 us of
+start/stop latency was not in the tolerance. So S4 and S6 failed 1, 4 and 8 MSPS with
+overrun 0, and S9 picked 100 kSPS as "the best rate". The data never disagreed.
+
+**Changed in reaction:** the rates are computed from the nominal 160 MHz unless S1 finds
+the clock more than 1 % off; S1 measures over 100 ms; the count tolerance includes 1 us of
+latency; S2 reports where a stepped sample is off. The processing loop reads the finished
+half as plain memory, two samples per 32-bit load, unrolled - and S6 first times it with
+the DMA idle, so that the next run separates the loop's own cost from what the DMA's bus
+traffic adds.
+
+**Predictions for the next run:** S4 and S6 pass at 1, 4 and 8 MSPS; S9 chooses 8 or
+10 MSPS; 10 MSPS shows the same few hundred overruns; the processing load at 8 MSPS falls
+well below half.
+

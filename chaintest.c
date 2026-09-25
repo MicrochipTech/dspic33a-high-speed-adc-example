@@ -194,7 +194,10 @@ static uint32_t rate_hz(uint32_t n)       { return g_trig_hz / n; }
 static uint32_t ksps_of(uint32_t n)       { return (g_trig_hz / 1000u + n / 2u) / n; }
 
 /* Triggers expected in a Timer1 window, and the tolerance of the count:
- * +-3 Timer1 ticks of read placement, plus one for the first period. */
+ * +-3 Timer1 ticks of read placement, about 1 us between a Timer1 read
+ * and the trigger actually starting or stopping (sccp1_start() writes and
+ * reads back several registers first; run 19 showed a steady deficit of
+ * 0.6 to 0.9 us worth of triggers at every rate), plus two. */
 static uint64_t expected_triggers(uint32_t window_ticks, uint32_t n)
 {
     return ((uint64_t)window_ticks * g_trig_hz) / ((uint64_t)n * TIMEBASE_HZ);
@@ -202,8 +205,10 @@ static uint64_t expected_triggers(uint32_t window_ticks, uint32_t n)
 
 static uint32_t trigger_tol(uint32_t n)
 {
-    return 2u + (uint32_t)((3ull * g_trig_hz + (uint64_t)n * TIMEBASE_HZ - 1u) /
-                           ((uint64_t)n * TIMEBASE_HZ));
+    /* rate * (3 / 12.5 MHz + 1 us) = rate * 1.24 us, rounded up */
+    const uint64_t num = (uint64_t)g_trig_hz * 124u;
+    const uint64_t den = (uint64_t)n * 100000000u;
+    return 2u + (uint32_t)((num + den - 1u) / den);
 }
 
 static uint32_t absdiff64(uint64_t a, uint64_t b)
@@ -724,7 +729,7 @@ static void stage1(void)
      * gets so that the counter does not roll over inside the window. */
     (void)sccp1_start(0xFFFFFFFFu, SCCP_CLK_GEN13, SCCP_MODE_TIMER, SCCP_EVENT_SPECIAL);
     const uint32_t c0 = sccp1_tmr(), t0 = timebase_ticks();
-    wait_ticks(10u * TICKS_PER_MS);
+    wait_ticks(100u * TICKS_PER_MS);           /* 1 tick = 0.8 ppm       */
     const uint32_t c1 = sccp1_tmr(), t1 = timebase_ticks();
     sccp1_stop();
     const uint32_t hz = (uint32_t)(((uint64_t)(c1 - c0) * TIMEBASE_HZ) / (t1 - t0));
@@ -733,10 +738,14 @@ static void stage1(void)
     ln_u("in_spec_max", 200000000u);
     const bool ok = d <= TRIG_HZ_NOMINAL / 200u;
     ln_end(ok ? V_PASS : V_FAIL);
-    /* From here on the rates are computed from the clock as measured,
-     * whatever it is - a divider that did not divide shows as a wrong
-     * clock here and not as a wrong rate everywhere else. */
-    if (hz > 1000000u) { g_trig_hz = hz; }
+    /* The rates stay computed from the nominal 160 MHz: SCCP1 and Timer1
+     * both come from the FRC through integer PLL ratios, so theirs is
+     * exact, and run 19 showed what taking the measurement instead costs -
+     * its 10 ms window read +4.9 ppm, and every expected count of S4, S6
+     * and S9 came out that much too high (589 of 120 M at 8 MSPS). Only a
+     * clock that is off by more than 1 %, a divider that did not divide,
+     * replaces the nominal value. */
+    if ((hz > 1000000u) && (d > TRIG_HZ_NOMINAL / 100u)) { g_trig_hz = hz; }
 
     /* Its period: interrupts over 100 ms at 1, 10 and 100 kHz, in timer
      * and in output-compare mode. */
@@ -869,15 +878,19 @@ static void stage2(void)
     step_on = true;
     const uint32_t got = adc_collect(t100k, S2_KEEP);
     step_on = false;
-    uint32_t bad = 0u, maxerr = 0u;
+    uint32_t bad = 0u, maxerr = 0u, first_bad = 0xFFFFu;
     for (uint32_t k = 0; (k < got) && (k < S2_KEEP); k++) {
         const int32_t e = (int32_t)adc_keep[k] - predict(step_code(k));
         const uint32_t ae = (uint32_t)((e < 0) ? -e : e);
         if (ae > maxerr) { maxerr = ae; }
-        if (ae > g_tol) { bad++; }
+        if (ae > g_tol) { if (bad == 0u) { first_bad = k; } bad++; }
     }
     ln_begin(8u); ln_s(" stepped"); ln_u("hz", 100000u); ln_u("samples", got);
     ln_u("bad", bad); ln_u("maxerr", maxerr); ln_u("tol", g_tol);
+    if (bad != 0u) {
+        ln_u("first_bad", first_bad); ln_u("got", adc_keep[first_bad]);
+        ln_u("want", (uint32_t)predict(step_code(first_bad)));
+    }
     ln_end(((got >= S2_KEEP) && (bad == 0u)) ? V_PASS : V_FAIL);
 }
 
@@ -1121,6 +1134,15 @@ static void stage6(void)
     mark(6u);
     s6_run = true;
     (void)dac2_level_start(0x800u);
+    /* The processing of one half with the DMA idle: the reference for the
+     * load each stream below reports. The difference is what the DMA's
+     * bus traffic costs the CPU. */
+    (void)capture_settle();
+    const uint32_t hl = capture_half_len();
+    const uint32_t bt = capture_process_bench();
+    ln_begin(0u); ln_s(" bench=process_one_half_dma_idle"); ln_u("samples", hl);
+    ln_u("ticks", bt); ln_u("cpu_cycles_x10_per_sample", (bt * CPU_PER_TICK * 10u) / hl);
+    ln_end(V_INFO);
     for (uint32_t i = 0; i < LADDER_LEN; i++) {
         s6_ok[i] = false;
         if (s4_run && !s4_ok[i]) {

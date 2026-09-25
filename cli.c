@@ -574,17 +574,17 @@ static void cmd_buf_fn(int argc, char **argv)
         return;
     }
     if ((argc != 2) || !arg_u32(argv[1], SAMPLES_PER_HALF_MIN, SAMPLES_PER_HALF_MAX, &n)) {
-        usage("buf [samples per half 16..1024]  (stop first; the next start uses the new size)");
+        usage("buf [samples per half 16..1024, even]  (stop first; the next start uses the new size)");
         return;
     }
     if (!capture_set_half_len(n)) {
-        put_line("buf: stop the stream first");
+        put_line("buf: stop the stream first, and give an even number");
         cmd_parser_fail();
         return;
     }
     put_kv("samples per half", capture_half_len());
 }
-CMD_DEFINE(buf, "buf", cmd_buf_fn, "buf [n] - samples per buffer half (16..1024)");
+CMD_DEFINE(buf, "buf", cmd_buf_fn, "buf [n] - samples per buffer half (16..1024, even)");
 
 static void cmd_dac_fn(int argc, char **argv)
 {
