@@ -2135,7 +2135,7 @@ def main_gui(args):
             return False
         state["acq_active"] = cfg
         state["grabs"] = 0
-        state["live_t0"] = time.time()
+        state["live_t0"] = None          # set at the first grab, see one_cycle()
         if cfg["mode"] == "custom":
             await apply_active_dacs()
         return True
@@ -2173,10 +2173,15 @@ def main_gui(args):
             fft_chart.options["xAxis"][0]["max"] = float(f[-1]) / 1e3 if len(f) else 1
             fft_chart.update()
 
+            # Grabs per second between the first grab and this one, while
+            # LIVE runs only: counted from 'stream on' a SINGLE (one grab a
+            # few ms after the start) showed a meaningless 50+ grabs/s.
             now = time.time()
+            if state["grabs"] == 1 or not state["live_t0"]:
+                state["live_t0"] = now
             rate_txt = ""
-            if state["live_t0"] and now > state["live_t0"]:
-                rate_txt = f"   {state['grabs'] / (now - state['live_t0']):.2f} grabs/s"
+            if state["live"] and state["grabs"] >= 2 and now > state["live_t0"]:
+                rate_txt = f"   {(state['grabs'] - 1) / (now - state['live_t0']):.2f} grabs/s"
             cyc_lbl.classes(replace="text-slate-300 mono")
             cyc_lbl.text = (f"grab {state['cycles']}   n={len(samples)}   from={meta['from_']}   "
                             f"{meta['ksps']} kSPS actual{rate_txt}")
