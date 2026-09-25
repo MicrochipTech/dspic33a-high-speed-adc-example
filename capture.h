@@ -71,7 +71,8 @@ bool capture_settle(void);
 /* Samples per buffer half in use. Changing it: only with the stream
  * stopped; the call settles (DMA down), the next capture_start() sets
  * ADC burst length, DMA block and guard words up for the new size.
- * 16..SAMPLES_PER_HALF_MAX. False if out of range or while running. */
+ * 16..SAMPLES_PER_HALF_MAX, even. False if out of range, odd or while
+ * running. */
 uint32_t capture_half_len(void);
 bool     capture_set_half_len(uint32_t n);
 
@@ -254,6 +255,8 @@ uint64_t capture_transfers(void);
 bool     capture_guard_ok(void);
 uint32_t capture_chain_window_ticks(void);
 void     capture_fill(uint16_t v);
+/* One half processed with the DMA idle, in Timer1 ticks (80 ns). */
+uint32_t capture_process_bench(void);
 /* Processing cost of a half in Timer1 ticks, since counters_clear(). */
 extern volatile uint32_t proc_ticks_max;
 extern volatile uint32_t proc_ticks_sum;

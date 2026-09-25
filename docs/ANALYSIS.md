@@ -858,6 +858,23 @@ example exists for. Fixed in `2c8137f`.
 
 ## E. What holds, what is likely, what is open
 
+**Run 19 (25.09.2026), the first with the DMA in the right mode - the sentence holds up
+to 8 MSPS:**
+
+- 15 s at 8 MSPS with the CPU processing every half: 120 M samples, overrun, late and
+  missed 0. Also clean at 100 kSPS, 1 and 4 MSPS.
+- The triangle arrives without a lost or repeated sample up to 10 MSPS; slope against
+  the model 1.000 at every rate and with the DAC on the second VCO. Open question 4
+  (C.12.3) closed.
+- From 10 MSPS a few hundred DMA overruns per 0.5 M transfers; from 16 MSPS lost triggers;
+  26.7 to 40 MSPS the ADC converts at only 18 to 20 MSPS (C.12.6: the conversion does not
+  fit the period - and the real ceiling is lower than 2.5 TAD predicts).
+- CLKGEN6's divider divides (320/160/80 MHz at the generator); `ON = 0` does not stop it.
+  C.3 closed. Back-to-back follows the PLL in a stream (8 MSPS, 1 against 100 bursts). C.2
+  closed: reading 1 was right for the converter, the "repeats" were the DMA mode.
+- The processing (a plain sum) cost ~23 CPU cycles per sample, 92 % of the half period
+  at 8 MSPS - the part of the sentence with the least margin. Rewritten for run 20.
+
 **Found on silicon, run 18 (25.09.2026) - and it rewrites most of what follows:**
 
 - The DMA ran in the wrong mode from the first day. `TRMODE = 3`, Repeated Continuous:

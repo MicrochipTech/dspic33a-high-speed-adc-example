@@ -234,7 +234,21 @@ seconds is a property of the DAC and cannot change. If the measured rate rises b
 the period in samples rises by ten as well, the samples in the stream are repeats and the
 converter never sped up.
 
-## What the board has settled (as of run 18, 25.09.2026)
+## What the board has settled (as of run 19, 25.09.2026)
+
+- **The chain streams up to 8 MSPS** (run 19): SCCP1 -> ADC core 5 -> DMA0 -> ping-pong ->
+  CPU, 15 s at 8 MSPS, 120 M samples, overrun, late and missed 0, the CPU processing every
+  half. The DAC triangle comes through without a lost or repeated sample up to 10 MSPS,
+  and its slope matches the model to 0.1 % (open question 4 closed).
+- **Limits:** a few hundred DMA overruns per 0.5 M transfers from 10 MSPS; lost triggers
+  from 16 MSPS; above that the ADC converts at only 18 to 20 MSPS in triggered single
+  mode (every second trigger lost at 40 MSPS).
+- **The CLKGEN6 divider divides** (clock monitor: 320/160/80 MHz), and `CLK6CON.ON = 0`
+  does not stop the generator. Back-to-back streaming follows the PLL setting (8 MSPS: one
+  burst and the 100th give the same slope). Open questions 1 and 3 are closed.
+- **The processing cost was the limit at 8 MSPS:** the first loop took ~23 cycles per
+  sample, 92 % of the half period. Rewritten 25.09.2026 (32-bit reads, unrolled); run 20
+  will say by how much.
 
 - **The DMA was misconfigured from the first day.** `TRMODE = 3` (Repeated Continuous)
   makes one trigger start back-to-back transfers until the block is full (DS70005591D
@@ -272,7 +286,13 @@ converter never sped up.
   in `DMA0STAT` and the handler increments once per entry in which it finds it set;
   several losses between two entries count as one.
 
-## Open questions (as of 24.09.2026)
+## Open questions (as of 25.09.2026, after run 19)
+
+Questions 1, 3 and 4 below are answered by run 19 (see "settled" above and the
+HARDWARE-LOG); question 2 is answered up to 8 MSPS. Still open: the DMA overruns from
+10 MSPS (bus contention with the CPU?), the ADC's triggered ceiling of ~18-20 MSPS, the
+processing budget, and two instrument faults (output-compare mode of SCCP1, the clock
+monitor's CNTSEL codes for PLL outputs). The list as it stood before:
 
 1. **Is the rate selectable in continuous streaming?** This is the example's central
    claim and it is not settled. A single burst follows the setting; a thousand bursts

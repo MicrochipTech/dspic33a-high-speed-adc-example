@@ -313,6 +313,10 @@ uint32_t capture_half_len(void) { return half_len; }
 bool capture_set_half_len(uint32_t n)
 {
     if ((n < SAMPLES_PER_HALF_MIN) || (n > SAMPLES_PER_HALF_MAX)) { return false; }
+    /* Even only: process_buffer() reads a half as 32-bit words, and with
+     * an odd length the second half would start on an odd sample - an
+     * unaligned word access, which traps. */
+    if ((n & 1u) != 0u) { return false; }
     if (run_enabled || burst_active) { return false; }      /* stop first */
     (void)capture_settle();           /* DMA down; the next start re-inits */
     half_len = n;
@@ -693,14 +697,43 @@ void counters_clear(void)
  * second and per channel, and whether the CPU keeps up is as much a
  * question as the DMA bandwidth.
  * ------------------------------------------------------------------ */
+/* Run 19 (25.09.2026) measured the first version of this loop - one
+ * volatile 16-bit read and one add per sample - at about 23 CPU cycles
+ * per sample, 118 us per half at every rate, which used up 92 % of the
+ * half period at 8 MSPS. The half being processed is complete and the DMA
+ * is writing the OTHER one, so it is read as plain memory here: two
+ * samples per 32-bit load (the buffer is 4-byte aligned and a half is an
+ * even number of samples), four loads per pass. The compiler barrier
+ * keeps the reads after whatever told the caller the half was ready.
+ * Same result as before: the sum of the half's samples. */
 static void process_buffer(const volatile uint16_t *b, uint32_t n)
 {
-    int32_t acc = 0;
-    for (uint32_t i = 0; i < n; i++) {
-        acc += (int32_t)b[i];
+    __asm__ volatile ("" ::: "memory");
+    const uint32_t *w = (const uint32_t *)(const volatile void *)b;
+    const uint32_t words = n / 2u;
+    uint32_t lo = 0u, hi = 0u;
+    uint32_t i = 0u;
+    for (; (i + 4u) <= words; i += 4u) {
+        const uint32_t a = w[i], c = w[i + 1u], d = w[i + 2u], e = w[i + 3u];
+        lo += (a & 0xFFFFu) + (c & 0xFFFFu) + (d & 0xFFFFu) + (e & 0xFFFFu);
+        hi += (a >> 16) + (c >> 16) + (d >> 16) + (e >> 16);
     }
-    proc_result = acc;
+    for (; i < words; i++) {
+        lo += w[i] & 0xFFFFu;
+        hi += w[i] >> 16;
+    }
+    proc_result = (int32_t)(lo + hi);
     SIM_CHECK_HALF(b, n);             /* simulator: is this really the next half? */
+}
+
+/* capture.h: the processing of one half timed with nothing else running -
+ * the DMA idle, no interrupt - against which the load measured in a
+ * stream shows what the DMA's bus traffic costs the CPU. Timer1 ticks. */
+uint32_t capture_process_bench(void)
+{
+    const uint32_t t0 = timebase_ticks();
+    process_buffer(&buf[0], half_len);
+    return timebase_ticks() - t0;
 }
 
 static uint32_t half_mean(const volatile uint16_t *b, uint32_t n)
