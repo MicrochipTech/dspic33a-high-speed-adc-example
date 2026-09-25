@@ -50,6 +50,10 @@
  *   clear                      zero the error counters
  *   led on|off|auto            LED0
  *   sweep [halves]             overrun vs sample rate, 1.25..40 MSPS, one table
+ *   stream on <ksps> | off     the chain as a standing stream, main() processing
+ *   stream                     its state: rate, halves, overrun/late/missed, load
+ *   chain all|from n|n|run     the chain test SCCP1 -> ADC -> DMA -> CPU
+ *                              (chaintest.c, docs/CHAIN-TEST-PLAN.md)
  *   reset                      software reset
  *
  * Every command ends its output with a newline and calls
@@ -71,6 +75,7 @@
 #include "adc.h"
 #include "dac.h"
 #include "dactest.h"
+#include "chaintest.h"
 #include "led.h"
 #include "diag.h"
 #include "console.h"
@@ -471,6 +476,16 @@ static void cmd_status_fn(int argc, char **argv)
     put_kv("overrun", dma_overrun);
     put_kv("late", late_service);
     put_kv("missed", proc_missed);
+    /* The relation that decides where the lost samples come from: one
+     * burst is a whole buffer, so HALF fires once and DONE once, and
+     * blocks must be exactly twice bursts. A larger factor means the
+     * handler books the same event repeatedly; the factor itself is the
+     * measurement. Read per capture, no sweep needed. */
+    put_kv("bursts", burst_starts);
+    put_kv("blocks (must be 2x bursts)", blocks_done);
+    put_kv("isr_entries", isr_entries);
+    put_kv("half_events", half_events);
+    put_kv("done_events", done_events);
     put_kv("addr_err", dma_addr_err);
     put_kv("bus_err", dma_bus_err);
     put_kv("input", capture_pinsel());
@@ -593,7 +608,7 @@ static void cmd_dac_fn(int argc, char **argv)
         return;
     }
     if (!dac_triangle_start((uint8_t)unit, (uint16_t)low, (uint16_t)high, (uint16_t)slp)) {
-        put_line("dac: CLKGEN7 did not come up");
+        put_line("dac: refused - SLPDAT above 50 breaks the 0xCD+SLPDAT..0xF32-SLPDAT limits, or CLKGEN7 did not come up");
         cmd_parser_fail();
         return;
     }
@@ -612,7 +627,7 @@ CMD_DEFINE(dac, "dac", cmd_dac_fn, "dac <1|2> <on|off> [low] [high] [slpdat] - t
  * the test on core 3 against RA8, which belongs to core 5, and measured
  * an open pin. The input in use is restored afterwards, so a "dactest"
  * from the console does not silently leave the measurement elsewhere. */
-static uint32_t run_dactest(uint32_t halves)
+static uint32_t run_dactest(uint32_t bursts)
 {
     const uint8_t pinsel_before = capture_pinsel();
     const uint8_t samc_before   = capture_samc();
@@ -628,7 +643,7 @@ static uint32_t run_dactest(uint32_t halves)
         uref_off();
         return 1u;
     }
-    const uint32_t rc = dactest_run(halves);
+    const uint32_t rc = dactest_run(bursts);
     (void)capture_set_input(pinsel_before, samc_before);
     uref_off();
     return rc;
@@ -851,13 +866,22 @@ static bool sweep_row(struct pll_step st, uint32_t halves)
      * 42 MSPS everywhere, while a clean burst at the same setting
      * measured 3990 ksps against 4081 nominal - run 13). Both are printed,
      * because the difference is the artefact. */
-    uint32_t clean_ksps = 0u;
+    uint32_t clean_ksps = 0u, clean10_ksps = 0u;
     {
         const uint32_t nn = 2u * capture_half_len();
-        const uint32_t t0 = timebase_ticks();
+        /* Ten bursts as well as one. In run 16 a single burst delivered
+         * the rate the PLL was set to and a thousand delivered 40 MSPS at
+         * every setting; ten bursts sit between the two and say which of
+         * them a burst in a stream resembles. */
+        if (capture_oneshot_n(10u) == 0u) {
+            clean10_ksps = timebase_ksps(10u * nn, capture_oneshot_ticks());
+        }
+        (void)capture_settle();
         if (capture_oneshot() == 0u) {
-            const uint32_t dt = timebase_ticks() - t0;
-            clean_ksps = timebase_ksps(nn, dt);
+            /* The burst alone - capture_oneshot_ticks() excludes the DMA
+             * teardown and setup, whose fixed 11.3 us used to make every
+             * rate read low, by 2.2 % at 4 MSPS and 17.8 % at 40 (run 14). */
+            clean_ksps = timebase_ksps(nn, capture_oneshot_ticks());
         }
         (void)capture_settle();
     }
@@ -879,7 +903,8 @@ static bool sweep_row(struct pll_step st, uint32_t halves)
     *p++ = '/';                                p = u32_to_str(p, st.p2);
     p = copy_str(p, "  adc clock Hz ");        p = u32_to_str(p, clock_adc_hz());
     p = copy_str(p, "  ksps nom ");            p = u32_to_str(p, capture_nominal_ksps(0u));
-    p = copy_str(p, " clean ");                p = u32_to_str(p, clean_ksps);
+    p = copy_str(p, " clean1 ");               p = u32_to_str(p, clean_ksps);
+    p = copy_str(p, " clean10 ");              p = u32_to_str(p, clean10_ksps);
     p = copy_str(p, " loaded ");               p = u32_to_str(p, meas_ksps);
     p = copy_str(p, "  overrun idle/process/sfr ");
     for (int l = 0; l < 3; l++) {
@@ -890,6 +915,27 @@ static bool sweep_row(struct pll_step st, uint32_t halves)
     p = copy_str(p, "  missed ");             p = u32_to_str(p, missed);
     copy_str(p, "\r\n");
     console_puts(line);               /* blocking: works from main() too */
+
+    /* The three numbers that answer why there are overruns at 4 MSPS,
+     * where the DMA has eight times the headroom it needs, and why the
+     * loaded rate reads ten times the clean one. From the process run.
+     * half + done must equal the halves counted; if half is of the order
+     * of the overrun count instead, the status flags are not clearing and
+     * the handler is booking the same event over and over - our bug, not
+     * the silicon's. */
+    /* blocks_done is NOT reset by counters_clear() - it is free running,
+     * so printing it raw next to per-point counters compared a total
+     * against a sample and made the relation unreadable (run 16). The
+     * delta over this point is what belongs beside them. */
+    char c2[144];
+    char *q = copy_str(c2, "[sweep]   isr ");  q = u32_to_str(q, isr_entries);
+    q = copy_str(q, "  half ");                q = u32_to_str(q, half_events);
+    q = copy_str(q, "  done ");                q = u32_to_str(q, done_events);
+    q = copy_str(q, "  bursts ");             q = u32_to_str(q, burst_starts);
+    q = copy_str(q, "  half+done ");          q = u32_to_str(q, half_events + done_events);
+    q = copy_str(q, " (must be 2x bursts)");
+    copy_str(q, "\r\n");
+    console_puts(c2);
     return ok[SWEEP_PROCESS] && (ov[SWEEP_PROCESS] == 0u) && (missed == 0u) && (late == 0u);
 }
 
@@ -900,13 +946,21 @@ void console_sweep(uint32_t halves, bool choose)
     const bool was_running = capture_running();
 
     console_kv("[sweep] halves per point", halves);
+    /* Without this the table cannot be read afterwards. Every rate and
+     * every duration derived from a sweep row is (halves x samples per
+     * half) divided by a rate, so an evaluation that assumes 1024 while
+     * the run used something else is wrong without looking wrong. "buf"
+     * can change it at run time, so it has to be in the log. */
+    console_kv("[sweep] samples per half", capture_half_len());
+    console_kv("[sweep] samples per point", halves * capture_half_len());
     console_puts("[sweep] back-to-back conversions; the rate is the ADC clock, PLL1 output dividers\r\n"
                  "[sweep] slowest rate first: the first row is the one the DMA should manage,\r\n"
                  "[sweep] so a failure there is the chain, not the rate\r\n"
                  "[sweep] idle = CPU polls RAM only, process = main-loop processing, sfr = CPU polls an SFR\r\n"
                  "[sweep] overrun must be 0 for a usable rate; late/missed are from the process run\r\n"
                  "[sweep] postdiv = PLL1 POSTDIV1/POSTDIV2; the adc clock is read back from the registers\r\n"
-                 "[sweep] clean = rate of one burst with nothing else running; loaded = rate while\r\n"
+                 "[sweep] clean1/clean10 = rate over one burst and over ten, nothing else running;\r\n"
+                 "[sweep] loaded = rate while the three runs below are going\r\n"
                  "[sweep] the three runs below are going. Trust clean: the loaded figure is\r\n"
                  "[sweep] measured by a CPU drowning in overrun interrupts\r\n");
 
@@ -1179,12 +1233,85 @@ static bool test_dac(uint32_t halves)
 #define MATRIX_POINTS   3u
 static const uint32_t matrix_ksps[MATRIX_POINTS] = { 4000u, 8000u, 20000u };
 #define MATRIX_TOL_PCT  10u
+/* The acceptance test's two points and its length. The slow one is where
+ * a variant has the best chance; 8000 is the rate the example is meant to
+ * be shown at. 2000 halves is half a second at 4 MSPS - long enough that
+ * a stream which only looks clean for a moment does not pass. */
+#define MATRIX_STREAM_SLOW    4000u
+#define MATRIX_STREAM_TARGET  8000u
+#define MATRIX_STREAM_HALVES  2000u
 
 struct matrix_result {
     bool converts;
     bool rate_follows;
-    bool checked;
+    bool streams;        /* THE question: a lasting stream, CPU keeping up */
+    bool checked;        /* data intact, from the DAC triangle            */
+    uint32_t stream_ksps;
 };
+
+/* ------------------------------------------------------------------ *
+ * The acceptance test of the example, and until now it was missing
+ *
+ * What this project is supposed to demonstrate is one sentence: at a
+ * rate you choose, samples stream into RAM through the DMA and the CPU
+ * processes them on the free half. The matrix measured around that -
+ * does it convert, does the rate follow, are the data intact - and never
+ * asked the sentence itself. So a variant could pass everything and
+ * still be useless for the example.
+ *
+ * This is the sentence as a test: run the stream for `halves` halves
+ * with capture_service() called the whole time, exactly as the main loop
+ * does, and require all three counters to stay at zero. Overrun means
+ * samples were lost. Late means the handler was more than one half
+ * behind. Missed means the CPU never saw a half - which is precisely the
+ * failure the example must not have, because processing on the free half
+ * is the entire point.
+ * ------------------------------------------------------------------ */
+static bool matrix_stream(capture_variant_t v, uint32_t want, uint32_t halves,
+                          uint32_t *got_ksps)
+{
+    if (got_ksps != NULL) { *got_ksps = 0u; }
+    if (!capture_select_variant(v, want)) { return false; }
+
+    (void)capture_settle();
+    counters_clear();
+    const uint32_t target = blocks_done + halves;
+    const uint32_t t0     = timebase_ticks();
+    capture_start();
+    uint32_t guard = SWEEP_WAIT_LIMIT;
+    while (blocks_done < target) {
+        (void)capture_service();          /* the main loop's own work    */
+        if (capture_overrun_aborted()) { break; }
+        if (--guard == 0u) { break; }
+    }
+    const uint32_t ticks = timebase_ticks() - t0;
+    const uint32_t ov = dma_overrun, la = late_service, mi = proc_missed;
+    const uint32_t done = blocks_done;
+    (void)capture_settle();
+
+    const uint32_t ksps = timebase_ksps(halves * capture_half_len(), ticks);
+    if (got_ksps != NULL) { *got_ksps = ksps; }
+
+    char line[176];
+    char *q = copy_str(line, "[matrix]   stream at ");  q = u32_to_str(q, want);
+    q = copy_str(q, " ksps: measured ");                q = u32_to_str(q, ksps);
+    q = copy_str(q, "  overrun ");                      q = u32_to_str(q, ov);
+    q = copy_str(q, "  late ");                         q = u32_to_str(q, la);
+    q = copy_str(q, "  missed ");                       q = u32_to_str(q, mi);
+    copy_str(q, "\r\n");
+    console_puts(line);
+
+    if (done < target) {
+        console_puts(capture_overrun_aborted()
+                     ? "[matrix]     stopped by the overrun brake - unusable\r\n"
+                     : "[matrix]     the stream did not deliver - unusable\r\n");
+        return false;
+    }
+    const bool clean = (ov == 0u) && (la == 0u) && (mi == 0u);
+    console_puts(clean ? "[matrix]     CLEAN - nothing lost and the CPU kept up\r\n"
+                       : "[matrix]     not clean - see the three counters\r\n");
+    return clean;
+}
 
 /* One rate point: select, run one clean burst, report. */
 static bool matrix_point(capture_variant_t v, uint32_t want, bool show_regs)
@@ -1196,10 +1323,9 @@ static bool matrix_point(capture_variant_t v, uint32_t want, bool show_regs)
     if (show_regs) { capture_variant_regs(); }
 
     const uint32_t nominal = capture_variant_ksps();
-    const uint32_t n       = 2u * capture_half_len();
-    const uint32_t t0      = timebase_ticks();
-    const uint32_t rc      = capture_oneshot();
-    const uint32_t ticks   = timebase_ticks() - t0;
+    const uint32_t n     = 2u * capture_half_len();
+    const uint32_t rc    = capture_oneshot();
+    const uint32_t ticks = capture_oneshot_ticks();   /* the burst alone */
     (void)capture_settle();
 
     if (rc != 0u) {
@@ -1248,7 +1374,9 @@ static void cmd_matrix(void)
     for (uint32_t v = 0; v < (uint32_t)CAP_VAR_COUNT; v++) {
         res[v].converts = false;
         res[v].rate_follows = false;
+        res[v].streams = false;
         res[v].checked = false;
+        res[v].stream_ksps = 0u;
 
         console_puts("\r\n[matrix] ");
         console_puts(capture_variant_name((capture_variant_t)v));
@@ -1265,33 +1393,134 @@ static void cmd_matrix(void)
                      : "[matrix]   VERDICT: not usable as a rate control\r\n");
     }
 
-    /* The data check, only for what survived - one DAC capture each, so
-     * the log stays readable. */
-    console_puts("\r\n[matrix] data check on the variants whose rate followed\r\n");
+    /* ---- the acceptance test: does it stream, with the CPU keeping up?
+     * Run for every variant that converted at all, not only for those
+     * whose rate followed - a variant could stream cleanly at a rate
+     * that is not the one asked for, and that is worth knowing. Two
+     * points: the slowest, where it is most likely to work, and 8 MSPS. */
+    console_puts("\r\n[matrix] THE ACCEPTANCE TEST: a lasting stream with the CPU processing\r\n"
+                 "[matrix] overrun, late and missed must all be zero - missed above zero means\r\n"
+                 "[matrix] the CPU never saw a half, which is the whole point of the example\r\n");
     for (uint32_t v = 0; v < (uint32_t)CAP_VAR_COUNT; v++) {
-        if (!res[v].rate_follows) { continue; }
+        if (!res[v].converts) { continue; }
+        console_puts("\r\n[matrix] ");
+        console_puts(capture_variant_name((capture_variant_t)v));
+        console_puts("\r\n");
+        uint32_t k = 0u;
+        const bool slow = matrix_stream((capture_variant_t)v, MATRIX_STREAM_SLOW,
+                                        MATRIX_STREAM_HALVES, &k);
+        uint32_t k8 = 0u;
+        const bool at8 = matrix_stream((capture_variant_t)v, MATRIX_STREAM_TARGET,
+                                       MATRIX_STREAM_HALVES, &k8);
+        res[v].streams     = slow || at8;
+        res[v].stream_ksps = at8 ? k8 : k;
+    }
+
+    /* The data check, only for what streams - a clean stream that
+     * carries the wrong samples would be the worst outcome of all. */
+    console_puts("\r\n[matrix] data check on the variants that streamed cleanly\r\n");
+    for (uint32_t v = 0; v < (uint32_t)CAP_VAR_COUNT; v++) {
+        if (!res[v].streams) { continue; }
         console_puts("[matrix] ");
         console_puts(capture_variant_name((capture_variant_t)v));
         console_puts("\r\n");
         if (capture_select_variant((capture_variant_t)v, 8000u)) {
-            res[v].checked = (run_dactest(0u) == 0u);
+            /* Once as an isolated burst and once as the hundredth of a
+             * stream. The triangle's period cannot change, so period in
+             * samples divided by rate must agree; if it does not, the
+             * samples in the stream are repeats. */
+            console_puts("[matrix]   isolated burst:\r\n");
+            const bool one = (run_dactest(1u) == 0u);
+            console_puts("[matrix]   the 100th burst of a stream:\r\n");
+            const bool hundred = (run_dactest(100u) == 0u);
+            res[v].checked = one && hundred;
         }
     }
 
-    console_puts("\r\n[matrix] SUMMARY\r\n");
+    console_puts("\r\n[matrix] SUMMARY - the last column is the one the example lives on\r\n");
+    uint32_t winner = (uint32_t)CAP_VAR_COUNT;
     for (uint32_t v = 0; v < (uint32_t)CAP_VAR_COUNT; v++) {
-        char line[160];
+        char line[176];
         char *q = copy_str(line, "[matrix]   ");
         q = copy_str(q, res[v].rate_follows ? "RATE OK  " : "         ");
         q = copy_str(q, res[v].checked      ? "DATA OK  " : "         ");
+        q = copy_str(q, res[v].streams      ? "STREAMS  " : "         ");
         q = copy_str(q, capture_variant_name((capture_variant_t)v));
         copy_str(q, "\r\n");
         console_puts(line);
+        if (res[v].streams && res[v].checked && (winner == (uint32_t)CAP_VAR_COUNT)) {
+            winner = v;
+        }
+    }
+    if (winner != (uint32_t)CAP_VAR_COUNT) {
+        console_puts("[matrix] USE THIS ONE: ");
+        console_puts(capture_variant_name((capture_variant_t)winner));
+        console_puts("\r\n[matrix]   it streams without losing a sample, the CPU keeps up,\r\n"
+                     "[matrix]   and the data arrive complete and in order\r\n");
+    } else {
+        console_puts("[matrix] NONE of the variants streams cleanly with the CPU keeping up.\r\n"
+                     "[matrix]   That is the example's central claim, so until one does, the\r\n"
+                     "[matrix]   example does not demonstrate what it says it demonstrates.\r\n");
     }
     /* Back to a known state: the boot setting. */
     (void)capture_select_variant(CAP_VAR_B2B, capture_nominal_ksps(0u));
     (void)capture_set_pll(ADC_PLL_POSTDIV1, ADC_PLL_POSTDIV2);
     console_puts("[matrix] done - back at the boot setting\r\n");
+}
+
+/* ------------------------------------------------------------------ *
+ * "test bursts" - does the rate depend on how many bursts run?
+ *
+ * The single measurement that names the contradiction of run 16. One
+ * burst at a given setting delivers the rate that was asked for; a
+ * thousand bursts at the same setting delivered about 40 MSPS whatever
+ * the setting was. Nothing in between had ever been measured, so the two
+ * observations sat next to each other with no bridge.
+ *
+ * capture_oneshot_n() builds the bridge: it restarts each burst from the
+ * DMA interrupt exactly as continuous streaming does, and stops after
+ * the count given. Reading the rate at one, ten and a hundred bursts at
+ * the same clock setting says which of the two pictures a burst in a
+ * stream belongs to - and if the rate climbs with the count, it says how
+ * quickly.
+ * ------------------------------------------------------------------ */
+static void test_bursts(void)
+{
+    static const uint32_t counts[] = { 1u, 10u, 100u };
+    static const uint32_t rates[]  = { 4000u, 8000u, 20000u };
+
+    console_puts("[test] bursts: the same setting, measured over 1, 10 and 100 bursts\r\n"
+                 "[test]   each burst is restarted from the DMA interrupt, as streaming does\r\n"
+                 "[test]   a rate that climbs with the count is the bridge between run 16's\r\n"
+                 "[test]   single burst (the setting) and its thousand (40 MSPS regardless)\r\n");
+
+    for (uint32_t r = 0; r < (sizeof rates / sizeof rates[0]); r++) {
+        if (!capture_select_variant(CAP_VAR_B2B, rates[r])) { continue; }
+        const uint32_t nominal = capture_variant_ksps();
+        const uint32_t n       = 2u * capture_half_len();
+        console_kv("[test]   nominal ksps", nominal);
+        for (uint32_t c = 0; c < (sizeof counts / sizeof counts[0]); c++) {
+            const uint32_t rc = capture_oneshot_n(counts[c]);
+            const uint32_t tk = capture_oneshot_ticks();
+            (void)capture_settle();
+            char line[144];
+            char *q = copy_str(line, "[test]     bursts ");  q = u32_to_str(q, counts[c]);
+            q = copy_str(q, ": ");
+            if (rc != 0u) {
+                q = copy_str(q, "no data");
+            } else {
+                q = copy_str(q, "ksps ");
+                q = u32_to_str(q, timebase_ksps(counts[c] * n, tk));
+                q = copy_str(q, "  overrun ");
+                q = u32_to_str(q, dma_overrun);
+            }
+            copy_str(q, "\r\n");
+            console_puts(line);
+        }
+    }
+    console_puts("[test] bursts: done - equal rates mean a burst in a stream is an ordinary\r\n"
+                 "[test]   burst; a rising rate means it is not, and the single-burst figures\r\n"
+                 "[test]   measured so far describe a start-up rather than the stream\r\n");
 }
 
 static void test_list(void)
@@ -1301,6 +1530,7 @@ static void test_list(void)
     put_line("test clock           - switch every CLKGEN6 ratio and read it back");
     put_line("test clkoff          - switch CLKGEN6 off: does the ADC still convert?");
     put_line("test matrix          - every way to set the rate, tried and measured");
+    put_line("test bursts          - does the rate depend on how many bursts run?");
     put_line("test rate  [halves]  - delivered rate at the ratio set now");
     put_line("test sweep [halves]  - the rate ladder, slowest first, with the counters");
     put_line("test dac   [halves]  - the DAC2 triangle: is everything there, in order?");
@@ -1312,9 +1542,10 @@ static void cmd_test_fn(int argc, char **argv)
 {
     uint32_t halves = 0u;                  /* 0 = the part's own default */
     if (argc == 1) { test_list(); return; }
-    if (argc > 3) { usage("test <all|self|clock|clkoff|matrix|rate|sweep|dac> [halves]"); return; }
+    chain_stream_off();                    /* the tests need the boot setup */
+    if (argc > 3) { usage("test <all|self|clock|clkoff|bursts|matrix|rate|sweep|dac> [n]"); return; }
     if ((argc == 3) && !arg_u32(argv[2], 1u, 100000u, &halves)) {
-        usage("test <all|self|clock|clkoff|matrix|rate|sweep|dac> [halves]");
+        usage("test <all|self|clock|clkoff|bursts|matrix|rate|sweep|dac> [n]");
         return;
     }
     const char *what = argv[1];
@@ -1327,6 +1558,8 @@ static void cmd_test_fn(int argc, char **argv)
         if (!test_clkoff()) { cmd_parser_fail(); }
     } else if (strcmp(what, "matrix") == 0) {
         cmd_matrix();
+    } else if (strcmp(what, "bursts") == 0) {
+        test_bursts();
     } else if (strcmp(what, "rate") == 0) {
         if (!test_rate((halves != 0u) ? halves : TEST_RATE_HALVES)) { cmd_parser_fail(); }
     } else if (strcmp(what, "sweep") == 0) {
@@ -1346,8 +1579,14 @@ static void cmd_test_fn(int argc, char **argv)
         }
         const bool clock_ok = test_clock();
         (void)test_clkoff();
+        /* The bridge between one burst and a thousand, and then every
+         * variant with the acceptance test behind it. This is the run
+         * that is meant to answer everything at once, because a board
+         * run costs a person. */
+        test_bursts();
         (void)test_sweep((halves != 0u) ? halves : TEST_SWEEP_HALVES);
-        const bool dac_ok = test_dac(TEST_DAC_HALVES);
+        cmd_matrix();
+        const bool dac_ok = test_dac(1u);
         console_puts("\r\n[test] ALL DONE\r\n");
         console_puts(self_ok  ? "[test]   self:  PASS\r\n" : "[test]   self:  FAIL\r\n");
         console_puts(clock_ok ? "[test]   clock: PASS\r\n" : "[test]   clock: FAIL\r\n");
@@ -1359,7 +1598,77 @@ static void cmd_test_fn(int argc, char **argv)
         cmd_parser_fail();
     }
 }
-CMD_DEFINE(test, "test", cmd_test_fn, "test [all|self|clock|clkoff|matrix|rate|sweep|dac] [halves]");
+CMD_DEFINE(test, "test", cmd_test_fn, "test [all|self|clock|clkoff|bursts|matrix|rate|sweep|dac] [n]");
+
+/* The chain test (chaintest.c). "chain all" is the one command the
+ * person at the board types; the rest is for repeating a part. */
+static void cmd_chain_fn(int argc, char **argv)
+{
+    static const char use[] = "chain all | chain <0..9> | chain from <0..9> | chain run <ksps> [seconds]";
+    uint32_t a = 0u, b = 0u;
+    if ((argc == 2) && (strcmp(argv[1], "all") == 0)) {
+        chain_all(0u, 9u);
+    } else if ((argc == 3) && (strcmp(argv[1], "from") == 0) && arg_u32(argv[2], 0u, 9u, &a)) {
+        chain_all(a, 9u);
+    } else if ((argc == 2) && arg_u32(argv[1], 0u, 9u, &a)) {
+        chain_all(a, a);
+    } else if (((argc == 3) || (argc == 4)) && (strcmp(argv[1], "run") == 0) &&
+               arg_u32(argv[2], 1u, 40000u, &a) &&
+               ((argc == 3) || arg_u32(argv[3], 1u, 3600u, &b))) {
+        chain_run(a, (argc == 4) ? b : 10u);
+    } else {
+        usage(use);
+    }
+}
+CMD_DEFINE(chain, "chain", cmd_chain_fn, "chain all|<n>|from <n>|run <ksps> [s] - the chain test");
+
+/* The chain as the example runs it (chaintest.c): "stream on <ksps>"
+ * starts it and returns - main() processes every half from then on -
+ * "stream" reports, "stream off" stops. The report is a snapshot taken
+ * first and printed afterwards; printing takes the CPU from main() for a
+ * few milliseconds, so at high rates each "stream" costs some halves,
+ * which then show in the NEXT report's missed count. */
+static void cmd_stream_fn(int argc, char **argv)
+{
+    static const char use[] = "stream on <ksps 1..40000> | stream off | stream";
+    uint32_t k = 0u;
+    if ((argc == 3) && (strcmp(argv[1], "on") == 0) && arg_u32(argv[2], 1u, 40000u, &k)) {
+        if (!chain_stream_on(k)) { put_line("stream: set-up failed (clock, core or trigger) - run 'chain 0'"); cmd_parser_fail(); return; }
+    } else if ((argc == 2) && (strcmp(argv[1], "off") == 0)) {
+        chain_stream_off();
+        put_line("stream: off, boot configuration restored");
+        return;
+    } else if (argc != 1) {
+        usage(use);
+        return;
+    }
+    uint32_t ksps = 0u, free_cyc = 0u;
+    uint64_t xfer = 0u;
+    if (!chain_streaming()) { put_line("stream: off"); return; }
+    const bool running = chain_stream_state(&ksps, &xfer, &free_cyc);
+    /* snapshot, then print */
+    const uint32_t halves = blocks_done, ov = dma_overrun, la = late_service, mi = proc_missed;
+    const uint32_t pmax = proc_ticks_max;
+    const bool brake = capture_overrun_aborted();
+    uint32_t mn = 0u, mx = 0u, mean = 0u;
+    half_stats(&mn, &mx, &mean);
+    put_line(running ? "stream: on - SCCP1 -> ADC core 5 (RA8, DAC2 triangle) -> DMA0 -> ping-pong -> main()"
+                     : "stream: STOPPED by itself - the overrun brake fired, the rate is not usable");
+    put_kv("ksps", ksps);
+    put_kv("seconds", (ksps != 0u) ? (uint32_t)(xfer / ((uint64_t)ksps * 1000u)) : 0u);
+    put_kv("transfers (millions)", (uint32_t)(xfer / 1000000u));
+    put_kv("halves", halves);
+    put_kv("overrun", ov);
+    put_kv("late", la);
+    put_kv("missed", mi);
+    put_kv("brake", brake ? 1u : 0u);
+    put_kv("processing max per half, us", (pmax * 8u + 50u) / 100u);   /* 80 ns ticks */
+    put_kv("free CPU cycles per sample (mean)", free_cyc);
+    put_kv("last half min", mn);
+    put_kv("last half max", mx);
+    put_kv("last half mean", mean);
+}
+CMD_DEFINE(stream, "stream", cmd_stream_fn, "stream on <ksps>|off - the chain streaming, main() processing");
 
 static void cmd_snap_fn(int argc, char **argv)
 {
@@ -1551,6 +1860,8 @@ void cli_init(void)
     (void)cmd_register(&cmd_snap);
     (void)cmd_register(&cmd_rate);
     (void)cmd_register(&cmd_blk);
+    (void)cmd_register(&cmd_chain);
+    (void)cmd_register(&cmd_stream);
     (void)cmd_register(&cmd_reset);
 
     /* Banner, once at start-up. A human sees what is talking and which

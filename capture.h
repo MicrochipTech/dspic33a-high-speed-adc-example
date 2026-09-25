@@ -32,6 +32,13 @@ extern volatile uint16_t last_sample;    /* last value of the completed half */
 extern volatile uint32_t ready_half;     /* 0 or 1: which half is complete */
 extern volatile uint32_t selftest_mean;  /* last self-test result (~3840)  */
 extern volatile int32_t  proc_result;    /* output of process_buffer()     */
+/* Why these exist: see capture.c. They separate "one conversion causes
+ * several DMA transfers" from "the handler counts the same event twice". */
+extern volatile uint32_t isr_entries;    /* calls of dma0_event()          */
+extern volatile uint32_t half_events;    /* HALF seen set                  */
+extern volatile uint32_t done_events;    /* DONE seen set                  */
+extern volatile uint32_t burst_starts;   /* start_burst() calls - blocks_done
+                                          * must be exactly twice this      */
 
 /* DMA channel 0 from the ADC result into buf[], HALF/DONE interrupts
  * enabled. Nothing transfers until capture_start(). */
@@ -204,8 +211,59 @@ bool capture_service(void);
  * rate where the main loop runs tens of milliseconds behind the DMA.
  * Returns 0, or 6/8 from the wait. */
 uint32_t capture_oneshot(void);
+/* The same, but `bursts` bursts back to back before it stops - the ISR
+ * restarts each one exactly as continuous streaming does, and only the
+ * last ends the run. It exists to answer the contradiction of run 16: a
+ * single burst delivers the rate the PLL was set to, while a run of a
+ * thousand delivers about 40 MSPS whatever the setting. If the rate
+ * measured over ten bursts equals the rate over one, the first burst is
+ * ordinary and the difference lies in continuous operation; if it jumps,
+ * the first burst is the odd one and every "clean" rate measured so far
+ * describes a start-up, not the stream. */
+uint32_t capture_oneshot_n(uint32_t bursts);
+/* Timer1 ticks of the last one-shot, the BURST ALONE - the DMA channel
+ * being taken down and set up again costs a fixed 11.3 us and used to sit
+ * inside the measured window, which made every rate read low (run 14).
+ * Use this instead of timing around capture_oneshot(). */
+uint32_t capture_oneshot_ticks(void);
 /* The whole buffer. Only meaningful with the stream stopped. */
 const volatile uint16_t *capture_buffer(void);
+
+/* ---- The triggered stream: the chain of the example ----
+ *
+ * SCCP1 on CLKGEN13 paces channel 0 in Single Conversion mode (the
+ * caller has put the ADC in that mode), one DMA transfer per conversion,
+ * Repeated Continuous, no burst and no restart. See capture.c.
+ *
+ * capture_chain_start()  settle, counters cleared, DMA armed (source
+ *                        CH0DATA if src_data, else CH0RES), then SCCP1
+ *                        started last with period `ticks` of its clock
+ *                        in sccp_mode (sccp_mode_t). stop_after_done > 0:
+ *                        the DMA ISR stops the trigger at that DONE, and
+ *                        the buffer holds exactly the last block.
+ * capture_chain_wait()   until that stop, bounded in Timer1 ticks: 0, 6
+ *                        (timeout) or 8 (DMA switched itself off).
+ * capture_chain_stop()   trigger off first, the last transfer awaited,
+ *                        then settled. Returns the transfers counted.
+ * capture_transfers()    transfers so far: DONE blocks and DMA0CNT.
+ * capture_chain_window_ticks()  Timer1 from trigger start to stop.
+ * capture_fill()         the whole buffer to one value (a sentinel the
+ *                        ADC cannot produce), only with the DMA idle. */
+bool     capture_chain_start(uint32_t ticks, uint32_t sccp_mode,
+                             uint32_t stop_after_done, bool src_data);
+bool     capture_chain_active(void);
+uint32_t capture_chain_wait(uint32_t max_ticks);
+uint64_t capture_chain_stop(void);
+uint64_t capture_transfers(void);
+/* The guard words behind the buffer intact? (capture_service() stops in
+ * fail(11) instead; this one only reports.) */
+bool     capture_guard_ok(void);
+uint32_t capture_chain_window_ticks(void);
+void     capture_fill(uint16_t v);
+/* Processing cost of a half in Timer1 ticks, since counters_clear(). */
+extern volatile uint32_t proc_ticks_max;
+extern volatile uint32_t proc_ticks_sum;
+extern volatile uint32_t proc_count;
 
 /* Pointer to the half that completed last. */
 const volatile uint16_t *capture_completed_half(void);

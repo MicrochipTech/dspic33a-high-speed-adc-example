@@ -59,10 +59,10 @@ const char *clock_adc_div_error(uint32_t rc);
  * >= POSTDIV2 (p778). That gives 320 down to 32.65 MHz, i.e. 40 down to
  * 4.08 MSPS, and 5/5 = 64 MHz = 8 MSPS exactly.
  *
- * This exists because the CLKGEN6 divider does not work: through runs 8
- * and 9 every ratio was written, read back and confirmed by DIVSWEN and
- * CLKRDY, with the generator off and with it running, and the ADC kept
- * converting at 40 MSPS at every one of them (docs/HARDWARE-LOG.md). The
+ * This exists because the CLKGEN6 divider seemed not to work in runs 8
+ * and 9 - measured under overrun load, an instrument later withdrawn
+ * (ANALYSIS.md C.3; chaintest.c S8 measures the divider with the clock
+ * monitor). The
  * PLL's own switching sequence, in contrast, is the one clock_init()
  * performs at every boot - if it did not work the board would not come
  * up at all.
@@ -108,7 +108,9 @@ uint32_t clock_adc_div(void);
  * number still reports what the hardware holds. */
 uint32_t clock_adc_hz(void);
 
-/* CLKGEN13 = the clock of the ADC's trigger module (SCCP1).
+/* CLKGEN13 = the clock of the ADC's trigger module (SCCP1), PLL1 out
+ * divided by 2 = 160 MHz: the CCP modules may run at 200 MHz at most
+ * (Table 40-24, p2016).
  *
  * It exists as its own entry point because of one sentence from a
  * Microchip support case: "ADC triggers go through synchronizers. If the
@@ -129,13 +131,32 @@ uint32_t clock_trig_hz(void);
  * a different source from the ADC's. */
 uint32_t clock_periph_hz(void);
 
-/* CLKGEN7 = DAC clock, from PLL1 (320 MHz; the datasheet's "400 MHz
- * typical" is the design point, the range is not specified). On with
- * OSWEN and CLKRDY awaited, bounded; off. clock_dac_hz() is what it runs
- * at, for the triangle-wave period. */
+/* CLKGEN7 = DAC clock. The DAC wants 400 to 500 MHz at its input
+ * (DS70005591D Table 40-24, p2016). Default source: the PLL1 VCO divider,
+ * 400 MHz - the VCO the ADC and the SCCP1 trigger run from, so the three
+ * stay in a fixed ratio. clock_dac_select() picks the source for the next
+ * clock_dac_on(): CLOCK_DAC_PLL1_VCO or, for a cross-check on another VCO,
+ * CLOCK_DAC_PLL2_VCO (500 MHz). The values are CLKGEN NOSC codes (ATDF
+ * value group CLK_CON__NOSC). On with OSWEN and CLKRDY awaited, bounded;
+ * off. clock_dac_hz() is what it runs at, read back from the registers. */
+#define CLOCK_DAC_PLL1_VCO  7u      /* "PLL1 VCO Divider output"            */
+#define CLOCK_DAC_PLL2_VCO  8u      /* "PLL2 VCO Divider output"            */
+void     clock_dac_select(uint32_t nosc);
 bool     clock_dac_on(void);
 void     clock_dac_off(void);
 uint32_t clock_dac_hz(void);
+
+/* A clock measured by clock monitor 4 against the 200 MHz system clock
+ * over 1 ms, in Hz, resolution 4 kHz; 0 if the clock does not run. The
+ * first instrument in this project that measures the ADC's clock itself
+ * rather than inferring it from a rate. Codes: ATDF value group
+ * CM_SEL__CNTSEL. Takes about 3 ms. */
+#define CM_CLKGEN6      0x05u       /* ADC                                  */
+#define CM_CLKGEN7      0x06u       /* DAC                                  */
+#define CM_PLL1_OUT     0x0Bu
+#define CM_PLL1_VCODIV  0x0Cu
+#define CM_PLL2_VCODIV  0x0Eu
+uint32_t clock_monitor_hz(uint32_t cntsel);
 
 /* The clock registers as "name: 0x........" lines (part of regs_dump()). */
 void clock_regs_dump(void);

@@ -45,7 +45,7 @@ if /i "%1"=="nano" (
   set EXTRA=-DBOARD=2
   set OUT=..\build\%TARGET%_nano
 )
-set SOURCES=..\main.c ..\config_bits.c ..\clock.c ..\adc.c %DMA% ..\capture.c ..\crc16.c ..\sccp.c ..\led.c ..\diag.c ..\timebase.c ..\dac.c ..\dactest.c ..\cli.c ..\cmd_parser.c
+set SOURCES=..\main.c ..\config_bits.c ..\clock.c ..\adc.c %DMA% ..\capture.c ..\crc16.c ..\sccp.c ..\led.c ..\diag.c ..\timebase.c ..\dac.c ..\dactest.c ..\chaintest.c ..\cli.c ..\cmd_parser.c
 
 if not exist ..\build mkdir ..\build
 

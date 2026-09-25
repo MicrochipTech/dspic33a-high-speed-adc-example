@@ -14,6 +14,13 @@
  * than a few expected steps (a lost sample shows as a double step).
  * Prints [dactest] lines and PASS/FAIL. Returns 0 for PASS, 1 for FAIL,
  * 6/8 if no data came. Blocking, bounded. */
-uint32_t dactest_run(uint32_t halves);
+/* `bursts` bursts run back to back before the DMA interrupt stops the
+ * stream; the buffer then holds the last of them. One burst looks at an
+ * isolated capture, a hundred at a burst out of a running stream - and
+ * comparing the two answers whether the converter really speeds up under
+ * streaming or whether each conversion simply lands in the buffer more
+ * than once. The triangle's period cannot change, so period in samples
+ * divided by sample rate must agree at both counts. */
+uint32_t dactest_run(uint32_t bursts);
 
 #endif /* DACTEST_H */

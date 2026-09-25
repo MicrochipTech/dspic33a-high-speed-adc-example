@@ -122,6 +122,39 @@ volatile uint32_t ready_half    = 0;   /* 0 = buf[0..], 1 = buf[1024..]    */
 volatile uint32_t selftest_mean = 0;   /* mean seen on ADxAN6, ~3840       */
 volatile int32_t  proc_result   = 0;   /* output of process_buffer()       */
 
+/* Three counters that exist for one question, raised by run 14: the
+ * sweep reported overruns at 4 MSPS, where the DMA has eight times the
+ * headroom it needs, and its loaded rate column read ten times the rate
+ * a clean burst measures at the same setting. Two explanations fit and
+ * they need separating.
+ *
+ *   (a) one conversion produces several DMA transfers. Microchip
+ *       acknowledges exactly that for this silicon: "ADC triggers for DMA
+ *       on this device have an issue. A few transfers are possible per
+ *       one trigger."
+ *   (b) the handler books the same HALF or DONE more than once, because
+ *       the status flag did not clear and every later entry - and at full
+ *       rate there are 1.6 million of them a second, one per overrun -
+ *       sees it again. That would be our bug, and fixable.
+ *
+ * The three numbers tell them apart. If half_events is of the order of
+ * the overrun count, the flags are not clearing: (b). If they stay at one
+ * per 1024 transfers while the counts still race, the transfers really
+ * are happening: (a). */
+volatile uint32_t isr_entries   = 0;   /* calls of dma0_event()            */
+volatile uint32_t half_events   = 0;   /* HALF seen set                    */
+volatile uint32_t done_events   = 0;   /* DONE seen set                    */
+/* The one that decides it. One burst is CNT = 2 * half_len conversions,
+ * which is exactly one buffer: HALF in the middle, DONE at the end. So in
+ * back-to-back streaming blocks_done MUST be exactly twice the number of
+ * bursts started - that is arithmetic, not an assumption about the
+ * silicon. If it is ten times that, the handler is booking the same event
+ * over and over and the fault is ours. If it holds while the rate still
+ * races, the transfers really are happening and it is the trigger defect
+ * Microchip acknowledges. Note that half_events + done_events == blocks
+ * by construction and therefore proves nothing on its own. */
+volatile uint32_t burst_starts  = 0;   /* calls of start_burst()           */
+
 /* Note 1: errata DS80001162E item 2 - BRERR is only set when RETEN = 1,
  * and RETEN also raises a trap. This example leaves RETEN = 0, so
  * dma_bus_err effectively counts write errors (BWERR) only. */
@@ -176,13 +209,41 @@ static volatile bool     overrun_abort  = false;
  * test reported "DMA channel disabled" (run 9). */
 static volatile uint32_t overrun_run    = 0;
 /* One burst and then stop, decided in the ISR (capture_oneshot). */
-static volatile bool     oneshot        = false;
+static volatile uint32_t oneshot_left   = 0u;  /* bursts still to run */
+static volatile uint32_t oneshot_ticks  = 0;   /* of the burst alone */
+
+/* The triggered stream of the chain test (capture_chain_start): SCCP1
+ * paces the ADC in Single Conversion mode, the DMA runs on by itself, and
+ * DONE restarts nothing - there is no burst. chain_stop_after counts DONE
+ * events down to an automatic stop from the ISR (0 = run until told).
+ * chain_t0/t1 are Timer1 at the SCCP1 start and stop, the window the
+ * expected number of triggers is computed from. */
+static volatile bool     chain_mode       = false;
+static volatile uint32_t chain_stop_after = 0u;
+static volatile uint32_t chain_t0         = 0u;
+static volatile uint32_t chain_t1         = 0u;
+static bool              chain_src_data   = false;  /* DMA from CH0DATA  */
+
+/* What the processing of a half costs, in Timer1 ticks (80 ns): the
+ * budget question of the example's sentence ("the CPU processes"). */
+volatile uint32_t proc_ticks_max = 0;
+volatile uint32_t proc_ticks_sum = 0;
+volatile uint32_t proc_count     = 0;
 
 /* capture.h: the defined idle state every test starts from. */
 bool capture_settle(void)
 {
     const bool was_running = run_enabled;
     capture_stop();
+    if (chain_mode) {
+        /* Triggered stream: the trigger goes first (ANALYSIS.md C.10
+         * point 4), then nothing converts any more and nothing is in
+         * flight to wait for. */
+        sccp1_stop();
+        if (chain_t1 == 0u) { chain_t1 = timebase_ticks(); }
+        burst_active = false;
+        chain_mode   = false;
+    }
     /* The burst in flight ends at a block boundary by itself - at most
      * one buffer, 52 us at 40 MSPS. One that never ends (no clock, no
      * trigger) is aborted: core down and up. */
@@ -205,6 +266,7 @@ static uint32_t         seen_blocks    = 0;
 /* A burst is in flight from here until the DMA DONE interrupt. */
 static void start_burst(void)
 {
+    burst_starts++;
     burst_active = true;
     {
         adc_start_burst();
@@ -238,7 +300,9 @@ void capture_init(void)
      * length in use: 2 * half_len conversions per burst, 2 * half_len
      * transactions per block, both re-done before every start. */
     adc_set_burst_len(2u * half_len);
-    dma0_init(adc_dma_trigger(), adc_dma_source(), dma_buffer.data, 2u * half_len * sizeof(uint16_t));
+    dma0_init(adc_dma_trigger(),
+              chain_src_data ? adc_dma_source_data() : adc_dma_source(),
+              dma_buffer.data, 2u * half_len * sizeof(uint16_t));
     dma_armed = true;
 }
 _Static_assert(sizeof dma_buffer.data == SAMPLES_PER_BUF_MAX * sizeof(uint16_t),
@@ -252,6 +316,15 @@ bool capture_set_half_len(uint32_t n)
     if (run_enabled || burst_active) { return false; }      /* stop first */
     (void)capture_settle();           /* DMA down; the next start re-inits */
     half_len = n;
+    return true;
+}
+
+/* The same check without stopping, for a test that reports it. */
+bool capture_guard_ok(void)
+{
+    for (uint32_t i = 0; i < BUF_GUARD_WORDS; i++) {
+        if (*guard_word(i) != BUF_GUARD_PATTERN(i)) { return false; }
+    }
     return true;
 }
 
@@ -292,6 +365,7 @@ void capture_halt(void)
  * ------------------------------------------------------------------ */
 void dma0_event(uint32_t st)
 {
+    isr_entries++;
     if (st & DMA0_OVERRUN) {
         /* Triggered while the previous transfer was still in progress
          * (p816): the bus did not keep up. This is the measurement. */
@@ -327,12 +401,14 @@ void dma0_event(uint32_t st)
     }
 
     if (st & DMA0_HALF) {
+        half_events++;
         dma0_clear(DMA0_HALF);
         ready_half  = 0u;
         last_sample = buf[half_len - 1u];
         blocks_done++;
     }
     if (st & DMA0_DONE) {
+        done_events++;
         dma0_clear(DMA0_DONE);
         ready_half  = 1u;
         last_sample = buf[2u * half_len - 1u];
@@ -344,16 +420,36 @@ void dma0_event(uint32_t st)
             adc_set_input(pinsel_next, samc_next);
             switch_pending = false;
         }
-        if (oneshot) {
+        if (chain_mode) {
+            /* Triggered stream: the DMA has reloaded by itself and the
+             * next trigger continues at buf[0]. Nothing to restart - only
+             * the optional stop after a number of blocks, taken here so
+             * that the buffer holds exactly the last block, contiguous and
+             * no longer written. The trigger goes off first. */
+            if ((chain_stop_after != 0u) && (--chain_stop_after == 0u)) {
+                sccp1_stop();
+                chain_t1     = timebase_ticks();
+                run_enabled  = false;
+                burst_active = false;
+            }
+        } else if (oneshot_left != 0u) {
             /* One buffer and no more, decided here rather than by the
              * main loop: at the full rate the main loop can be tens of
              * milliseconds behind, and by the time it asked for a stop
              * the buffer would have been overwritten a thousand times
              * over. Stopping from the ISR leaves exactly the 2 * half_len
              * samples of this burst standing, contiguous and unmolested. */
-            oneshot      = false;
-            run_enabled  = false;
-            burst_active = false;
+            /* One burst less to go. Only the last one ends the run;
+             * the others restart immediately, exactly as continuous
+             * streaming does - which is the point of measuring more than
+             * one (run 16). */
+            oneshot_left--;
+            if (oneshot_left != 0u) {
+                start_burst();
+            } else {
+                run_enabled  = false;
+                burst_active = false;
+            }
         } else if (run_enabled) {
             start_burst();            /* next 2 * half_len samples      */
         } else {
@@ -591,6 +687,8 @@ void counters_clear(void)
 {
     overrun_abort = false;            /* re-arm the brake               */
     overrun_run   = 0;
+    isr_entries = 0; half_events = 0; done_events = 0; burst_starts = 0;
+    proc_ticks_max = 0; proc_ticks_sum = 0; proc_count = 0;
     dma_overrun = 0; dma_addr_err = 0; dma_bus_err = 0;
     late_service = 0; proc_missed = 0;
     /* Halves completed up to now are not "missed" from here on. Without
@@ -638,7 +736,12 @@ bool capture_service(void)
         proc_missed += (done - seen_blocks) - 1u;
     }
     seen_blocks = done;
+    const uint32_t t0 = timebase_ticks();
     process_buffer(capture_completed_half(), half_len);
+    const uint32_t dt = timebase_ticks() - t0;
+    if (dt > proc_ticks_max) { proc_ticks_max = dt; }
+    proc_ticks_sum += dt;
+    proc_count++;
     guard_check();                    /* did the DMA stay inside buf?    */
 
     /* Heartbeat: slow while clean, fast once any error counter moved. */
@@ -920,8 +1023,94 @@ void capture_variant_regs(void)
     }
 }
 
+/* ------------------------------------------------------------------ *
+ * The triggered stream - the chain the example is about (capture.h)
+ *
+ *   SCCP1 (CLKGEN13) -> ADC channel 0, Single Conversion, TRG1SRC 0x20
+ *     -> "ADCn Done CH0" -> DMA0, Repeated Continuous -> buf -> HALF/DONE
+ *
+ * Start order DMA, ADC, trigger last; stop order trigger first
+ * (ANALYSIS.md C.10 point 4). The ADC is expected in Single mode already
+ * (adc_set_mode_single(), done by the chain test once per core switch).
+ * ------------------------------------------------------------------ */
+bool capture_chain_start(uint32_t ticks, uint32_t sccp_mode,
+                         uint32_t stop_after_done, bool src_data)
+{
+    (void)capture_settle();           /* idle, DMA down                  */
+    counters_clear();
+    chain_src_data = src_data;
+    capture_init();                   /* DMA armed on RES or DATA        */
+    adc_clear_events();
+    chain_stop_after = stop_after_done;
+    chain_t1     = 0u;
+    chain_mode   = true;
+    run_enabled  = true;
+    burst_active = true;              /* "something runs" for the waits  */
+    chain_t0 = timebase_ticks();
+    if (!sccp1_start(ticks, SCCP_CLK_GEN13, (sccp_mode_t)sccp_mode, SCCP_EVENT_SPECIAL)) {
+        (void)capture_settle();
+        chain_src_data = false;
+        return false;
+    }
+    return true;
+}
+
+bool capture_chain_active(void) { return chain_mode && run_enabled; }
+
+uint32_t capture_chain_wait(uint32_t max_ticks)
+{
+    const uint32_t t0 = timebase_ticks();
+    while (chain_mode && run_enabled) {
+        if (!dma0_enabled())                     { return 8u; }
+        if ((timebase_ticks() - t0) > max_ticks) { return 6u; }
+    }
+    return 0u;
+}
+
+uint64_t capture_transfers(void)
+{
+    /* Whole blocks plus the position in the current one. DMA0CNT counts
+     * down and is reloaded at DONE, so right after a DONE the position is
+     * 0 - and done_events has already been booked by the ISR, which runs
+     * at priority 4, above every caller of this. */
+    const uint32_t block = 2u * half_len;
+    const uint32_t left  = dma0_remaining();
+    const uint32_t pos   = (left <= block) ? (block - left) : 0u;
+    return (uint64_t)done_events * block + pos;
+}
+
+uint64_t capture_chain_stop(void)
+{
+    sccp1_stop();                     /* trigger first                   */
+    if (chain_t1 == 0u) { chain_t1 = timebase_ticks(); }
+    /* The last conversion and its transfer: sample time plus conversion
+     * plus one DMA transaction, well under a microsecond. Wait 2 us. */
+    const uint32_t t = timebase_ticks();
+    while ((timebase_ticks() - t) < 25u) { }
+    const uint64_t n = capture_transfers();
+    (void)capture_settle();
+    chain_src_data = false;
+    return n;
+}
+
+uint32_t capture_chain_window_ticks(void)
+{
+    return chain_t1 - chain_t0;
+}
+
+void capture_fill(uint16_t v)
+{
+    for (uint32_t i = 0; i < SAMPLES_PER_BUF_MAX; i++) { buf[i] = v; }
+}
+
 uint32_t capture_oneshot(void)
 {
+    return capture_oneshot_n(1u);
+}
+
+uint32_t capture_oneshot_n(uint32_t bursts)
+{
+    if (bursts == 0u) { bursts = 1u; }
     /* Fill the buffer exactly once and stop. The ADC burst is CNT =
      * 2 * half_len conversions, so one burst is one full buffer: HALF at
      * the middle, DONE at the end, and the ISR does not restart it. The
@@ -930,13 +1119,26 @@ uint32_t capture_oneshot(void)
      * where the main loop cannot keep up (run 11). */
     (void)capture_settle();
     counters_clear();
-    const uint32_t target = blocks_done + 2u;   /* HALF and DONE        */
-    oneshot = true;
+    const uint32_t target = blocks_done + (2u * bursts);  /* HALF and DONE each */
+    oneshot_left = bursts;
     capture_start();
+    /* The clock starts HERE, not before capture_settle(): taking the DMA
+     * channel down and setting it up again costs a fixed 11.3 us, and
+     * with it inside the window every rate came out low - by 2.2 % at
+     * 4 MSPS and 17.8 % at 40, purely because the same 11.3 us is a
+     * different share of a shorter burst (run 14). Corrected, the
+     * delivered rate matches the setting to better than 1 % everywhere. */
+    const uint32_t t0 = timebase_ticks();
     const uint32_t rc = wait_for_blocks(target);
-    oneshot = false;
+    oneshot_ticks = timebase_ticks() - t0;
+    oneshot_left  = 0u;
     capture_stop();
     return rc;
+}
+
+uint32_t capture_oneshot_ticks(void)
+{
+    return oneshot_ticks;
 }
 
 const volatile uint16_t *capture_buffer(void)

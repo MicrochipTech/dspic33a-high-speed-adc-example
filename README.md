@@ -76,7 +76,9 @@ the following is proven on silicon, not argued from the datasheet:
   3990 kSPS against 4081 nominal — 2.2 % off (run 13).
 
 **What is not settled.** How far up that stays true. At the undivided clock the DMA
-loses about 4 % of the samples as overruns, and because every overrun raises the DMA
+loses samples to overruns - `dma_overrun` reaches about 4 % of the sample count, and
+that is a lower bound, because the counter moves once per handler entry that finds the
+flag set and not once per lost sample - and because every overrun raises the DMA
 interrupt — 1.6 million per second, one every 625 ns — the CPU stops coming back to the
 main loop at all. The rate at which the chain stays lossless is exactly what the sweep
 is for, and the table from a board is still outstanding.
@@ -345,7 +347,7 @@ exists.
 | `blocks_done` | increasing while a test runs a stream |
 | `selftest_mean` | ≈ 3840 |
 | `last_sample` | changing once a signal is connected; noise around some level on an open pin |
-| `dma_overrun` | **0** at a usable rate; at the undivided clock it is about 4 % of the samples |
+| `dma_overrun` | **0** at a usable rate. Above that it is a *lower bound* on the samples lost: `OVERRUN` is one bit and the counter moves once per handler entry that finds it set, so several losses between two entries count as one. `blocks_done` against `burst_starts` is the exact relation - one burst is a whole buffer, so blocks must be twice bursts |
 | `dma_addr_err` | **0** — non-zero means the DMA address window is wrong |
 | `late_service`, `proc_missed` | **0** |
 | `fail_code` | 0 |
@@ -359,6 +361,63 @@ meet them — it does not compile, it lands in a break session, the LED blinks a
 is the other half: every run on this board, dated, with what the log said and what was
 changed because of it. If something here surprises you, it has probably surprised us
 first and is written down there.
+
+## The chain test - one command, one board run
+
+The firmware carries a test of the chain the example is about - SCCP1 as the
+sample clock, the ADC converting once per trigger, the DMA moving every result
+into the ping-pong buffer, the CPU processing each half - with the on-chip DAC2
+as the signal, on RA8 (DACOUT2 = AD5AN3, ADC core 5). It checks every link on
+its own at low rates first, then every rate from 100 kSPS to 40 MSPS, and ends
+with an attempt at the real thing. What each stage checks and why:
+`docs/CHAIN-TEST-PLAN.md`.
+
+**For the person at the board:**
+
+```
+git pull
+MPLAB X: configuration EV74H48A_Curiosity_Platform_MPS512, build, program
+terminal on the MCP2221A COM port, 115200 8N1, logging to a file
+wait for "[boot] READY", then type:   chain all
+wait for "@END" (under a minute), send the log file back
+```
+
+If it stops without `@END`, reset the board and send the log including the new
+boot banner: the next boot prints the stage the run was in
+(`[boot] WARNING the last 'chain' run ended without @END, in stage S...`), and
+`chain from <stage>` continues from there.
+
+**The chain as the example itself:** `stream on <ksps>` starts SCCP1 -> ADC ->
+DMA -> ping-pong at about that rate (the nearest 160 MHz / N, 1..40000 kSPS),
+with the DAC triangle on RA8 as the signal, and returns; from then on the main
+loop processes every half, exactly as an application would, and the console
+stays free. `stream` shows its state - rate, seconds, halves, overrun, late,
+missed, processing time, free CPU cycles per sample, min/max/mean of the last
+half - and `stream off` stops it and restores the boot configuration. Printing
+the report takes the main loop's CPU for a few milliseconds, so at high rates a
+report can itself cost a few halves; they show as `missed` in the next one.
+
+Other forms: `chain <n>` runs one stage (0..9), `chain run <ksps> [seconds]`
+runs the chain at a chosen rate (the nearest 160 MHz / N) for as long as asked,
+with one status line per second, printed after the stream so that printing does
+not disturb it.
+
+**The log** is one line per result, `@S<stage>.<n> key=value ... -> PASS|FAIL|SKIP|INFO`,
+about 170 lines when everything passes; a window that fails the grid check is
+added as a `@DUMP` of its samples. `python tools/eval_chain.py <log>` re-judges
+every line from its fields, re-evaluates every dumped window and lists what the
+run says about the open questions (`--png DIR` plots the dumped windows).
+`python tools/eval_chain.py --selftest` checks the evaluator itself.
+
+**Stages:** S0 preconditions (Timer1, every clock measured by the chip's clock
+monitor, core 5, RA8) - S1 SCCP1 alone - S2 SCCP1 -> ADC at 1..100 kHz with both
+ends counted and the DAC stepped by the CPU - S3 ADC -> DMA -> buffer at
+100 kHz - S4 triggers against transfers at every rate - S5 the DAC triangle in
+the data, turning points to a fraction of a sample - S6 one second of stream
+with the CPU processing, per rate - S7 start, stop, restart, rate change - S8
+the old open questions (CLKGEN6 divider and CLKGEN6 off measured at the clock
+itself, back-to-back repeats) - S9 the attempt, 15 s at the best rate and at
+8 MSPS, and the registers the chain ran with.
 
 ## How it works
 
@@ -824,7 +883,10 @@ simulator run takes about 2.5 minutes for the 100 halves.
 | `adc.c`, `adc.h` | the ADC core: channel 0 in Integration mode, burst trigger, input/sample-time register |
 | `dma.c`, `dma.h` | DMA channel 0: address window, Repeated Continuous mode, HALF/DONE interrupt, status flags — knows no ADC and no buffer |
 | `sim_dma.c`, `sim.h` | **simulator build only:** stand-in for `dma.c` that produces buffer halves (1 MHz sine) and the ping-pong check; see "In the MPLAB X simulator" |
-| `capture.c`, `capture.h` | the measurement: wires ADC and DMA together, handles the DMA events with every error counter and the burst restart, start/stop/input, self-test, per-half processing — what the console may read and control |
+| `capture.c`, `capture.h` | the measurement: wires ADC and DMA together, handles the DMA events with every error counter and the burst restart, start/stop/input, self-test, per-half processing, and the triggered stream the chain test uses — what the console may read and control |
+| `crc16.c`, `crc16.h` | CRC-16 over a sample block, for the `blk` binary transfer command |
+| `sccp.c`, `sccp.h` | SCCP1 as the chain test's trigger source (clock, mode, event), its timer and compare interrupts as event counters |
+| `chaintest.c`, `chaintest.h` | the chain test itself — `chain all`, its triangle evaluator, the `@` log line format; see "The chain test" below |
 | `led.c`, `led.h` | LED0 |
 | `diag.c`, `diag.h` | stop codes (`fail()`), trap and unhandled-interrupt handler, boot-stage record, reset cause, register dump |
 | `timebase.c`, `timebase.h` | Timer1 as a 12.5 MHz stopwatch — the independent clock the delivered sample rate is measured against (`test rate`, `test sweep`, and the window length of the DAC test). It does **not** pace the ADC |

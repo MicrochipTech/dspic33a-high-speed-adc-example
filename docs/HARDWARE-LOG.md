@@ -1015,3 +1015,417 @@ gains CLKGEN13 on PLL1 and a derived peripheral-clock figure. `adc.c` gains the 
 the matrix needs back (single conversion, oversampling, TRG2 and RPTCNT setters).
 
 Both builds `-Wall -Wextra` clean; RAM about 9 KB of 64 KB.
+
+## 2026-09-24, run 14 - master 7a9331a, build 18:20:43 - THE RATE FOLLOWS THE SETTING
+
+`test all`. Self-test 3825, DAC test PASS, and the sweep answers the question the project
+was built for.
+
+**The rate control works across the whole ladder.** The `clean` column - one burst, nothing
+else running, timed with Timer1 - follows the setting over a factor of ten:
+
+```
+postdiv  adc clock Hz  nominal   clean    postdiv  adc clock Hz  nominal   clean
+  7/7      32653061      4081     3991      5/4       80000000    10000     9492
+  7/6      38095238      4761     4641      6/3       88888888    11111    10474
+  6/6      44444444      5555     5392      5/3      106666666    13333    12421
+  7/5      45714285      5714     5537      6/2      133333333    16666    15229
+  6/5      53333333      6666     6433      5/2      160000000    20000    18053
+  7/4      57142857      7142     6876      5/1      320000000    40000    32862
+  5/5      64000000      8000     7660
+  6/4      66666666      8333     7965
+```
+
+**The shortfall is ours, and it is a constant.** It grows from 2.2 % at the bottom to 17.8 %
+at the top, which looks like a rate-dependent error and is not. Converted to window
+durations, every row shows the same offset:
+
+```
+  7/7   should 501.8 us   measured 513.2 us   +11.4 us
+  5/5   should 256.0 us   measured 267.4 us   +11.4 us
+  5/2   should 102.4 us   measured 113.4 us   +11.0 us
+  5/1   should  51.2 us   measured  62.3 us   +11.1 us
+```
+
+Eleven microseconds, independent of the rate: `capture_oneshot()` started the clock before
+`capture_settle()`, so taking the DMA channel down and setting it up again sat inside the
+measured window. The same fixed cost is 2 % of a 500 us burst and 18 % of a 51 us one.
+**Corrected, the delivered rate matches the setting to better than 1 % at every point** -
+5/1 works out at 40157 against 40000 nominal. Fixed after this run: the clock starts after
+`capture_start()` and `capture_oneshot_ticks()` reports the burst alone.
+
+**The DAC test passes on its own merits**, with the ramp visible in the dump: 3728 falling
+monotonically to 629 across the window, no reversal, largest step 90 counts out of a swing
+of 3240, against a step limit of 405. Complete and in order.
+
+**`test clkoff` unchanged:** 390 halves with CLKGEN6 switched off. The ADC does not run on
+that generator, whatever Table 16-1 says.
+
+**And one contradiction is left, sharper than before.**
+
+The `loaded` column reads about 41 000 kSPS at *every* setting - including the rows where a
+clean burst at the same configuration measures 3991. A factor of ten, same registers, same
+board, seconds apart. That finally settles that every rate figure from runs 4 to 11 was an
+artefact; it also asks how the stream can count ten times as many halves under load.
+
+Together with the second oddity: there are overruns **at 4 MSPS** - 70 702 of 2 048 000
+samples in the idle run, 3.5 %, and 702 in the DAC test's single burst. At 4 MSPS the DMA
+has eight times the headroom it needs against the 33 M transfers/s Microchip quotes. That is
+not bandwidth.
+
+Two explanations fit and they need separating:
+
+- **One conversion produces several DMA transfers.** Microchip acknowledges exactly this for
+  this silicon: *"ADC triggers for DMA on this device have an issue. A few transfers are
+  possible per one trigger. We are working to fix this problem in the next device revision."*
+- **The handler books the same HALF or DONE more than once**, because the status flag did not
+  clear and every later entry sees it again - and at full rate there are 1.6 million entries
+  a second, one per overrun. That would be our bug, and fixable.
+
+**How the next run separates them, and it is sharper than a guess.** The two explanations
+scale with different things: booking the same event twice scales with the number of
+interrupt entries, and therefore with the OVERRUN count; several transfers per conversion
+scales with the CONVERSION count. At 4 MSPS with 3.5 % overrun those are very different
+predictions - 140 000 entries per second against 3906 halves per second - so one sweep at a
+low rate and one at a high rate pin it down even if both effects run at once. (The
+observation is from the parallel session working on the GUI.)
+
+Built in reaction (no board run yet): three counters, `isr_entries`, `half_events` and
+`done_events`, printed per sweep row next to `blocks`. If `half_events` is of the order of
+the overrun count, the flags are not clearing and it is us. If it stays at one per 1024
+transfers while the counts still race, the transfers really are happening and it is the
+silicon. One more `test sweep` decides it.
+
+**What can be said to the customer already:** ADC to DMA to RAM with a double buffer works on
+this device, the samples arrive complete and in the order they were converted, and the sample
+rate is settable over PLL1 from 4 to 40 MSPS to better than 1 %. What is still open is the
+loss at a given rate - the number that turns "it works" into "at 8 MSPS nothing is lost".
+
+## 2026-09-24, a correction to how every one of these logs reads `dma_overrun`
+
+Working out the prediction for the next sweep turned up something that changes the wording
+of a lot of what is written above.
+
+`OVERRUN` is **one bit** in `DMA0STAT`, and the handler counts it like this:
+
+```c
+if (st & DMA0_OVERRUN) { dma_overrun++; dma0_clear(DMA0_OVERRUN); }
+```
+
+`st` is a single read of `DMA0STAT` taken when the handler is entered. So `dma_overrun` is
+incremented **once per handler entry in which the bit was found set** - not once per lost
+sample. If three samples are lost between two entries, the bit is set once and the counter
+moves by one.
+
+**`dma_overrun` is therefore a lower bound on the samples lost, not a count of them.** Every
+sentence of the form "about 4 % of the samples are lost as overruns" - in earlier entries
+here and in the README - should be read as "the overrun bit was seen set in as many handler
+entries as 4 % of the sample count". The true loss is that or worse, and how much worse
+depends on how often the handler runs, which at these rates is exactly what is in dispute.
+
+This does not change any conclusion drawn so far: the chain is proven by the DAC triangle,
+which counts nothing and simply shows the samples arriving in order, and the rate is proven
+by Timer1 against the PLL setting. It does change what can be promised about loss at a given
+rate, which is the one number still outstanding for the customer - and it is a further reason
+why the next run matters.
+
+A cleaner measure exists and costs nothing: **`blocks_done` against `burst_starts`**. One
+burst is a whole buffer, so blocks must be exactly twice bursts; no sampling of a flag is
+involved. That relation is now in `status` and in every sweep row.
+
+**The prediction for the next sweep, written down before the run.** A sweep point stops when
+`blocks_done` reaches its target, so blocks is fixed at 2000 by construction and the effect
+shows in the *time* and in `bursts`:
+
+- If the handler books stale events (our fault), `bursts` comes out far below `blocks/2`.
+  Run 14's loaded column was a factor of 10.2 too fast, so a 2000-block point would show
+  roughly 98 bursts instead of 1000.
+- If the counting is honest, `bursts` is 1000 and the discrepancy has to be real transfers -
+  the trigger defect Microchip acknowledges.
+
+The two are not subtle: 98 against 1000.
+
+## 2026-09-24, run 15 - the rate control confirmed to 0.5 %, the counters still missing
+
+`test sweep`, run by the colleague and relayed through the session working on the GUI. The
+build banner says `7a9331a+local changes` - **three commits before the counters**, so the one
+relation the run was asked for (`bursts` against `blocks`) is not in it. The decisive question
+is still open and the run has to be repeated with master at `7a20674` or later.
+
+**What it does settle, and it settles it well.** The `clean` column, corrected for the fixed
+offset found in run 14 and fixed in `f3143a3` - this build predates that fix, so the offset
+is in every row - lands on the nominal rate everywhere:
+
+```
+postdiv  nominal   clean   window    ideal   offset   corrected   deviation
+  7/7      4081     3985   513.9 us  501.8    12.1 us     4075     -0.16 %
+  5/5      8000     7662   267.3     256.0    11.3        8000     +0.00 %
+  5/4     10000     9488   215.9     204.8    11.1       10012     +0.12 %
+  5/2     20000    18066   113.4     102.4    11.0       20066     +0.33 %
+  5/1     40000    32820    62.4      51.2    11.2       40078     +0.19 %
+```
+
+All fourteen rows are inside 0.5 %, and the offset itself only varies between 11.0 and
+12.2 us across a factor of ten in rate. That is the strong part: **a rate-dependent error
+could not be removed by subtracting a constant.** The fact that one number, the same at
+4 MSPS and at 40, straightens every row is what makes the offset diagnosis and the rate
+control both solid.
+
+So, on the board and measured: **the sample rate is set by PLL1 and follows the setting to
+better than half a percent from 4 to 40 MSPS.** Together with run 14's DAC triangle - samples
+complete and in order - that is the working chain the customer asked about.
+
+Two numbers unchanged from run 14 and still unexplained: `loaded` reads between 40652 and
+42034 kSPS at every setting, and the slowest row shows 70702 overrun observations on
+2 048 000 samples at 4 MSPS. The prediction written down before the next run stands: a
+2000-block sweep point will show about 98 bursts if the handler books stale events, or 1000
+if the counting is honest.
+
+The full terminal output is in `docs/logs/run15-test-sweep.txt`. The derivation above came
+from the parallel session working on the GUI and was re-computed here; the verbatim log is
+kept because the conclusions below are drawn from its numbers and should be checkable against
+the source.
+
+## Run 15, read again with all fourteen rows - and the answer is nearly there
+
+Two things in the full table are not visible in an excerpt, and together they almost settle
+the open question before the counters have even run.
+
+**Every sweep point took the same time, whatever rate it was set to.** The point ends when
+`blocks_done` reaches 2000, and the `loaded` column says how long that took: between 40652
+and 42034 kSPS in all fourteen rows, which is 48.7 to 50.4 ms. A spread of three per cent -
+while the configured rate spans a factor of ten.
+
+If `blocks_done` counted real half-completions, a 2000-block point would take 512 ms at
+4 MSPS and 51 ms at 40. It took about 50 ms at both. **Whatever drives `blocks_done` under
+load, it is not the rate at which halves are filled.**
+
+**And that turns the next run into a choice between a rising curve and a flat line.** The
+number of bursts actually started follows from the point duration and the configured rate:
+
+```
+postdiv   nominal   point takes   bursts if the handler books stale events   if honest
+  7/7       4081       50.4 ms                    100                          1000
+  7/6       4761       50.3                       117                          1000
+  6/6       5555       49.9                       135                          1000
+  7/5       5714       49.7                       139                          1000
+  6/5       6666       49.8                       162                          1000
+  7/4       7142       50.1                       175                          1000
+  5/5       8000       49.5                       193                          1000
+  6/4       8333       50.2                       204                          1000
+  5/4      10000       49.5                       241                          1000
+  6/3      11111       50.3                       273                          1000
+  5/3      13333       49.1                       320                          1000
+  6/2      16666       49.6                       404                          1000
+  5/2      20000       49.0                       479                          1000
+  5/1      40000       48.7                       952                          1000
+```
+
+One hypothesis predicts a column that climbs from 100 to 952 in step with the rate; the other
+predicts 1000 fourteen times. There is nothing to interpret.
+
+**Which rows to trust when it comes in.** The two models separate far better at the bottom of
+the ladder than at the top: 100 against 1000 at 4 MSPS is a factor of ten, 952 against 1000 at
+40 MSPS is five per cent and within the noise of a single measurement. The slow rows decide
+the question almost on their own - and the slowest row is exactly the one that behaves oddly
+(`missed 19`, `process` overrun nearly double `idle`).
+
+The rule, stated as the criterion rather than as positions: **use every row in which the two
+predictions differ by at least a factor of two, and drop the first row of the sweep.** The two
+exclusions have two different reasons - the first row is a cold start, the fast rows have no
+discriminating power - and naming the reasons keeps the rule right for a ladder with different
+steps. For run 15's ladder that is rows two to thirteen, twelve usable rows rather than the
+four a positional "rows two to five" would have kept. Row one stays in the table and gets its
+own comparison, just not as evidence. (First raised and then sharpened by the session building
+the evaluation into the GUI; the criterion form is theirs and is better than the positional
+one written here first.)
+
+**And the prediction rests on a number that was not in the output.** Every duration and every
+rate derived from a sweep row is (halves x samples per half) divided by a rate, so the
+evaluation above silently assumed 1024 samples per half - which `buf` can change at run time.
+An evaluation made against the wrong length would be wrong without looking wrong. Fixed: the
+sweep header now prints `samples per half` and `samples per point`.
+
+**Second: the overrun counts fall as the rate rises.** 70702 at 4 MSPS down to 48096 at
+40 MSPS - a third fewer at ten times the conversion rate. Read as a loss fraction that is
+absurd. Read as what it is - the number of handler entries that found the flag set - it fits:
+every point ran for the same 50 ms, the handler was saturated throughout, and at the higher
+rate more losses fall into the same entry. That is the correction of the previous section
+arriving from the data side, and it was the GUI session that spotted it.
+
+**Third, unexplained: the first row behaves differently from all the others.** Row 7/7 has
+`missed 19` where every other row has about 1900, and its `process` overrun count is 127278
+against 70702 idle - nearly double - while in all other rows idle and process are within a
+per cent of each other. The two hang together: in row 7/7 the main loop kept up and did its
+work, and that work cost bus cycles and produced more overruns; everywhere else the main loop
+got nothing and the process run therefore looks like the idle run. What is not explained is
+why only the first row. It is the first point after the boot, so nothing has streamed before
+it - a stateful difference in the start-up of a point is the obvious suspect, and
+`counters_clear()` and `seen_blocks` are where to look. Worth watching in the repeat: if the
+repeat shows the same thing in its first row, it is systematic and not noise.
+
+**Practical note for the next attempt.** The banner says `+local changes`, which means the
+working tree in front of the board differs from the commit it names - the same thing happened
+on 23.09. before run 2. Before the repeat: `git status` to see what is modified, then
+`git reset --hard` and `git pull`, and check that the banner afterwards reads the bare
+revision with no `+local changes`. Otherwise the next log is as hard to interpret as this one.
+
+## 2026-09-24, the repeat run is cancelled - the question stays open
+
+The sweep with the counters will not be run for now. It would have been the third board run
+asked of the colleague for the same question, and the user does not want to impose it - he is
+glad the earlier ones were done at all. That is his call and it is a reasonable one.
+
+**So this is the state the question rests in, and it should not be mistaken for an oversight
+later.** Whether `blocks_done` is inflated by the handler booking stale events, or the ADC
+really produces more DMA transfers than conversions, is **undecided**. The prediction written
+down for it stands unchanged, and the firmware to answer it is in place - `bursts`, `blocks`,
+`isr_entries`, `half_events`, `done_events` in every sweep row and in `status`, and the row
+selection criterion above. It needs one `test sweep` on a board carrying `553f378` or later.
+
+Runs 14 and 15 will therefore remain the newest board data for some time, and neither carries
+the counters. Any evaluation that expects a `bursts` column will find none in them; that is
+expected, not a broken log.
+
+**What this does not touch.** The two results the customer statement rests on are not affected,
+because neither depends on a counter:
+
+- The chain carries every sample, in the order it was converted. That is the DAC triangle in
+  run 14 - a known signal through the whole path, read out of a window nothing was writing.
+  It counts nothing.
+- The sample rate follows the PLL setting from 4 to 40 MSPS to better than half a per cent.
+  That is Timer1 against the configured divider across fourteen points in run 15.
+
+What stays open is the loss at a given rate, which is a refinement of the answer rather than
+the answer.
+
+**When it will be settled.** The user gets his own board around 01.10.2026 - CLAAS ordered an
+EV17P63A, which is what the `nano-board` branch exists for. On his own hardware this is one
+command and half a minute, with nobody to ask.
+
+## 2026-09-24, run 16 - the counters answer, and the answer is not the one predicted
+
+`test sweep` on `e52701e`, the first build carrying the counters. Full text in
+`docs/logs/run16-test-sweep.txt`. The `+local changes` in the banner is `configurations.xml`,
+which MPLAB X rewrites, plus untracked build leftovers - nothing that touches the firmware,
+and `git log --oneline -1` confirmed `e52701e`.
+
+**The prediction was wrong. The handler counts honestly.**
+
+```
+postdiv   half + done   2 x bursts      isr      overrun
+  7/7        2019          2002        69792      69592
+  7/6        2016          2016        66416      66192
+  6/6        2014          2002        64134      63882
+  5/5        2014          2014        64600      64325
+  5/2        2010          2010        57285      56682
+  5/1        2004          2004        48429      47761
+```
+
+One HALF and one DONE per burst, in every row, with the few extra counts belonging to the
+clean one-shot that precedes each point. **There is no double booking.** The hypothesis that
+the sweep's tenfold rate was our own arithmetic is dead, and with it the comfortable ending in
+which the table was fine all along.
+
+**A defect of my own instrumentation, and it nearly hid the result.** The line printed
+`blocks (must be 2x bursts)` against values like 6078 and 85011, which looks like a factor of
+three and then of forty. `blocks_done` is **not** reset by `counters_clear()` - it is free
+running by design, because `seen_blocks` uses it - while every counter beside it is per point.
+A total was being compared with a sample. The relation only appears when the per-point delta
+is taken: 6070 per row, three sweep points of 2000 blocks each plus the one-shot. Fixed: the
+line now prints `half+done` beside `bursts`, which are the two quantities that belong together.
+
+**What the numbers leave standing is a sharper contradiction than before.**
+
+With the counting honest, each loaded point moved 2000 blocks - 1000 bursts of 2048
+conversions - and the `loaded` column says how long that took:
+
+```
+postdiv   nominal   clean (1 burst)   loaded    point took   conversions/s implied
+  7/7       4081         4044          40197      50.9 ms         40.2 M
+  5/5       8000         7872          40315      50.8 ms         40.3 M
+  5/2      20000        19161          40903      50.1 ms         40.9 M
+  5/1      40000        36728          41813      49.0 ms         41.8 M
+```
+
+**A single burst delivers the rate the PLL was set to. A thousand bursts deliver 40 MSPS
+whatever the PLL is set to.** Same registers, same board, one second apart. And the interrupt
+rate agrees with the second figure and not the first: 1.0 to 1.4 million entries per second in
+every row, which a converter running at 4 MSPS could not produce.
+
+The clean column is internally sound, which is what makes this hard to dismiss. After the
+timing fix of `f3143a3` its residual offset is a constant 4.2 to 5.3 us across the whole
+ladder - down from 11.3 - so a single burst really does take 2048 conversions divided by the
+configured rate.
+
+**Consequence for what may be claimed.** The statement "the sample rate follows the PLL
+setting" holds for **one isolated burst**. For continuous streaming - which is what a
+ping-pong application does and what the customer asked about - the measurement says the
+opposite. That is a walk-back of what run 15 was read to mean here, and it has to be said
+plainly rather than left in a footnote.
+
+Unaffected: the DAC triangle of run 14. It counts nothing and shows a known signal arriving
+complete and in order. The chain carries what the ADC converts; what is in dispute is how fast
+the ADC converts when it is not left alone.
+
+**Built in reaction, and it is one number that decides it.** `capture_oneshot_n(bursts)` runs
+N bursts back to back - the ISR restarts each one exactly as continuous streaming does - and
+times the lot. The sweep now measures the rate over **one** burst and over **ten** and prints
+both as `clean1` and `clean10`:
+
+- `clean10` equals `clean1`: bursts in a stream behave like an isolated one, and the
+  difference is created by something in continuous operation itself.
+- `clean10` jumps towards 40 MSPS: the **first** burst is the odd one, and every "clean" rate
+  measured so far describes a start-up rather than the stream. In that case the PLL setting
+  never influenced the streaming rate at all, and the agreement of run 15's clean column with
+  the setting was an artefact of measuring exactly one burst each time.
+
+The second outcome would mean the rate is not settable in continuous operation on this
+silicon, which is the opposite of what the last two entries concluded. Written down here before
+the run, as the previous prediction was - that one turned out wrong, and it should be visible
+that it did.
+
+## 2026-09-25, the chain test is ready - nothing of it has run on the board yet
+
+`chain all` implements ANALYSIS.md C.8 to C.12 as one run of under a minute:
+SCCP1 -> ADC core 5 in Single Conversion mode -> DMA0 Repeated Continuous ->
+ping-pong -> CPU, DAC2 on RA8 as the signal, stages S0 to S9
+(`docs/CHAIN-TEST-PLAN.md`). Built clean for the board (`tools/build.bat`, and
+the IDE configuration through `tools/_test_mplabx.bat`) and for the simulator,
+where it only prints SKIP. Interrupt vectors checked on the ELF: IRQ 51
+`_CCT1Interrupt`, 52 `_CCP1Interrupt`, 241 `_AD5CH0Interrupt`.
+
+Changed on the way, each a correction that applies to every earlier run as well:
+
+- DAC clock 320 -> 400 MHz (PLL1 VCO divider, `VCO1DIV.INTDIV = 2`); SCCP1 clock
+  320 -> 160 MHz (`CLK13DIV.INTDIV = 1`). Both were out of Table 40-24.
+- `DAC2CON.UPDTRG = 11`: the DAC's data registers had never been given an update
+  trigger (p1409).
+- `dac2_period_ns()` returned one slope as the period (factor 2).
+- `CCP1RB` is written in timer mode too.
+- SCCP1 has two interrupts: the timer period raises `CCT1` (IRQ 51), not `CCP1`.
+
+Found by testing the triangle evaluator on the host before the run (synthetic
+windows with DNL +-5, noise, a modelled DAC filter): judging single steps at 14 LSB
+per sample gave false "repeated" and "lost" samples on clean data, and a partial
+last segment put a turning point 0.7 samples off. The evaluator now judges the
+"slip" over two periods between full slopes, steps only from 40 LSB per sample.
+
+**Predictions, written before the run:**
+
+- S0: the clock monitor reads CLKGEN6 at 320 MHz, the VCO divider and CLKGEN7 at
+  400 MHz, the PLL2 VCO divider at 500 MHz. If the monitor counts nothing, the
+  monitor is misconfigured - not the clocks.
+- S1: SCCP1 at 160 MHz. 320 MHz would mean the CLKGEN13 divider does not divide -
+  which would reopen C.3 for every CLKGEN divider.
+- S2: one ADC result per SCCP1 event, in timer mode, at every low rate. This is the
+  first run of the triggered path with the three corrections of 24.09.2026; a zero
+  here would mean a fourth error in the trigger path.
+- S4: clean up to 16 or 20 MSPS; overrun or a transfer deficit from 26.7 MSPS on
+  (the DMA ceiling of about 33 M transfers/s from support); 40 MSPS fails because a
+  conversion takes 31 ns against a period of 25 ns.
+- S5: the slope in samples within a few per cent of the model now that the DAC is in
+  spec and takes its data - if not, open question 4 has a cause not yet named.
+- S6: the placeholder processing (a sum over the half) needs about 4 to 5 CPU cycles
+  per sample, so the CPU keeps up to about 20 MSPS and misses halves at 40.
+- S8: CLKGEN6 divides as documented (160 and 80 MHz at ratios 2 and 4).

@@ -1,0 +1,72 @@
+Run 15, 2026-09-24 - "test sweep" on the EV74H48A.
+Build banner: adc_dma_40msps Sep 24 2026 18:20:43 git 7a9331a+local changes (master)
+
+Relayed by the session working on the GUI; the only edit is that the terminal's
+line wrapping was undone. Kept verbatim because the entry in HARDWARE-LOG.md draws
+conclusions from the numbers and those should be checkable against the source.
+
+Note on the build: "+local changes" means the working tree in front of the board
+differed from the commit it names, and 7a9331a is three commits before the counters
+(bursts / blocks / isr / half / done) that this run was asked for. So the decisive
+relation is not in this log.
+
+-------------------------------------------------------------------------------
+
+[boot] uart up on FRC, 115200 8N1
+
+##############################################################
+##   ADC/DMA TEST LOG  -  START OF RUN  (copy from here)    ##
+##############################################################
+
+[boot] adc_dma_40msps Sep 24 2026 18:20:43 git 7a9331a+local changes (master)
+[boot] RCON: 0x00000080
+[boot] reset cause: EXTR
+
+adc_dma_40msps - ADC at 40 MSPS into RAM via DMA
+board: EV74H48A, dsPIC33AK512MPS512 GP DIM
+build: adc_dma_40msps Sep 24 2026 18:20:44 git 7a9331a+local changes (master)
+type 'help' for the commands
+please log this terminal from power-up and send it back
+> [boot] pll1 postdiv1: 7
+[boot] pll1 postdiv2: 7
+[boot] adc clock Hz: 32653061
+[boot] sample rate ksps (back-to-back): 4081
+
+[boot] READY - nothing is converting, the console has the CPU
+[boot] type 'help' for all commands, 'test' for the parts of a run,
+[boot] 'test all' for the whole thing. Please log this terminal from
+[boot] power-up and send it back.
+
+test sweep
+[test] sweep: the ladder from the slowest rate up
+[sweep] halves per point: 2000
+[sweep] back-to-back conversions; the rate is the ADC clock, PLL1 output dividers
+[sweep] slowest rate first: the first row is the one the DMA should manage,
+[sweep] so a failure there is the chain, not the rate
+[sweep] idle = CPU polls RAM only, process = main-loop processing, sfr = CPU polls an SFR
+[sweep] overrun must be 0 for a usable rate; late/missed are from the process run
+[sweep] postdiv = PLL1 POSTDIV1/POSTDIV2; the adc clock is read back from the registers
+[sweep] clean = rate of one burst with nothing else running; loaded = rate while
+[sweep] the three runs below are going. Trust clean: the loaded figure is
+[sweep] measured by a CPU drowning in overrun interrupts
+[sweep] timer check, ticks per 100 ms (expect 1250000): 1250001
+[sweep] postdiv 7/7  adc clock Hz 32653061  ksps nom 4081 clean 3985 loaded 40652  overrun idle/process/sfr 70702/127278/70603  late 0  missed 19
+[sweep] postdiv 7/6  adc clock Hz 38095238  ksps nom 4761 clean 4638 loaded 40697  overrun idle/process/sfr 67199/67737/67146  late 0  missed 1890
+[sweep] postdiv 6/6  adc clock Hz 44444444  ksps nom 5555 clean 5389 loaded 41059  overrun idle/process/sfr 64766/64763/64766  late 0  missed 1907
+[sweep] postdiv 7/5  adc clock Hz 45714285  ksps nom 5714 clean 5537 loaded 41168  overrun idle/process/sfr 62880/62907/62984  late 0  missed 1929
+[sweep] postdiv 6/5  adc clock Hz 53333333  ksps nom 6666 clean 6433 loaded 41096  overrun idle/process/sfr 61275/61209/61347  late 0  missed 1916
+[sweep] postdiv 7/4  adc clock Hz 57142857  ksps nom 7142 clean 6872 loaded 40895  overrun idle/process/sfr 66800/69187/66800  late 0  missed 1926
+[sweep] postdiv 5/5  adc clock Hz 64000000  ksps nom 8000 clean 7662 loaded 41388  overrun idle/process/sfr 59619/60333/59619  late 0  missed 1939
+[sweep] postdiv 6/4  adc clock Hz 66666666  ksps nom 8333 clean 7940 loaded 40765  overrun idle/process/sfr 68945/69964/68943  late 0  missed 1693
+[sweep] postdiv 5/4  adc clock Hz 80000000  ksps nom 10000 clean 9488 loaded 41414  overrun idle/process/sfr 57486/57474/57486  late 0  missed 1915
+[sweep] postdiv 6/3  adc clock Hz 88888888  ksps nom 11111 clean 10478 loaded 40683  overrun idle/process/sfr 64758/66291/64758  late 0  missed 1955
+[sweep] postdiv 5/3  adc clock Hz 106666666  ksps nom 13333 clean 12427 loaded 41724  overrun idle/process/sfr 53964/54160/53965  late 0  missed 1903
+[sweep] postdiv 6/2  adc clock Hz 133333333  ksps nom 16666 clean 15192 loaded 41284  overrun idle/process/sfr 57448/58126/57448  late 0  missed 1930
+[sweep] postdiv 5/2  adc clock Hz 160000000  ksps nom 20000 clean 18066 loaded 41785  overrun idle/process/sfr 48095/48148/48048  late 0  missed 1888
+[sweep] postdiv 5/1  adc clock Hz 320000000  ksps nom 40000 clean 32820 loaded 42034  overrun idle/process/sfr 48096/47949/48096  late 0  missed 1869
+[sweep] rows: 14
+[sweep] rows with overrun 0, late 0 and missed 0: 0
+[sweep] NO CLEAN RATE - every row lost samples or halves
+[sweep] done: counters cleared
+[test] sweep: done - read the table, there is no single verdict
+>

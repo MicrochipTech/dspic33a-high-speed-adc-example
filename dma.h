@@ -27,6 +27,11 @@
 void dma0_init(uint32_t trigger, const volatile void *src,
                volatile void *dst, uint32_t dst_bytes);
 
+/* Transactions left in the current block (DMA0CNT counts down and is
+ * reloaded at the end of the block, RELOADC). With the block count this
+ * gives the exact number of transfers so far. */
+uint32_t dma0_remaining(void);
+
 /* False once the channel switched itself off (address fault). */
 bool dma0_enabled(void);
 /* Interrupt masked, channel disabled. Nothing restarts after this. */

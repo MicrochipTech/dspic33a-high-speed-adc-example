@@ -78,6 +78,16 @@ typedef enum {
  * down first. False for ticks < 2. */
 bool     sccp1_start(uint32_t ticks, sccp_clk_t clk, sccp_mode_t mode, sccp_event_t ev);
 void     sccp1_stop(void);
+/* The module's counter, for measuring its clock against Timer1. */
+uint32_t sccp1_tmr(void);
+/* Count the module's events in the CPU: the timer period interrupt
+ * (CCT1, IRQ 51) and the compare interrupt (CCP1, IRQ 52), each into its
+ * own counter. sccp1_count(true) zeroes both and enables the interrupts
+ * at priority 3, false disables them. Only for low rates - every event
+ * is an interrupt entry. */
+extern volatile uint32_t sccp1_timer_events;
+extern volatile uint32_t sccp1_cmp_events;
+void     sccp1_count(bool on);
 
 /* The clock the module actually runs on, in Hz - read from the clock
  * registers, not assumed, so a generator that did not come up shows up

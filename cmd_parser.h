@@ -152,9 +152,10 @@ extern "C" {
    without growing the per-line stack frame much - it's an array of pointers
    on the dispatcher's stack frame, not static RAM. */
 #define CMD_PARSER_MAX_ARGS      12
-#define CMD_PARSER_MAX_COMMANDS  28   /* upstream: 16; raised 24.09.2026 - the table
-                                       * was exactly full at 24 and cmd_register()
-                                       * fails silently once it is (CLAUDE.md) */
+#define CMD_PARSER_MAX_COMMANDS  32   /* upstream: 16; 24 on 24.09.2026, 32 on 25.09.2026 (CLAUDE.md).
+                                       * 26 commands + help = 27 slots in use after merging the
+                                       * nano-board binary-transfer commands (snap, rate, blk) with
+                                       * master's chain test (chain, stream) - 5 free. */
 #define CMD_PARSER_LINE_MAX_LEN  64
 
 /* History is a single packed byte pool, not one fixed-size slot per line: each

@@ -18,6 +18,7 @@
 #include "capture.h"
 #include "console.h"
 #include "diag.h"
+#include "timebase.h"
 
 /* NOSC / COSC values, from the ATDF value-group CLK1_CON__COSC. */
 #define NOSC_FRC        0x1u
@@ -118,7 +119,13 @@ void clock_init(void)
     WAIT_WHILE(PLL1CONbits.OSWEN, 1u);
     WAIT_WHILE(!OSCCTRLbits.PLL1RDY, 1u);
 
-    VCO1DIV = 0x10000u;         /* VCO divider output, unused here       */
+    /* VCO divider output = the DAC clock (CLKGEN7, NOSC 7). INTDIV[30:16],
+     * F = FVCO / (2 * INTDIV) (12.3.9; Example 12-4, p781, writes the same
+     * INTDIV = 2 with "PLL VCO DIV = PLL VCO clock / 2* INTDIV"): 1600 MHz
+     * / 4 = 400 MHz, the DAC's minimum (Table 40-24, p2016: 400-500 MHz).
+     * It used to be 0x10000 = 800 MHz and unused, with the DAC on PLL1 out
+     * at 320 MHz - below its minimum (ANALYSIS.md C.12.1). */
+    VCO1DIV = 0x20000u;
     PLL1CONbits.DIVSWEN = 1u;
     WAIT_WHILE(PLL1CONbits.DIVSWEN, 1u);
     console_trace("[clk] PLL1 locked, 320 MHz\r\n");
@@ -135,6 +142,9 @@ void clock_init(void)
     WAIT_WHILE(PLL2CONbits.OSWEN, 2u);
     WAIT_WHILE(!OSCCTRLbits.PLL2RDY, 2u);
 
+    /* PLL2 VCO divider: 1000 MHz / (2 * 1) = 500 MHz. Nothing runs on it
+     * except, on request, the DAC as a cross-check on a second VCO
+     * (clock_dac_select(), chaintest S5). 500 MHz is the DAC's maximum. */
     VCO2DIV = 0x10000u;
     PLL2CONbits.DIVSWEN = 1u;
     WAIT_WHILE(PLL2CONbits.DIVSWEN, 2u);
@@ -308,16 +318,32 @@ bool clock_adc_on(void)
 }
 
 /* ------------------------------------------------------------------ *
- * CLKGEN7 for the DAC (clock.h). Same recipe as CLKGEN6 at boot: source
- * PLL1 Fout, no divider, switch, wait. Table 18-1 (p1385) names Clock
- * Generator 7 as the DAC clock.
+ * CLKGEN7 for the DAC (clock.h). Table 18-1 (p1385) names Clock
+ * Generator 7 as the DAC clock, and Table 40-24 (p2016) wants 400 to
+ * 500 MHz at its input. Source: the PLL1 VCO divider, 400 MHz (NOSC 7,
+ * ATDF value group CLK_CON__NOSC "PLL1 VCO Divider output") - the same
+ * VCO as the ADC and the SCCP1 trigger, so all three stay in a fixed
+ * ratio (ANALYSIS.md C.11). The PLL2 VCO divider (NOSC 8, 500 MHz) is
+ * the second choice, for the cross-check on another VCO.
+ *
+ * Until 25.09.2026 this was CLK7CON = 0x29500, PLL1 out at 320 MHz:
+ * below the DAC's minimum, for every DAC capture this project ever took.
+ * The CON word is otherwise unchanged: ON, BOSC = BFRC, OE bit as before.
  * ------------------------------------------------------------------ */
+#define CLK7CON_BASE    0x29000u    /* ON, backup BFRC, as 0x29500 had   */
+static uint32_t dac_nosc = CLOCK_DAC_PLL1_VCO;
+
+void clock_dac_select(uint32_t nosc)
+{
+    dac_nosc = nosc;
+}
+
 bool clock_dac_on(void)
 {
 #ifdef __MPLAB_DEBUGGER_SIMULATOR
     return true;
 #else
-    CLK7CON = 0x29500u;             /* NOSC = PLL1 out, ON, backup BFRC  */
+    CLK7CON = CLK7CON_BASE | (dac_nosc << 8);   /* NOSC[11:8]            */
     CLK7DIV = 0u;
     CLK7CONbits.OSWEN = 1u;
     uint32_t n = DIVSW_WAIT_LIMIT;
@@ -351,18 +377,29 @@ static uint32_t pll1_out_hz(void)
 
 bool clock_trig_on(void)
 {
-    /* Same source and same sequence as CLKGEN6, so that the ADC and the
-     * module that triggers it are fed from one clock. No divider: the
-     * rate is set by the SCCP's own period register, which is 32 bits
-     * wide and reaches far lower than any divider here would. */
+    /* Same source as CLKGEN6, so that the ADC and the module that
+     * triggers it are fed from one clock - but divided by two: the CCP
+     * modules may be clocked at 200 MHz at most (Table 40-24, p2016), and
+     * PLL1 out is 320 MHz. INTDIV = 1 is a ratio of 2 (F = Fin / (2 *
+     * INTDIV), Example 12-2, p771), 160 MHz, which is also what
+     * Microchip's MC106 trigger example runs SCCP1 at. Until 25.09.2026
+     * this had no divider and ran the module at 320 MHz, out of
+     * specification. Whether the divider really divides is measured, not
+     * assumed: chaintest S1 times CCP1TMR against Timer1.
+     * Divider first, then the switch; DIVSWEN as well, because a CLKGEN
+     * divider only takes a new value through DIVSWEN (12.4.2 step 4). */
     CLK13CON = 0x29500u;              /* NOSC = PLL1 out, ON            */
-    CLK13DIV = 0u;                    /* straight through               */
+    CLK13DIV = 1ul << 16;             /* INTDIV = 1: /2 = 160 MHz       */
     CLK13CONbits.OSWEN = 1u;
 #ifdef __MPLAB_DEBUGGER_SIMULATOR
     return true;
 #else
     uint32_t n = DIVSW_WAIT_LIMIT;
     while (CLK13CONbits.OSWEN && (--n != 0u)) { }
+    if (n == 0u) { return false; }
+    CLK13CONbits.DIVSWEN = 1u;
+    n = DIVSW_WAIT_LIMIT;
+    while (CLK13CONbits.DIVSWEN && (--n != 0u)) { }
     if (n == 0u) { return false; }
     n = DIVSW_WAIT_LIMIT;
     while (!CLK13CONbits.CLKRDY && (--n != 0u)) { }
@@ -393,9 +430,99 @@ uint32_t clock_periph_hz(void)
     return clock_cpu_hz() / 2u;
 }
 
+/* A PLL's VCO and its VCO divider output, from the registers. */
+static uint32_t vco_hz(uint32_t pre, uint32_t fb)
+{
+    if (pre == 0u) { pre = 1u; }
+    return (uint32_t)((uint64_t)FRC_HZ * fb / pre);
+}
+
+static uint32_t vcodiv_hz(uint32_t vco, uint32_t intdiv)
+{
+    return (intdiv == 0u) ? vco : (vco / (2u * intdiv));
+}
+
 uint32_t clock_dac_hz(void)
 {
-    return pll1_out_hz();           /* CLKGEN7, CLK7DIV straight through */
+    /* Whatever CLKGEN7 is switched to, read back (CLK7DIV is straight
+     * through). The triangle model in dac.c depends on this number. */
+    switch (CLK7CONbits.COSC) {
+    case CLOCK_DAC_PLL1_VCO:
+        return vcodiv_hz(vco_hz(PLL1DIVbits.PLLPRE, PLL1DIVbits.PLLFBDIV), VCO1DIVbits.INTDIV);
+    case CLOCK_DAC_PLL2_VCO:
+        return vcodiv_hz(vco_hz(PLL2DIVbits.PLLPRE, PLL2DIVbits.PLLFBDIV), VCO2DIVbits.INTDIV);
+    case NOSC_PLL1_OUT:
+        return pll1_out_hz();
+    case NOSC_FRC:
+        return FRC_HZ;
+    default:
+        return 0u;
+    }
+}
+
+/* ------------------------------------------------------------------ *
+ * Clock monitor 4 as a frequency meter (clock.h)
+ *
+ * DS70005591D 12.4.7.3.1 and Example 12-5 (p788 f.): the reference clock
+ * (WINSEL) opens a window of WINPR + 1 of its cycles, the monitored clock
+ * (CNTSEL, divided by CNTDIV) is counted in it, and the count lands in
+ * CMxBUF with BUFV set. Codes from the ATDF value group CM_SEL__CNTSEL,
+ * the same list for WINSEL.
+ *
+ * Reference: CLKGEN1 (code 0), the 200 MHz system clock from PLL2 - the
+ * clock Timer1 hangs off, whose calibration every run checks. Window
+ * 200 000 cycles = 1 ms. Counter divided by 4 (CNTDIV = 2), so a 400 MHz
+ * clock counts 100 000 per window and the counter never runs near its
+ * limit; resolution 4 kHz. Thresholds wide open and the saturation at
+ * the top, so the monitor only measures and never raises anything; its
+ * interrupts stay disabled. CM4, because the fail-safe clock monitor of
+ * CLKGEN1 (FSCMEN in CLK1CON) may be served by one of the others.
+ *
+ * The first window after ON can be a partial one, so the second capture
+ * is the answer. No BUFV within the bound means the monitored clock does
+ * not run (or the monitor does not work): 0.
+ * ------------------------------------------------------------------ */
+#define CM_WINDOW_CYCLES   200000u        /* of CLKGEN1 = 1 ms           */
+#define CM_WINSEL_CLKGEN1  0u
+#define CM_CNTDIV_4        2u
+
+#ifndef __MPLAB_DEBUGGER_SIMULATOR
+static bool cm4_wait_buffer(void)
+{
+    uint32_t n = DIVSW_WAIT_LIMIT * 10u;   /* ~ tens of ms at 200 MHz    */
+    while (!CM4STATbits.BUFV && (--n != 0u)) { }
+    return n != 0u;
+}
+#endif
+
+uint32_t clock_monitor_hz(uint32_t cntsel)
+{
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+    (void)cntsel;
+    return 0u;
+#else
+    CM4CONbits.ON = 0u;
+    CM4CON   = 0u;
+    CM4SEL   = (cntsel << 8) | CM_WINSEL_CLKGEN1;   /* CNTSEL[15:8], WINSEL[7:0] */
+    CM4WINPR = CM_WINDOW_CYCLES - 1u;               /* WINPR + 1 cycles (p789)   */
+    CM4SAT   = 0xFFFFFFFFu;
+    CM4HFAIL = 0xFFFFFFFFu;  CM4LFAIL = 0u;
+    CM4HWARN = 0xFFFFFFFFu;  CM4LWARN = 0u;
+    CM4CONbits.CNTDIV = CM_CNTDIV_4;
+    CM4CONbits.ON = 1u;
+    if (!cm4_wait_buffer()) { CM4CONbits.ON = 0u; return 0u; }
+    /* The first capture may come from a partial window. Whether reading
+     * BUF clears BUFV is not documented, so do not rely on the flag
+     * again: wait 2.5 ms on Timer1 - at least one further complete 1 ms
+     * window - and take what BUF holds then. */
+    const uint32_t t0 = timebase_ticks();
+    while ((timebase_ticks() - t0) < (TIMEBASE_HZ / 400u)) { }
+    const uint32_t v = CM4BUF;
+    CM4CONbits.ON = 0u;
+    if (v == 0u) { return 0u; }
+    /* count * CNTDIV (4) per 1 ms window */
+    return v * 4u * (200000000u / CM_WINDOW_CYCLES);
+#endif
 }
 
 uint32_t clock_adc_div(void)
@@ -539,6 +666,10 @@ void clock_regs_dump(void)
     console_kv_hex("CLK6CON", CLK6CON);
     console_kv_hex("CLK6DIV", CLK6DIV);
     console_kv_hex("CLK7CON", CLK7CON);     /* DAC clock                 */
+    console_kv_hex("CLK7DIV", CLK7DIV);
+    console_kv_hex("VCO1DIV", VCO1DIV);     /* DAC clock source, 400 MHz */
+    console_kv_hex("CLK13CON", CLK13CON);   /* SCCP1 trigger clock       */
+    console_kv_hex("CLK13DIV", CLK13DIV);
     console_kv_hex("IEC0", IEC0);           /* CLKFAIL enable, bit 9     */
     console_kv_hex("IFS0", IFS0);           /* CLKFAIL flag,   bit 9     */
 }

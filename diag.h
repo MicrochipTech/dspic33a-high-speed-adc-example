@@ -28,6 +28,13 @@ extern volatile uint32_t trap_vec;
 extern volatile uint32_t trap_stage;
 void boot_mark(uint32_t stage);
 
+/* The chain test's stage (chaintest.c), in persistent RAM: CHAIN_MARK_MAGIC
+ * | stage while a chain run is inside that stage, 0 after its @END. The
+ * next boot reports a run that never reached @END, so that a hang or a
+ * trap in the middle of "chain all" still says where it happened. */
+#define CHAIN_MARK_MAGIC  0xC4A10000u
+extern volatile uint32_t chain_mark;
+
 /* Stop with a blink code (never returns). Codes: table in diag.c. */
 void fail(uint32_t code);
 

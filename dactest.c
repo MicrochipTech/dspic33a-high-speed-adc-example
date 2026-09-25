@@ -88,9 +88,23 @@
 
 static uint16_t store[SAMPLES_PER_BUF_MAX];
 
-uint32_t dactest_run(uint32_t halves)
+uint32_t dactest_run(uint32_t bursts)
 {
-    (void)halves;                     /* one buffer, by construction     */
+    /* `bursts` is how many bursts run back to back before the ISR stops
+     * the stream. The buffer then holds the LAST of them, so with a
+     * count above one the window is a burst out of a running stream, not
+     * an isolated one - which is the only way to look at streaming data
+     * without racing the DMA for it.
+     *
+     * That is what decides the question run 16 left open. The triangle's
+     * period is a property of the DAC and cannot change, so period in
+     * samples divided by sample rate must come out the same at every
+     * burst count. If the rate measures ten times higher at a hundred
+     * bursts AND the period measures ten times longer in samples, then
+     * each conversion is landing in the buffer more than once and the
+     * converter never sped up. If the period in samples stays put while
+     * the rate rises, it really did. */
+    if (bursts == 0u) { bursts = 1u; }
 
     /* Whichever DAC runs. Both units exist since the GUI can drive either
      * (dac.h); dac_active() picks DAC2 first, the one the UREF route and
@@ -139,10 +153,15 @@ uint32_t dactest_run(uint32_t halves)
         const uint32_t f_dac    = clock_dac_hz();
         if ((ksps_now != 0u) && (f_dac != 0u)) {
             const uint32_t win_ns = (uint32_t)(((uint64_t)n * 1000000u) / ksps_now);
-            uint64_t sl = (uint64_t)64u * 513280u * 32653061u;
+            /* Aim at about TWO periods per window, not one: the period is
+             * measured from the distance between turning points, and two
+             * of them are needed before there is a distance at all. One
+             * period per window gave a single reversal and no period
+             * (run 14). Hence the factor of two on the step size. */
+            uint64_t sl = (uint64_t)2u * 64u * 513280u * 32653061u;
             sl /= ((uint64_t)win_ns * f_dac);
             if (sl < 1u)   { sl = 1u; }
-            if (sl > 255u) { sl = 255u; }
+            if (sl > 50u)  { sl = 50u; }    /* 0x100..0xF00 within 0xCD+SLPDAT..0xF32-SLPDAT */
             console_kv("[dactest]   window ns expected", win_ns);
             console_kv("[dactest]   triangle slpdat chosen for it", (uint32_t)sl);
             if (!dac_triangle_start(unit, 0x100u, 0xF00u, (uint16_t)sl)) {
@@ -151,10 +170,11 @@ uint32_t dactest_run(uint32_t halves)
         }
     }
 
-    /* ---- one buffer, then the ISR stops ---------------------------- */
-    const uint32_t t0 = timebase_ticks();
-    const uint32_t rc = capture_oneshot();
-    const uint32_t ticks = timebase_ticks() - t0;
+    /* ---- N bursts, then the ISR stops ------------------------------ */
+    console_kv("[dactest]   bursts before the stop", bursts);
+    console_flush();
+    const uint32_t rc    = capture_oneshot_n(bursts);
+    const uint32_t ticks = capture_oneshot_ticks();   /* ALL the bursts  */
     if (rc != 0u) {
         console_puts((rc == 8u) ? "[dactest] the DMA channel switched itself off\r\n"
                                 : "[dactest] no data\r\n");
@@ -212,18 +232,26 @@ uint32_t dactest_run(uint32_t halves)
      * formula in dac.c does not describe this hardware and nothing is
      * judged against it. The same goes for DACLOW: the triangle in run 13
      * ran between 2416 and 3851, and only the upper end matched. */
-    const uint32_t window_ns = (uint32_t)(((uint64_t)ticks * 1000000000ull) / TIMEBASE_HZ);
+    /* The clock covered every burst; the buffer holds only the last one.
+     * The rate comes from all of them, the window from one. */
+    const uint32_t total_ns  = (uint32_t)(((uint64_t)ticks * 1000000000ull) / TIMEBASE_HZ);
+    const uint32_t window_ns = total_ns / bursts;
     uint32_t meas_period_ns = 0u;
+    uint32_t meas_period_samples = 0u;
     if ((nmarks >= 2u) && (window_ns != 0u) && (n != 0u)) {
-        const uint32_t spread   = marks[nmarks - 1u] - marks[0];
-        const uint32_t per_samp = (2u * spread) / (nmarks - 1u);
-        meas_period_ns = (uint32_t)(((uint64_t)per_samp * window_ns) / n);
+        const uint32_t spread = marks[nmarks - 1u] - marks[0];
+        meas_period_samples = (2u * spread) / (nmarks - 1u);
+        meas_period_ns = (uint32_t)(((uint64_t)meas_period_samples * window_ns) / n);
     }
 
-    console_kv("[dactest] window ticks (12.5 MHz)", ticks);
-    console_kv("[dactest] window ns", window_ns);
-    console_kv("[dactest] sample rate ksps in this burst", (window_ns != 0u)
-               ? (uint32_t)(((uint64_t)n * 1000000u) / window_ns) : 0u);
+    console_kv("[dactest] ticks over all bursts (12.5 MHz)", ticks);
+    console_kv("[dactest] ns per burst window", window_ns);
+    console_kv("[dactest] sample rate ksps", (total_ns != 0u)
+               ? (uint32_t)(((uint64_t)n * bursts * 1000000u) / total_ns) : 0u);
+    /* THE number the duplicate question turns on. A sample rate that
+     * rises with the burst count while this rises with it too means the
+     * values are repeated in the buffer, not converted faster. */
+    console_kv("[dactest] triangle period in SAMPLES (measured)", meas_period_samples);
     console_kv("[dactest] reversal hysteresis used", hyst);
     console_kv("[dactest] triangle period ns MEASURED from the data", meas_period_ns);
     console_kv("[dactest]   the same computed from the DAC registers", period_ns);

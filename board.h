@@ -158,11 +158,13 @@
  * likely to pass, and a failure there means the chain itself is broken -
  * not the rate. "pll <p1> <p2>" changes it at run time.
  *
- * Why the PLL and not the CLKGEN6 divider: the divider does not work.
- * Every ratio was written, read back and confirmed by DIVSWEN and CLKRDY,
- * with the generator switched off around the write and with it left
- * running, and the ADC converted at 40 MSPS at every one of them
- * (docs/HARDWARE-LOG.md runs 8 and 9). */
+ * Why the PLL and not the CLKGEN6 divider: in runs 8 and 9 the divider
+ * seemed to have no effect - but both runs measured under overrun load,
+ * an instrument later found void, and every document names CLKGEN6 as
+ * the ADC clock (ANALYSIS.md C.3, withdrawn 25.09.2026). The chain test
+ * measures it at the generator itself (chaintest.c S8). The chain test
+ * does not use this boot rate: it sets PLL1 to 5/1 and paces the ADC
+ * with SCCP1. */
 #ifndef ADC_PLL_POSTDIV1
 #define ADC_PLL_POSTDIV1  7u
 #endif
