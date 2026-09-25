@@ -50,6 +50,8 @@
  *   clear                      zero the error counters
  *   led on|off|auto            LED0
  *   sweep [halves]             overrun vs sample rate, 1.25..40 MSPS, one table
+ *   stream on <ksps> | off     the chain as a standing stream, main() processing
+ *   stream                     its state: rate, halves, overrun/late/missed, load
  *   chain all|from n|n|run     the chain test SCCP1 -> ADC -> DMA -> CPU
  *                              (chaintest.c, docs/CHAIN-TEST-PLAN.md)
  *   reset                      software reset
@@ -1491,6 +1493,7 @@ static void cmd_test_fn(int argc, char **argv)
 {
     uint32_t halves = 0u;                  /* 0 = the part's own default */
     if (argc == 1) { test_list(); return; }
+    chain_stream_off();                    /* the tests need the boot setup */
     if (argc > 3) { usage("test <all|self|clock|clkoff|bursts|matrix|rate|sweep|dac> [n]"); return; }
     if ((argc == 3) && !arg_u32(argv[2], 1u, 100000u, &halves)) {
         usage("test <all|self|clock|clkoff|bursts|matrix|rate|sweep|dac> [n]");
@@ -1570,6 +1573,54 @@ static void cmd_chain_fn(int argc, char **argv)
 }
 CMD_DEFINE(chain, "chain", cmd_chain_fn, "chain all|<n>|from <n>|run <ksps> [s] - the chain test");
 
+/* The chain as the example runs it (chaintest.c): "stream on <ksps>"
+ * starts it and returns - main() processes every half from then on -
+ * "stream" reports, "stream off" stops. The report is a snapshot taken
+ * first and printed afterwards; printing takes the CPU from main() for a
+ * few milliseconds, so at high rates each "stream" costs some halves,
+ * which then show in the NEXT report's missed count. */
+static void cmd_stream_fn(int argc, char **argv)
+{
+    static const char use[] = "stream on <ksps 1..40000> | stream off | stream";
+    uint32_t k = 0u;
+    if ((argc == 3) && (strcmp(argv[1], "on") == 0) && arg_u32(argv[2], 1u, 40000u, &k)) {
+        if (!chain_stream_on(k)) { put_line("stream: set-up failed (clock, core or trigger) - run 'chain 0'"); cmd_parser_fail(); return; }
+    } else if ((argc == 2) && (strcmp(argv[1], "off") == 0)) {
+        chain_stream_off();
+        put_line("stream: off, boot configuration restored");
+        return;
+    } else if (argc != 1) {
+        usage(use);
+        return;
+    }
+    uint32_t ksps = 0u, free_cyc = 0u;
+    uint64_t xfer = 0u;
+    if (!chain_streaming()) { put_line("stream: off"); return; }
+    const bool running = chain_stream_state(&ksps, &xfer, &free_cyc);
+    /* snapshot, then print */
+    const uint32_t halves = blocks_done, ov = dma_overrun, la = late_service, mi = proc_missed;
+    const uint32_t pmax = proc_ticks_max;
+    const bool brake = capture_overrun_aborted();
+    uint32_t mn = 0u, mx = 0u, mean = 0u;
+    half_stats(&mn, &mx, &mean);
+    put_line(running ? "stream: on - SCCP1 -> ADC core 5 (RA8, DAC2 triangle) -> DMA0 -> ping-pong -> main()"
+                     : "stream: STOPPED by itself - the overrun brake fired, the rate is not usable");
+    put_kv("ksps", ksps);
+    put_kv("seconds", (ksps != 0u) ? (uint32_t)(xfer / ((uint64_t)ksps * 1000u)) : 0u);
+    put_kv("transfers (millions)", (uint32_t)(xfer / 1000000u));
+    put_kv("halves", halves);
+    put_kv("overrun", ov);
+    put_kv("late", la);
+    put_kv("missed", mi);
+    put_kv("brake", brake ? 1u : 0u);
+    put_kv("processing max per half, us", (pmax * 8u + 50u) / 100u);   /* 80 ns ticks */
+    put_kv("free CPU cycles per sample (mean)", free_cyc);
+    put_kv("last half min", mn);
+    put_kv("last half max", mx);
+    put_kv("last half mean", mean);
+}
+CMD_DEFINE(stream, "stream", cmd_stream_fn, "stream on <ksps>|off - the chain streaming, main() processing");
+
 static void cmd_reset_fn(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -1617,6 +1668,7 @@ void cli_init(void)
     (void)cmd_register(&cmd_dac);
     (void)cmd_register(&cmd_dactest);
     (void)cmd_register(&cmd_chain);
+    (void)cmd_register(&cmd_stream);
     (void)cmd_register(&cmd_reset);
 
     /* Banner, once at start-up. A human sees what is talking and which

@@ -1370,6 +1370,7 @@ static void summary(void)
 
 void chain_all(uint32_t first, uint32_t last)
 {
+    chain_stream_off();                       /* a running stream goes first */
     if (CHAIN_ON_SIMULATOR) {
         say("@S0.0 note=simulator_build_has_no_SCCP_ADC_DMA -> SKIP\r\n@END\r\n");
         return;
@@ -1421,6 +1422,7 @@ void chain_all(uint32_t first, uint32_t last)
 
 void chain_run(uint32_t ksps, uint32_t seconds)
 {
+    chain_stream_off();
     if (CHAIN_ON_SIMULATOR) {
         say("@S9.0 note=simulator_build -> SKIP\r\n");
         return;
@@ -1445,4 +1447,65 @@ void chain_run(uint32_t ksps, uint32_t seconds)
     restore();
     chain_mark = 0u;
     say("@END\r\n");
+}
+
+/* ------------------------------------------------------------------ *
+ * The chain as a standing stream ("stream on") - the example itself
+ *
+ * Set up as the test does, the DAC triangle on RA8 as the signal, the
+ * triggered stream started with no end, and then the command RETURNS:
+ * from here on main() serves every completed half through
+ * capture_service(), exactly as the application will, and the console
+ * stays free. Nothing prints by itself while it runs; "stream" asks.
+ * ------------------------------------------------------------------ */
+static bool     s_on    = false;
+static uint32_t s_ticks = 0u;
+
+static uint32_t period_for(uint32_t ksps)
+{
+    uint32_t n = (g_trig_hz / 1000u + ksps / 2u) / ksps;
+    return (n < 4u) ? 4u : n;                 /* 40 MSPS is the ceiling      */
+}
+
+bool chain_stream_on(uint32_t ksps)
+{
+    chain_stream_off();
+    if (CHAIN_ON_SIMULATOR || (ksps == 0u)) { return false; }
+    g_trig_hz = TRIG_HZ_NOMINAL;
+    if (!setup()) { restore(); return false; }
+    const uint32_t n = period_for(ksps);
+    uint16_t slp = 0u;
+    (void)triangle_for(rate_hz(n), &slp);
+    wait_ticks(TICKS_PER_MS);
+    if (!capture_chain_start(n, SCCP_MODE_TIMER, 0u, false)) { restore(); return false; }
+    s_on = true;
+    s_ticks = n;
+    return true;
+}
+
+void chain_stream_off(void)
+{
+    if (!s_on) { return; }
+    (void)capture_chain_stop();
+    restore();
+    s_on = false;
+}
+
+bool chain_streaming(void)
+{
+    return s_on;
+}
+
+bool chain_stream_state(uint32_t *ksps, uint64_t *transfers, uint32_t *free_cyc)
+{
+    if (!s_on) { return false; }
+    *ksps = ksps_of(s_ticks);
+    *transfers = capture_transfers();
+    /* The budget as in S6: a half lasts half_len * N / f_trig, 16 CPU
+     * cycles per Timer1 tick, minus the mean processing time. */
+    const uint32_t hl = capture_half_len();
+    const uint32_t half_ticks = (uint32_t)(((uint64_t)hl * s_ticks * TIMEBASE_HZ) / g_trig_hz);
+    const uint32_t pmean = (proc_count != 0u) ? (proc_ticks_sum / proc_count) : 0u;
+    *free_cyc = (half_ticks > pmean) ? ((half_ticks - pmean) * CPU_PER_TICK / hl) : 0u;
+    return capture_chain_active();            /* false once the brake fired  */
 }

@@ -174,7 +174,10 @@ int main(void)
         SIM_DMA_TICK();               /* simulator: one half per pass    */
         if (capture_service()) {
             idle = 0;
-            if (blocks_done >= next_status) {
+            /* No status lines while "stream on" runs: printing takes the
+             * CPU from this loop for milliseconds and would itself cause
+             * missed halves. "stream" reports on request. */
+            if ((blocks_done >= next_status) && !capture_chain_active()) {
                 if (SIM_CHECK_RUNNING()) {
                     /* Simulator: the UART is slow, keep it quiet while
                      * the ping-pong check runs. Empty on silicon. */
@@ -188,7 +191,9 @@ int main(void)
                                    : 12u * STATUS_EVERY_HALVES;
                 }
             }
-        } else if (capture_running()) {
+        } else if (capture_running() && !capture_chain_active()) {
+            /* Burst mode only: a triggered stream at 1 kSPS delivers one
+             * half per second, far longer than this loop's idle bound. */
             /* The stream stopped: burst restart lost, or the DMA shut
              * itself off. Say so instead of sitting here silently. */
             if (!dma0_enabled())     { fail(8u); }

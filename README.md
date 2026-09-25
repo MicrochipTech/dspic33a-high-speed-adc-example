@@ -362,6 +362,16 @@ boot banner: the next boot prints the stage the run was in
 (`[boot] WARNING the last 'chain' run ended without @END, in stage S...`), and
 `chain from <stage>` continues from there.
 
+**The chain as the example itself:** `stream on <ksps>` starts SCCP1 -> ADC ->
+DMA -> ping-pong at about that rate (the nearest 160 MHz / N, 1..40000 kSPS),
+with the DAC triangle on RA8 as the signal, and returns; from then on the main
+loop processes every half, exactly as an application would, and the console
+stays free. `stream` shows its state - rate, seconds, halves, overrun, late,
+missed, processing time, free CPU cycles per sample, min/max/mean of the last
+half - and `stream off` stops it and restores the boot configuration. Printing
+the report takes the main loop's CPU for a few milliseconds, so at high rates a
+report can itself cost a few halves; they show as `missed` in the next one.
+
 Other forms: `chain <n>` runs one stage (0..9), `chain run <ksps> [seconds]`
 runs the chain at a chosen rate (the nearest 160 MHz / N) for as long as asked,
 with one status line per second, printed after the stream so that printing does

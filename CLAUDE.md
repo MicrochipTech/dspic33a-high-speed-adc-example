@@ -129,7 +129,9 @@ Build the simulator variant to prove it still compiles; run it when asked.
 - Do not edit `cmd_parser.c/.h` - with one deliberate exception:
   `CMD_PARSER_MAX_COMMANDS` is 24 instead of upstream's 16 (24.09.2026, for the 17th to
   19th commands `core`, `dac`, `dactest`; 32 bytes of RAM). When updating the parser from
-  github.com/zabooh/cmd_parser, re-apply that one line.
+  github.com/zabooh/cmd_parser, re-apply that one line. Since `chain` and `stream`
+  (25.09.2026) all 24 slots are taken - `help` counts as one - and `cmd_register()`
+  fails silently: a 25th command needs the limit raised first.
 
 ## How the example is built, and what that costs
 
