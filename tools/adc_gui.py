@@ -132,6 +132,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pins128  # noqa: E402  (needs the path above)
 import pins64  # noqa: E402
 from boards import BOARDS  # noqa: E402
+# The chain-stream tile's triangle analysis reuses the SAME evaluator the
+# firmware's tri_eval() (chaintest.c) is ported from, rather than a second
+# implementation that could silently disagree with it; synth() also backs
+# the fake target's "stream grab" frames (host-testable without a board).
+from eval_chain import tri_eval as chain_tri_eval  # noqa: E402
+from eval_chain import grid_ok as chain_grid_ok  # noqa: E402
+from eval_chain import synth as chain_synth  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +162,7 @@ SETTINGS_DEFAULTS = {
     "buffer": {"size": 2048},
     "capture": {"count": 1024, "interval_ms": 500},
     "sweep": {"halves": 2000, "half_len": 1024},
+    "chain": {"ksps": 8000, "interval_ms": 500},
     "dac": {
         "1": {"on": False, "low": 0x100, "high": 0xF00, "slpdat": 8},
         "2": {"on": False, "low": 0x100, "high": 0xF00, "slpdat": 8},
@@ -734,6 +742,37 @@ def dac_period_ns_of(low: int, high: int, slp: int) -> float:
 
 
 # ---------------------------------------------------------------------------
+# The chain stream's triangle (chaintest.c: triangle_for(), dac.h): the
+# range is not part of the "stream grab" frame (only slpdat and the DAC
+# clock are, docs/PLAN-BINARY-TRANSFER.md), because it is not a free
+# choice -- triangle_for() always picks the widest range these two fixed
+# limits (dac.h) and slpdat allow, with 32 codes of margin inside that.
+# Reproducing the same arithmetic here, from slpdat alone, gives the exact
+# model slope length the firmware's own tri_eval() call is judged against
+# (chaintest.c stage5's "ratio_x1000"), without having to also transmit
+# low/high.
+# ---------------------------------------------------------------------------
+CHAIN_DAC_CODE_MIN = 0x0CD
+CHAIN_DAC_CODE_MAX = 0xF32
+
+
+def chain_triangle_range(slp: int):
+    return CHAIN_DAC_CODE_MIN + slp + 32, CHAIN_DAC_CODE_MAX - slp - 32
+
+
+def chain_model_slope_samples(slp: int, dac_hz: float, ksps: float) -> float:
+    """Mirrors dac_slope_samples_x1000()/1000 (dac.c) for the chain
+    triangle's range: one slope's length in samples, at the rate and DAC
+    clock a 'stream grab' frame reports."""
+    if slp <= 0 or dac_hz <= 0 or ksps <= 0:
+        return 0.0
+    low, high = chain_triangle_range(slp)
+    if high <= low:
+        return 0.0
+    return (high - low) * 32.0 * (ksps * 1e3) / (slp * dac_hz)
+
+
+# ---------------------------------------------------------------------------
 # Binary block transfer ('blk'), see docs/PLAN-BINARY-TRANSFER.md.
 # Frame: "BIN n=<count> pace=<> per=<> samc=<> in=<>\r\n" + 2*count bytes
 # (uint16 LE, 12 bit) + "\r\nCRC <hex4>\r\n" + the usual prompt and ACK/NAK.
@@ -794,6 +833,61 @@ def probe_blk(target) -> bool:
     except Exception:
         return False
     return ok and any("blk" in l for l in lines)
+
+
+# ---------------------------------------------------------------------------
+# "stream grab": one halt/transfer/restart cycle of the standing chain
+# (chaintest.c chain_stream_grab_begin/_end, cli.c cmd_stream_grab()). Same
+# framing as 'blk' -- a header line, the payload, a CRC line -- with a
+# different, wider header: the actual rate, where in the raw buffer the
+# window starts, the stream counters since the PREVIOUS grab (not the
+# running total), and the DAC triangle setting (slpdat, DAC clock) the
+# model slope is computed from. docs/PLAN-BINARY-TRANSFER.md.
+# ---------------------------------------------------------------------------
+_GRAB_HEADER_RE = re.compile(
+    r"GRAB n=(\d+) from=(\d+) ksps=(\d+) ov=(\d+) late=(\d+) missed=(\d+) "
+    r"halves=(\d+) xfer=(\d+) slp=(\d+) dachz=(\d+)")
+
+
+def parse_grab_frame(header_line: str, payload: bytes, tail: bytes):
+    """Decode one 'stream grab' frame from its three pieces, exactly as
+    parse_blk_frame() does for 'blk' -- the same function serves a real
+    board (Target.grab()) and the stand-in (FakeTarget.grab()). Returns
+    (ok, samples, meta); on any problem meta['error'] is set and ok is
+    False."""
+    m = _GRAB_HEADER_RE.match(header_line.strip())
+    if not m:
+        raise RuntimeError(f"grab: no GRAB header, got {header_line!r}")
+    n = int(m.group(1))
+    meta = dict(from_=int(m.group(2)), ksps=int(m.group(3)), overrun=int(m.group(4)),
+                late=int(m.group(5)), missed=int(m.group(6)), halves=int(m.group(7)),
+                transfers=int(m.group(8)), slpdat=int(m.group(9)), dac_hz=int(m.group(10)))
+    m2 = _CRC_LINE_RE.search(tail)
+    if not m2:
+        raise RuntimeError(f"grab: no CRC line, got {tail!r}")
+    crc_frame = int(m2.group(1), 16)
+    crc_calc = crc16_ccitt_false(payload)
+    samples = (np.frombuffer(payload, dtype="<u2").astype(int) & 0x0FFF) if n else np.zeros(0, dtype=int)
+    ok = n > 0 and len(payload) == 2 * n and crc_frame == crc_calc and tail.endswith(ACK)
+    if n == 0:
+        meta["error"] = "NAK: no stream on, or the halt/restart failed"
+    elif len(payload) != 2 * n:
+        meta["error"] = f"short block: got {len(payload)} of {2 * n} bytes"
+    elif crc_frame != crc_calc:
+        meta["error"] = f"CRC mismatch: frame {crc_frame:04X}, computed {crc_calc:04X}"
+    elif not tail.endswith(ACK):
+        meta["error"] = "NAK after block"
+    return ok, samples, meta
+
+
+def probe_grab(target) -> bool:
+    """Does this target's 'stream' understand the 'grab' sub-command? Ask
+    'help' once, the same probe probe_blk() uses for 'blk'."""
+    try:
+        ok, lines = target.cmd("help")
+    except Exception:
+        return False
+    return ok and any(("stream" in l) and ("grab" in l) for l in lines)
 
 
 def _parse_buf(lines) -> int:
@@ -934,6 +1028,35 @@ class Target:
         self._log(f"< {'[ACK]' if ok else '[NAK]'}")
         return parse_blk_frame(header_line, payload, tail)
 
+    def grab(self, timeout: float = 10.0):
+        """'stream grab': one halt/transfer/restart cycle of the standing
+        chain. Same read sequence as blk() -- echo, header line, exactly
+        2*n payload bytes, then the CRC line and ACK/NAK -- with the wider
+        GRAB header (see parse_grab_frame). Only the ASCII framing is
+        logged; the sample bytes are not."""
+        self._log("> stream grab")
+        self.ser.reset_input_buffer()
+        self.ser.write(b"stream grab\r")
+        echo = self._read_line(timeout)
+        self._log(f"< {echo.rstrip()}")
+        header_line = self._read_line(timeout)
+        self._log(f"< {header_line.rstrip()}")
+        m = _GRAB_HEADER_RE.match(header_line.strip())
+        if not m:
+            raise RuntimeError(f"grab: unsupported or no GRAB header, got {header_line!r}")
+        n = int(m.group(1))
+        payload = self._read_exact(2 * n, timeout) if n else b""
+        if payload:
+            self._log(f"< [binary payload, {len(payload)} bytes, not shown]")
+        tail = self._read_until_ready(timeout)
+        ok = tail.endswith(ACK)
+        tail_text = tail[:-1].decode("ascii", "replace") if tail else ""
+        for l in tail_text.split("\n"):
+            if l.strip():
+                self._log(f"< {l.rstrip()}")
+        self._log(f"< {'[ACK]' if ok else '[NAK]'}")
+        return parse_grab_frame(header_line, payload, tail)
+
 
 class FakeTarget:
     """Answers like cli.c would, delivers a synthetic signal at the configured
@@ -966,6 +1089,31 @@ class FakeTarget:
         self.t0 = None                            # wall-clock anchor, lazy
         self.counters = dict(overrun=0, late=0, missed=0, addr_err=0, bus_err=0, blocks=0)
         self.rng = np.random.default_rng(1)
+        # The chain stream ("stream on/off/grab", chaintest.c): a triangle
+        # with a fault the caller injects (grab_fault), so the GUI's PASS/
+        # FAIL verdict and its counter chips can both be exercised without
+        # a board (--selftest, and by hand with --fake).
+        self.chain_on = False
+        self.chain_ksps = 0
+        self.chain_ready_half = 0                 # alternates like ready_half in capture.c
+        self.chain_grabs = 0
+        self.grab_fault = None                    # None, "drop", "dup", "overrun", "missed"
+
+    def _chain_slpdat(self) -> int:
+        """triangle_for()'s SLOPE_TARGET=128-samples-per-slope search, for
+        the rate the stand-in's chain is "on" at -- same formula as
+        chain_model_slope_samples(), solved the other way around."""
+        rate = self.chain_ksps * 1000
+        f = DAC_CLK_HZ
+        full = (CHAIN_DAC_CODE_MAX - CHAIN_DAC_CODE_MIN) - 64
+        s = 1
+        while (2 * s + 64) < full:
+            span = full - 2 * s
+            samples = span * 32 * rate / (s * f) if (s * f) else 0.0
+            if samples <= 128:
+                break
+            s += 1
+        return s
 
     def close(self):
         pass
@@ -1144,7 +1292,29 @@ class FakeTarget:
             if c == "version":
                 return True, ["adc_dma_40msps (fake target)", "board: none, synthetic signal"]
             if c == "help":
-                return True, ["commands: start stop snap rate pll clk core samc input dac buf status version dump blk"]
+                return True, [
+                    "commands: start stop snap rate pll clk core samc input dac buf status version dump blk",
+                    "stream on <ksps>|off|grab - the chain streaming, one halt/transfer/restart cycle",
+                ]
+            if c == "stream":
+                if args and args[0] == "on":
+                    if len(args) < 2 or not args[1].isdigit() or not (1 <= int(args[1]) <= 40000):
+                        return False, ["usage: stream on <ksps 1..40000> | stream off | stream grab | stream"]
+                    self.chain_on = True
+                    self.chain_ksps = int(args[1])
+                    self.chain_ready_half = 0
+                    self.chain_grabs = 0
+                    return True, [f"stream: on - {self.chain_ksps} ksps"]
+                if args and args[0] == "off":
+                    self.chain_on = False
+                    return True, ["stream: off, boot configuration restored"]
+                if args and args[0] == "grab":
+                    return False, ["usage: use target.grab(), not cmd('stream grab') - binary framing"]
+                if args:
+                    return False, ["usage: stream on <ksps 1..40000> | stream off | stream grab | stream"]
+                if not self.chain_on:
+                    return True, ["stream: off"]
+                return True, [f"stream: on - {self.chain_ksps} ksps", f"grabs: {self.chain_grabs}"]
             if c == "snap":
                 # One buffer, and the DMA interrupt ends the stream. The
                 # window that follows is contiguous; that is the whole
@@ -1233,6 +1403,58 @@ class FakeTarget:
         self._log(f"< {'[ACK]' if ack == ACK else '[NAK]'}")
         tail = f"\r\nCRC {crc:04X}\r\n> ".encode("ascii") + ack
         return parse_blk_frame(header_line, payload, tail)
+
+    def grab(self, timeout: float = 10.0, corrupt_payload: bool = False):
+        """Builds the identical frame bytes cmd_stream_grab() (cli.c) would
+        send for one halt/transfer/restart cycle, then decodes them with
+        parse_grab_frame() -- the same function Target.grab() uses for a
+        real board. n=0 (NAK) if the stream is not on, mirroring
+        chain_stream_grab_begin() returning false. The synthetic window is
+        eval_chain.synth()'s triangle, with grab_fault injecting exactly
+        the faults tri_eval() is built to catch (see chaintest.c's own
+        host test of the evaluator) -- a lost or repeated sample fails the
+        grid check, and 'overrun'/'missed' only move this cycle's counter
+        chips, not the samples."""
+        self._log("> stream grab")
+        if not self.chain_on:
+            header_line = "GRAB n=0 from=0 ksps=0 ov=0 late=0 missed=0 halves=0 xfer=0 slp=0 dachz=0\r\n"
+            self._log(f"< {header_line.rstrip()}")
+            crc = crc16_ccitt_false(b"")
+            self._log(f"< CRC {crc:04X}")
+            self._log("< [NAK]")
+            tail = f"\r\nCRC {crc:04X}\r\n> ".encode("ascii") + NAK
+            return parse_grab_frame(header_line, b"", tail)
+
+        self.chain_grabs += 1
+        n = self.buf_size // 2
+        frm = self.chain_ready_half * n
+        self.chain_ready_half ^= 1
+        slp = self._chain_slpdat()
+        # DAC_CLK_HZ both drives the synthetic samples and is reported as
+        # "dachz", so the GUI's model-vs-measured ratio comes out near 1.0
+        # on a fault-free cycle -- the point of a stand-in, not a claim
+        # about which PLL output the real chain's CLKGEN7 runs from
+        # (docs/CHAIN-TEST-PLAN.md section 3; the frame carries the real
+        # board's actual clock_dac_hz() there).
+        slope_samples = max(1.0, chain_model_slope_samples(slp, DAC_CLK_HZ, self.chain_ksps))
+        drop = n // 2 if self.grab_fault == "drop" else None
+        dup = n // 2 if self.grab_fault == "dup" else None
+        v = chain_synth(n, slope_samples, phase=float(self.chain_grabs * 7 % int(2 * slope_samples) or 1),
+                        drop=drop, dup=dup, seed=self.chain_grabs)
+        ov = 3 if self.grab_fault == "overrun" else 0
+        missed = 2 if self.grab_fault == "missed" else 0
+        header_line = (f"GRAB n={n} from={frm} ksps={self.chain_ksps} ov={ov} late=0 "
+                        f"missed={missed} halves=2 xfer={2 * n} slp={slp} dachz={int(DAC_CLK_HZ)}\r\n")
+        self._log(f"< {header_line.rstrip()}")
+        payload = np.asarray(v, dtype="<u2").tobytes()
+        self._log(f"< [binary payload, {len(payload)} bytes, not shown]")
+        crc = crc16_ccitt_false(payload)
+        if corrupt_payload and payload:
+            payload = bytes([payload[0] ^ 0xFF]) + payload[1:]
+        self._log(f"< CRC {crc:04X}")
+        self._log("< [ACK]")
+        tail = f"\r\nCRC {crc:04X}\r\n> ".encode("ascii") + ACK
+        return parse_grab_frame(header_line, payload, tail)
 
 
 def parse_dump(lines) -> np.ndarray:
@@ -1602,6 +1824,93 @@ def selftest() -> int:
     print("blk corruption caught:", "PASS" if ok_corrupt else "FAIL", "-", meta.get("error"))
 
     ok_all &= crc16_ccitt_false(b"123456789") == 0x29B1
+
+    # ---- "stream grab" (docs/PLAN-BINARY-TRANSFER.md's frame, extended) ----
+    assert probe_grab(t), "fake target's help must advertise 'stream' and 'grab'"
+
+    # No stream on yet: NAK, exactly what chain_stream_grab_begin() returning
+    # false produces on the board (cli.c cmd_stream_grab()).
+    ok, samples, meta = t.grab()
+    ok_no_stream = (not ok) and len(samples) == 0 and "error" in meta
+    ok_all &= ok_no_stream
+    print("grab without 'stream on' refused:", "PASS" if ok_no_stream else "FAIL", "-", meta.get("error"))
+
+    ok, lines = t.cmd("stream on 8000")
+    assert ok, ("stream on", lines)
+    ok, samples, meta = t.grab()
+    r = chain_tri_eval([int(v) for v in samples])
+    ok_grab = (ok and len(samples) == t.buf_size // 2 and meta["from_"] == 0
+              and meta["ksps"] == 8000 and chain_grid_ok(r))
+    ok_all &= ok_grab
+    print(f"grab (clean triangle): {len(samples)} samples, from {meta['from_']}, "
+          f"slip {r['slip']:.3f} -> {'PASS' if ok_grab else 'FAIL'}")
+
+    # The buffer alternates halves like ready_half does in capture.c - the
+    # second grab must land at the OTHER half (from > 0), not the same one.
+    ok2, samples2, meta2 = t.grab()
+    ok_from = ok2 and meta2["from_"] == t.buf_size // 2 and meta2["from_"] > 0
+    ok_all &= ok_from
+    print(f"grab #2 from={meta2['from_']} (> 0, the other half):", "PASS" if ok_from else "FAIL")
+
+    # A lost/repeated sample must fail the SAME grid check the firmware's
+    # own tri_eval() uses - the fake target injects exactly what
+    # chaintest.c's host test of the evaluator injects (CHAIN-TEST-PLAN.md
+    # section 9).
+    t.grab_fault = "drop"
+    ok3, samples3, meta3 = t.grab()
+    r3 = chain_tri_eval([int(v) for v in samples3])
+    ok_fault = ok3 and not chain_grid_ok(r3)
+    ok_all &= ok_fault
+    print(f"grab (lost sample injected): slip {r3['slip']:.3f} -> "
+          f"{'FAIL (correctly caught)' if not chain_grid_ok(r3) else 'PASS (missed it!)'}",
+          "PASS" if ok_fault else "FAIL")
+    t.grab_fault = None
+
+    # A damaged block must be reported, never silently accepted - same
+    # check as 'blk corruption caught' above, for the grab frame.
+    ok4, _, meta4 = t.grab(corrupt_payload=True)
+    ok_grab_corrupt = (not ok4) and "CRC mismatch" in meta4.get("error", "")
+    ok_all &= ok_grab_corrupt
+    print("grab corruption caught:", "PASS" if ok_grab_corrupt else "FAIL", "-", meta4.get("error"))
+
+    # A truncated frame (fewer payload bytes than the header promises) is
+    # exactly what a Ctrl+C or a disconnect mid-transfer looks like on the
+    # wire (docs/PLAN-BINARY-TRANSFER.md's Ctrl+C risk) - parse_grab_frame()
+    # is the function both Target.grab() and FakeTarget.grab() decode
+    # through, so exercising it directly proves the check without needing
+    # to fake a real interruption.
+    header = "GRAB n=64 from=0 ksps=8000 ov=0 late=0 missed=0 halves=2 xfer=128 slp=8 dachz=320000000\r\n"
+    short_payload = b"\x00\x00" * 30                      # 60 of the 128 bytes promised
+    ok5, _, meta5 = parse_grab_frame(header, short_payload, b"\r\nCRC 0000\r\n> " + ACK)
+    ok_truncated = (not ok5) and "short block" in meta5.get("error", "")
+    ok_all &= ok_truncated
+    print("grab truncated frame caught:", "PASS" if ok_truncated else "FAIL", "-", meta5.get("error"))
+
+    # Target.grab() itself, against a serial stub that never delivers a
+    # byte: the SAME bounded-wait code a real disconnected or wedged board
+    # would hit, without opening a port. TimeoutError, not a hang.
+    class _NullSerial:
+        def read(self, n=1):
+            return b""
+
+        def write(self, data):
+            return len(data)
+
+        def reset_input_buffer(self):
+            pass
+
+    tt = Target.__new__(Target)   # bypass __init__: no real port is opened
+    tt.ser = _NullSerial()
+    tt.on_log = None
+    tt.port = "null (selftest)"
+    try:
+        tt.grab(timeout=0.05)
+        ok_timeout = False
+    except TimeoutError:
+        ok_timeout = True
+    ok_all &= ok_timeout
+    print("grab timeout (no bytes at all) caught:", "PASS" if ok_timeout else "FAIL")
+
     print("selftest", "PASS" if ok_all else "FAIL")
     return 0 if ok_all else 1
 
@@ -1613,7 +1922,8 @@ def main_gui(args):
     from nicegui import ui, run
 
     state = dict(target=None, live=False, busy=False, cycles=0, use_blk=False,
-                 buf_size=2048, settings_path=args.settings)
+                 buf_size=2048, settings_path=args.settings,
+                 chain_live=False, chain_busy=False, chain_grabs=0, chain_t0=None)
 
     def update_count_options():
         """The selectable capture sizes ('windows') follow the buffer size:
@@ -1959,6 +2269,66 @@ def main_gui(args):
                     {"name": "missed", "label": "missed", "field": "missed", "align": "right"},
                 ], rows=[], row_key="postdiv").props("dense flat").classes("w-full")
 
+            # ---- the chain stream: halt / grab / transfer / restart ----
+            with ui.card().classes("w-full rounded-xl p-3 gap-2"):
+                with ui.row().classes("w-full items-center gap-3 flex-wrap"):
+                    ui.label("chain stream · halt / grab / restart").classes("card-title")
+                    chain_verdict_chip = ui.chip("no grab yet", color="grey-8").props("dense outline")
+                ui.label(
+                    "'stream on' starts the chain (SCCP1 -> ADC core 5 -> DMA0 -> ping-pong, DAC2 "
+                    "triangle on RA8) and this page then repeats a cycle of its own: 'stream "
+                    "grab' halts the trigger just long enough to send one contiguous window, "
+                    "restarts it, and the window is evaluated here with the same triangle method "
+                    "the firmware's own chain test uses (tri_eval, ported in tools/eval_chain.py) "
+                    "- so a FAIL means the grid slipped, not that the page disagrees with itself."
+                ).classes("text-xs text-slate-400")
+                with ui.row().classes("w-full items-end gap-3 flex-wrap"):
+                    chain_ksps_in = ui.number("rate, kSPS (1..40000)", value=8000, min=1, max=40000,
+                                              step=100, format="%d").props("dense outlined").classes("w-48")
+                    chain_interval_in = ui.number("grab interval, ms", value=500, min=50, max=5000,
+                                                  step=50, format="%d").props("dense outlined").classes("w-40")
+                    chain_btn = ui.button("start", icon="play_arrow").props("unelevated")
+                chain_status_lbl = ui.label("stream: off").classes("text-xs text-slate-400 mono")
+                chain_chart = chart("chain window (last grab)", "sample", "ADC counts", 0, 4096, ACCENT2)
+                with ui.row().classes("w-full gap-2 flex-wrap"):
+                    CHAIN_COUNTER_TIPS = {
+                        "overrun": "DMA overruns since the PREVIOUS grab, not the running total - "
+                                   "a lower bound, as elsewhere (see the capture counters above).",
+                        "late": "HALF and DONE both pending at once since the previous grab: the "
+                                "handler ran a whole half late.",
+                        "missed": "Halves the firmware's own processing skipped since the previous "
+                                  "grab - this page's own halt/grab/restart cycle does not count "
+                                  "against it; it is the chain's main-loop budget, chain_run()'s.",
+                    }
+                    chain_counter_chips = {}
+                    for _k in ("overrun", "late", "missed"):
+                        chip = ui.chip(f"{_k} –", color="grey-8").props("dense outline")
+                        with chip:
+                            ui.tooltip(CHAIN_COUNTER_TIPS[_k]).style("font-size: 14px; max-width: 22rem;")
+                        chain_counter_chips[_k] = chip
+                    chain_rate_chip = ui.chip("actual rate –", color="grey-8").props("dense outline")
+                    chain_halves_chip = ui.chip("halves/xfer –", color="grey-8").props("dense outline")
+                with ui.row().classes("w-full gap-2 flex-wrap"):
+                    CHAIN_EVAL_TIPS = {
+                        "turning points": "Coarse peaks and troughs tri_eval() found in the window.",
+                        "up": "Complete rising slopes: count and mean length in samples.",
+                        "down": "Complete falling slopes: count and mean length in samples.",
+                        "slip": "The grid verdict's own number: a lost or repeated sample shifts "
+                                "later turning points by a whole sample: PASS needs it under 0.5.",
+                        "model": "Measured mean slope length over the model from slpdat and the "
+                                 "DAC clock the frame reports (chaintest.c triangle_for()) - near "
+                                 "1.0 on a clean grid.",
+                        "steps": "Lost (zero) or repeated (dbl) single-sample steps, only checked "
+                                 "once the slope is steep enough (>= 40 LSB/sample) to tell them "
+                                 "from DAC/DNL noise.",
+                    }
+                    chain_eval_chips = {}
+                    for _k in ("turning points", "up", "down", "slip", "model", "steps"):
+                        chip = ui.chip(f"{_k} –", color="grey-8").props("dense outline")
+                        with chip:
+                            ui.tooltip(CHAIN_EVAL_TIPS[_k]).style("font-size: 14px; max-width: 22rem;")
+                        chain_eval_chips[_k] = chip
+
     # ---- console: the CLI traffic with the target (real or fake) ----
     with ui.card().classes("w-full rounded-xl p-3 mx-4 mb-4"):
         ui.label("console").classes("card-title")
@@ -2039,6 +2409,15 @@ def main_gui(args):
         (single_btn, "One cycle: start, let it run briefly, stop, fetch the samples, plot and "
                      "transform them."),
         (live_btn, "Repeat that cycle at the interval above until stopped."),
+        (chain_ksps_in, "The rate the standing chain is started at when 'start' is pressed. "
+                        "Console: 'stream on <ksps>' (chaintest.c chain_stream_on(), the nearest "
+                        "160 MHz / N)."),
+        (chain_interval_in, "How often this page halts the chain for one grab, in milliseconds "
+                            "(plus however long the transfer itself takes at the current baud "
+                            "rate). Does not need to match the firmware's own rate."),
+        (chain_btn, "Start: 'stream on <ksps>', then repeat 'stream grab' at the interval above "
+                    "until stopped. Stop: one final 'stream off', which restores the boot "
+                    "configuration."),
     ]
     for _u, _c in sorted(dac_ui.items()):
         _pin = "RA1" if _u == 1 else "RA8"
@@ -2087,6 +2466,8 @@ def main_gui(args):
             "capture": {"count": int(count_sel.value), "interval_ms": int(interval_in.value or 500)},
             "sweep": {"halves": int(sw_halves_in.value or 2000),
                       "half_len": int(sw_halflen_in.value or 1024)},
+            "chain": {"ksps": int(chain_ksps_in.value or 8000),
+                      "interval_ms": int(chain_interval_in.value or 500)},
             "dac": {str(u): {"on": bool(c["on"].value), "low": int(c["low"].value or 0),
                              "high": int(c["high"].value or 0), "slpdat": int(c["slp"].value or 0)}
                     for u, c in dac_ui.items()},
@@ -2118,6 +2499,9 @@ def main_gui(args):
         swc = cfg.get("sweep", {})
         sw_halves_in.value = int(swc.get("halves", 2000))
         sw_halflen_in.value = int(swc.get("half_len", 1024))
+        chc = cfg.get("chain", {})
+        chain_ksps_in.value = int(chc.get("ksps", 8000))
+        chain_interval_in.value = int(chc.get("interval_ms", 500))
         for unit, c in dac_ui.items():
             d = cfg.get("dac", {}).get(str(unit), {})
             c["on"].value = bool(d.get("on", False))
@@ -2400,6 +2784,9 @@ def main_gui(args):
             push_log(f"--- disconnected: {state['target'].port} ---")
             state["live"] = False
             live_btn.text, live_btn.icon = "live", "play_arrow"
+            state["chain_live"] = False
+            chain_btn.text, chain_btn.icon = "start", "play_arrow"
+            chain_status_lbl.text = "stream: off (disconnected)"
             state["target"].close()
             state["target"] = None
             conn_btn.text, conn_btn.icon = "connect", "usb"
@@ -2607,6 +2994,112 @@ def main_gui(args):
         if state["live"]:
             asyncio.create_task(live_loop())
     live_btn.on_click(toggle_live)
+
+    # ---- the chain stream cycle: halt -> transfer -> restart -> repeat ----
+    def set_chain_counter_chip(key, value):
+        chip = chain_counter_chips[key]
+        chip.text = f"{key} {value}"
+        chip.props(f'color={"positive" if value == 0 else "negative"}')
+
+    async def chain_cycle():
+        """One 'stream grab': halted on the board for as long as this call
+        takes, so the interval below is a floor, not a guarantee - a slow
+        link (115200 baud, a big buffer) makes the real cycle longer, which
+        is the halt/transfer/restart design working as intended, not a bug
+        in this loop."""
+        t = state["target"]
+        if not t or state["chain_busy"]:
+            return
+        state["chain_busy"] = True
+        try:
+            ok, samples, meta = await run.io_bound(t.grab)
+            if not ok:
+                chain_status_lbl.text = "grab failed: " + meta.get("error", "unknown")
+                chain_verdict_chip.text = "grab failed"
+                chain_verdict_chip.props("color=negative")
+                state["chain_live"] = False
+                chain_btn.text, chain_btn.icon = "start", "play_arrow"
+                return
+            state["chain_grabs"] += 1
+            r = chain_tri_eval([int(v) for v in samples])
+            verdict = chain_grid_ok(r)
+            chain_chart.options["series"][0]["data"] = [[i, int(v)] for i, v in enumerate(samples)]
+            chain_chart.options["xAxis"][0]["max"] = max(len(samples) - 1, 1)
+            chain_chart.update()
+
+            chain_verdict_chip.text = "PASS" if verdict else "FAIL"
+            chain_verdict_chip.props(f'color={"positive" if verdict else "negative"}')
+            chain_eval_chips["turning points"].text = f"turning points {r['tps']}"
+            chain_eval_chips["up"].text = f"up {r['n_up']} · {r['l_up']:.2f} smp"
+            chain_eval_chips["down"].text = f"down {r['n_dn']} · {r['l_dn']:.2f} smp"
+            chain_eval_chips["slip"].text = f"slip {r['slip']:.2f} (k={r['slip_k']}, {r['slip_n']} spans)"
+            model = chain_model_slope_samples(meta["slpdat"], meta["dac_hz"], meta["ksps"])
+            mean_len = (r["l_up"] + r["l_dn"]) / 2.0 if (r["n_up"] or r["n_dn"]) else 0.0
+            chain_eval_chips["model"].text = (f"slope/model {mean_len / model:.3f}"
+                                              if model > 0 and mean_len > 0 else "slope/model –")
+            chain_eval_chips["steps"].text = (f"zero {r['zero']} dbl {r['dbl']}" if r["step_checked"]
+                                              else "steps not checked (slope < 40 LSB/sample)")
+            chain_eval_chips["steps"].props(
+                f'color={"positive" if (not r["step_checked"]) or (r["zero"] == 0 and r["dbl"] == 0) else "negative"}')
+
+            for k in ("overrun", "late", "missed"):
+                set_chain_counter_chip(k, meta[k])
+            chain_rate_chip.text = f"actual rate {meta['ksps']} kSPS"
+            chain_rate_chip.props("color=grey-8")
+            chain_halves_chip.text = f"halves {meta['halves']} / xfer {meta['transfers']}"
+            chain_halves_chip.props("color=grey-8")
+
+            now = time.time()
+            rate_txt = ""
+            if state["chain_t0"] is not None and now > state["chain_t0"]:
+                rate_txt = f"   {state['chain_grabs'] / (now - state['chain_t0']):.2f} grabs/s"
+            chain_status_lbl.text = (f"grab {state['chain_grabs']}   n={len(samples)}   "
+                                     f"from={meta['from_']}   slpdat={meta['slpdat']}   "
+                                     f"dac {meta['dac_hz'] / 1e6:.1f} MHz{rate_txt}")
+        except Exception as ex:
+            chain_status_lbl.text = f"grab failed: {ex}"
+            chain_verdict_chip.text = "grab failed"
+            chain_verdict_chip.props("color=negative")
+            state["chain_live"] = False
+            chain_btn.text, chain_btn.icon = "start", "play_arrow"
+        finally:
+            state["chain_busy"] = False
+
+    async def chain_live_loop():
+        while state["chain_live"]:
+            await chain_cycle()
+            await asyncio.sleep(max(0.05, float(chain_interval_in.value or 500) / 1000.0))
+
+    async def chain_start():
+        t = state["target"]
+        if not t:
+            chain_status_lbl.text = "not connected"
+            return
+        ok, lines = await run.io_bound(t.cmd, f"stream on {int(chain_ksps_in.value or 8000)}")
+        if not ok:
+            chain_status_lbl.text = "stream on refused: " + " ".join(lines)
+            return
+        state["chain_live"] = True
+        state["chain_grabs"] = 0
+        state["chain_t0"] = time.time()
+        chain_btn.text, chain_btn.icon = "stop", "stop"
+        chain_status_lbl.text = f"stream: on - {int(chain_ksps_in.value or 8000)} ksps"
+        asyncio.create_task(chain_live_loop())
+
+    async def chain_stop():
+        state["chain_live"] = False
+        chain_btn.text, chain_btn.icon = "start", "play_arrow"
+        t = state["target"]
+        if t:
+            await run.io_bound(t.cmd, "stream off")
+        chain_status_lbl.text = "stream: off"
+
+    def toggle_chain():
+        if state["chain_live"]:
+            asyncio.create_task(chain_stop())
+        else:
+            asyncio.create_task(chain_start())
+    chain_btn.on_click(toggle_chain)
 
     if args.fake or args.port:
         ui.timer(0.5, do_connect, once=True)

@@ -1,6 +1,8 @@
 # Plan: binary block transfer from the board to the PC
 
-Status: plan, nothing implemented (23.09.2026). Branch `nano-board`.
+Status: `blk`/`snap`/`rate` implemented and in daily use (23.09.2026). `baud` (step 6)
+not yet implemented. The `GRAB` frame at the end of this document extends the same
+framing for the GUI's chain-stream cycle (25.09.2026). Branch `nano-board`.
 
 ## Why
 
@@ -105,3 +107,36 @@ Sent to whoever has the board, with the branch name and the commit:
   the board, which is why it is last and optional.
 - **12-bit values in 16-bit words**: bits 15:12 are zero from `AD3CH0RES`; the
   client masks them anyway.
+
+## Extension: the `GRAB` frame (`stream grab`, 25.09.2026)
+
+Implemented, for the GUI's chain-stream cycle (design rationale: `CLAUDE.md`, "The
+GUI's chain stream cycle"). Same shape as the `blk` frame above - a text header line,
+the payload, a CRC line, then the usual prompt and ACK/NAK - with a header carrying
+what a repeating cycle needs and `blk` does not:
+
+```
+GRAB n=<count> from=<from> ksps=<ksps> ov=<overrun> late=<late> missed=<missed>
+     halves=<halves> xfer=<transfers> slp=<slpdat> dachz=<dac_hz>\r\n
+<2*count bytes: samples as uint16 little-endian, 12-bit value in bits 11:0>
+\r\nCRC <hex4>\r\n
+> <ACK or NAK>
+```
+
+- `n`, `from`: the window - `capture_half_len()` samples, starting at raw buffer offset
+  0 or `capture_half_len()` (whichever half completed last).
+- `ksps`: the actual rate the stream is running at (160 MHz / N, not the value asked
+  for with `stream on`).
+- `ov`/`late`/`missed`/`halves`/`xfer`: the stream counters, but **per cycle** - the
+  delta since the PREVIOUS grab (or since `stream on`, for the first one), not the
+  running total `stream`'s own report shows.
+- `slp`/`dachz`: the DAC triangle's SLPDAT and the DAC clock in Hz, so the GUI can
+  compute the model slope length (`triangle_for()`'s range, reconstructed from `slp`
+  alone - the range itself is not transmitted, see the CLAUDE.md section above).
+
+`n=0` (NAK) means no stream is on, or the halt/restart itself failed - same
+synchronisation as `blk` with a refused block. Verified without a board:
+`python tools/adc_gui.py --selftest` (`parse_grab_frame`/`FakeTarget.grab()`: refusal,
+a clean grab, the next grab in the other half, an injected lost sample failing the
+grid check, a CRC mismatch, a truncated frame, and `Target.grab()` timing out against a
+serial stub that never answers).

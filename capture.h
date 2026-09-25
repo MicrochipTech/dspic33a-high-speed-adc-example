@@ -260,6 +260,31 @@ uint64_t capture_transfers(void);
 bool     capture_guard_ok(void);
 uint32_t capture_chain_window_ticks(void);
 void     capture_fill(uint16_t v);
+
+/* Halt / resume an ALREADY RUNNING triggered stream without tearing the
+ * DMA channel down (capture_chain_start/_stop set the whole chain up or
+ * take it fully apart; these two are for a stream meant to keep running
+ * with brief, repeated pauses - the GUI's halt/grab/restart cycle,
+ * chain_stream_grab_begin/_end in chaintest.c).
+ *
+ * capture_chain_halt(): the trigger stops first (ANALYSIS.md C.10 point
+ * 4), a short bounded wait lets the one conversion already in flight
+ * land, and nothing converts after that - so the half that completed
+ * last (capture_completed_half(), capture_half_len() samples) stands
+ * still, contiguous, for as long as the caller needs. The DMA channel,
+ * the ADC core and the clock tree are left exactly as they were; only
+ * the trigger is off. False if no chain stream is active (already
+ * halted, or none was ever started) - nothing is touched in that case.
+ *
+ * capture_chain_resume(): restarts the SAME trigger (same period, same
+ * mode) capture_chain_halt() paused, so the ping-pong buffer continues
+ * where it left off. False if the trigger could not be restarted; the
+ * stream is then left exactly as capture_chain_halt() leaves it - not
+ * running, everything else intact - so the caller can report it and the
+ * next attempt starts from a known state rather than from something
+ * half torn down. */
+bool capture_chain_halt(void);
+bool capture_chain_resume(void);
 /* Processing cost of a half in Timer1 ticks, since counters_clear(). */
 extern volatile uint32_t proc_ticks_max;
 extern volatile uint32_t proc_ticks_sum;

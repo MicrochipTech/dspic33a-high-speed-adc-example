@@ -223,6 +223,12 @@ static volatile uint32_t chain_stop_after = 0u;
 static volatile uint32_t chain_t0         = 0u;
 static volatile uint32_t chain_t1         = 0u;
 static bool              chain_src_data   = false;  /* DMA from CH0DATA  */
+/* The trigger period and mode of the running chain, kept so that
+ * capture_chain_resume() can restart the SAME trigger after
+ * capture_chain_halt() paused it - a halt/resume pair never re-derives
+ * the rate, it only stops and starts SCCP1. */
+static uint32_t          chain_ticks      = 0u;
+static uint32_t          chain_sccp_mode  = 0u;
 
 /* What the processing of a half costs, in Timer1 ticks (80 ns): the
  * budget question of the example's sentence ("the CPU processes"). */
@@ -1038,7 +1044,9 @@ bool capture_chain_start(uint32_t ticks, uint32_t sccp_mode,
 {
     (void)capture_settle();           /* idle, DMA down                  */
     counters_clear();
-    chain_src_data = src_data;
+    chain_src_data  = src_data;
+    chain_ticks     = ticks;
+    chain_sccp_mode = sccp_mode;
     capture_init();                   /* DMA armed on RES or DATA        */
     adc_clear_events();
     chain_stop_after = stop_after_done;
@@ -1096,6 +1104,35 @@ uint64_t capture_chain_stop(void)
 uint32_t capture_chain_window_ticks(void)
 {
     return chain_t1 - chain_t0;
+}
+
+/* capture.h: halt / resume an already-running chain stream in place, for
+ * the GUI's halt/grab/restart cycle (chain_stream_grab_begin/_end,
+ * chaintest.c). Unlike capture_chain_stop(), the DMA channel is left
+ * armed and counters_clear() is not called - a grab is meant to be
+ * invisible to everything except the trigger. */
+bool capture_chain_halt(void)
+{
+    if (!chain_mode || !run_enabled) { return false; }
+    sccp1_stop();                     /* trigger first (C.10 point 4)    */
+    /* The one conversion already in flight and its DMA transaction, the
+     * same bound capture_chain_stop() waits on. */
+    const uint32_t t = timebase_ticks();
+    while ((timebase_ticks() - t) < 25u) { }
+    run_enabled  = false;
+    burst_active = false;
+    return true;
+}
+
+bool capture_chain_resume(void)
+{
+    if (!chain_mode || run_enabled) { return false; }
+    burst_active = true;
+    const bool ok = sccp1_start(chain_ticks, SCCP_CLK_GEN13,
+                                (sccp_mode_t)chain_sccp_mode, SCCP_EVENT_SPECIAL);
+    run_enabled = ok;
+    if (!ok) { burst_active = false; }
+    return ok;
 }
 
 void capture_fill(uint16_t v)

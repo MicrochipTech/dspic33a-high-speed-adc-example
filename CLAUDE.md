@@ -35,18 +35,19 @@ come from. That convention is kept.
 | `adc.c/.h` | the ADC core: init, burst trigger, PINSEL/SAMC, the trigger-source registers, IRQSEL, calibration bits, core 5's CH0 interrupt as a counter (`adc_ch0_event()` in chaintest.c) - every register and vector core 5 uses is identical on the MPS506 (checked against the pack header 25.09.2026), so the chain test needs no board guard | console, diag, chaintest |
 | `dma.c/.h` | DMA channel 0: window = the buffer, HALF/DONE interrupt shell, status flags, `dma0_remaining()` | console, diag; calls `dma0_event()` in capture.c |
 | `sim_dma.c` | replaces `dma.c` in the simulator build; implements `dma.h` without a DMA | adc, capture, console |
-| `capture.c/.h` | the measurement: the DMA buffer (private, with guard words), `dma0_event()`, the counters, start/stop/input, self-test, per-half processing and its cost, the variant table, the triggered stream `capture_chain_*()` | adc, dma, sccp, led, console, diag |
+| `capture.c/.h` | the measurement: the DMA buffer (private, with guard words), `dma0_event()`, the counters, start/stop/input, self-test, per-half processing and its cost, the variant table, the triggered stream `capture_chain_*()`, and `capture_chain_halt()`/`_resume()` - pausing and restarting an ALREADY RUNNING chain stream's trigger in place (DMA channel left armed, counters untouched), for the GUI's halt/grab/restart cycle | adc, dma, sccp, led, console, diag |
 | `crc16.c/.h` | CRC-16 over a sample block, for the `blk` binary transfer | cli |
 | `sccp.c/.h` | SCCP1 as a trigger source, with clock source, mode and event as parameters; its timer and compare interrupts as event counters - same registers and vectors on both boards, see `adc.c/.h` above | capture, chaintest |
 | `led.c/.h` | LED0 | - |
 | `timebase.c/.h` | Timer1 as a stopwatch (12.5 MHz) for measuring the delivered rate. It sits on the CPU branch (PLL2) while the ADC is on PLL1, so it cannot flatter the ADC. Not involved in producing the rate. | - |
 | `dac.c/.h` | DAC1 and DAC2 in Triangle Wave mode (DACOUT1 = RA1, DACOUT2 = RA8), one unit table, shared CLKGEN7, plus the internal UREF route to any core; the known signal for `test dac`. `dac2_*()` are DAC2-only aliases for the chain test's fixed pin route and its low-latency ISR path (`dac2_set()`) | console, diag, chaintest |
 | `dactest.c/.h` | judges captured halves against the DAC settings (min/max, reversals vs period, jumps); works with either DAC unit via `dac_active()` | capture, dac |
-| `chaintest.c/.h` | the chain test `chain all` (S0..S9), the triangle evaluator (turning points by line fits, "slip"), the `@` log format, `chain run` - builds and links unchanged for both boards (`tools\build.bat nano`, 25.09.2026); not yet run on Nano hardware | capture, adc, sccp, dac, clock, dma (register dumps), diag |
+| `chaintest.c/.h` | the chain test `chain all` (S0..S9), the triangle evaluator (turning points by line fits, "slip"), the `@` log format, `chain run`, `chain_stream_on/off`, and `chain_stream_grab_begin()`/`_end()` - one halt/grab/restart cycle of the standing stream for `stream grab` (cli.c), the counters reported as the delta since the previous grab - builds and links unchanged for both boards (`tools\build.bat nano`, 25.09.2026); not yet run on Nano hardware, and the GUI cycle not yet run on either board | capture, adc, sccp, dac, clock, dma (register dumps), diag |
 | `diag.c/.h` | `fail()` codes, trap handler, boot record in persistent RAM (including `chain_mark`, the chain test's stage), `RCON` report, `regs_dump()` | every module's `*_regs_dump()` |
-| `cli.c`, `console.h` | UART2, the commands, the `sweep`, the `test` suite, the variant matrix, the chain/stream commands, the binary block transfer (`snap`, `rate`, `blk`) | clock, capture, dactest, led, diag |
+| `cli.c`, `console.h` | UART2, the commands, the `sweep`, the `test` suite, the variant matrix, the chain/stream commands (`stream grab`'s `GRAB` frame builder among them), the binary block transfer (`snap`, `rate`, `blk`) | clock, capture, dactest, led, diag |
 | `sim.h` | the hooks the simulator build needs; all empty on silicon | - |
-| `tools/adc_gui.py` | NiceGUI front end: sets rate/pacing/SAMC/input over the console, captures a buffer half per cycle, plots time signal and FFT; `--fake` uses a built-in stand-in, `--selftest` runs the pipeline without GUI. `tools/gui_setup.bat` makes its venv (`tools/.venv`, ignored). `tools/boards.py`, `tools/pins64.py`, `tools/pins128.py` hold the board/pin tables the GUI's board tile reads | the console protocol only |
+| `tools/adc_gui.py` | NiceGUI front end: sets rate/pacing/SAMC/input over the console, captures a buffer half per cycle, plots time signal and FFT; `--fake` uses a built-in stand-in, `--selftest` runs the pipeline without GUI. Its "chain stream" tile drives `stream on/off/grab` on its own, in a loop, and evaluates every grab with `tools/eval_chain.py`'s `tri_eval`/`grid_ok` (imported, not re-implemented). `tools/gui_setup.bat` makes its venv (`tools/.venv`, ignored). `tools/boards.py`, `tools/pins64.py`, `tools/pins128.py` hold the board/pin tables the GUI's board tile reads | the console protocol only |
+| `tools/eval_chain.py` | `chain all` log evaluator (`tri_eval`, `grid_ok`, `synth`) and CLI report; imported by `adc_gui.py` for the chain tile and by `FakeTarget.grab()` for its synthetic frames, so there is one triangle evaluator and one synthetic-triangle generator, not two | - |
 | `cmd_parser.c/.h` | the command parser, unchanged from github.com/zabooh/cmd_parser (Apache 2.0) - do not edit | - |
 
 Nobody outside `dma.c` touches a DMA register, nobody outside `adc.c` an ADC register,
@@ -141,6 +142,9 @@ Build the simulator variant to prove it still compiles; run it when asked.
   re-apply that one line. `help` takes a slot too, and `cmd_register()` fails silently
   when the table is full: with `chain`/`stream` (the chain test) and `snap`/`rate`/`blk`
   (binary transfer, below) both merged in, 26 commands + help = 27 in use, 5 free.
+  **`stream grab` (the GUI's halt/transfer/restart cycle, below) is a sub-command of
+  `stream`, dispatched inside `cmd_stream_fn()`, exactly like `stream on`/`off` - it did
+  not need a 27th slot, and was chosen that way on purpose to keep the 5 free.**
 
 ## Binary block transfer (`snap`, `rate`, `blk`)
 
@@ -151,6 +155,57 @@ sets the sample rate directly. Built and in daily use by `tools/adc_gui.py` (the
 falls back to the older text `dump` protocol if `blk` is not present, so it also drives
 older firmware). An optional `baud` command to raise the UART rate is designed
 (`docs/PLAN-BINARY-TRANSFER.md` step 6) but not yet implemented.
+
+## The GUI's chain stream cycle (`stream grab`, since 25.09.2026)
+
+The goal: from the GUI, configure and start the chain stream, and then, continuously and
+automatically, halt it, transfer a contiguous window, restart it, visualise and analyse -
+until the user stops it. Design decisions, all documented where the code that implements
+them lives, restated here because they were not obvious:
+
+- **The halt does not tear the chain down.** `capture_chain_halt()`/`_resume()`
+  (`capture.c`) stop and restart the SCCP1 trigger only - the DMA channel stays armed,
+  the ADC core and clock tree untouched. What is sent is the half that completed last
+  (`capture_completed_half()`), the SAME mechanism `capture_service()` (the main loop)
+  already reads from continuously - not a new "grab a few blocks and hope" scheme like
+  `grab_window()` in the chain test's own S5 stage. Reusing it means the grab cycle
+  inherits everything already proven about that half being complete, contiguous and not
+  overwritten before it is read.
+- **The frame is `blk`'s framing, with a wider header**, so the GUI's existing binary
+  reader (`Target._read_line`/`_read_exact`, `crc16.c`) needed no changes, only a second
+  regex: `GRAB n=<count> from=<from> ksps=<ksps> ov=<overrun> late=<late>
+  missed=<missed> halves=<halves> xfer=<transfers> slp=<slpdat> dachz=<dac_hz>`, then the
+  payload and a CRC line exactly like `blk` (`cmd_stream_grab()`, cli.c;
+  `parse_grab_frame()`, `tools/adc_gui.py`).
+- **The counters are per cycle, not the running total.** `chain_stream_grab_begin()`
+  keeps its own baseline of `dma_overrun`/`late_service`/`proc_missed`/`blocks_done`/
+  `capture_transfers()`, zeroed when `chain_stream_on()` starts the stream (it already
+  calls `counters_clear()`), and reports the delta since the previous grab. A colleague
+  watching the GUI wants to know what happened in the window just shown, not a number
+  that only grows.
+- **The restart always runs**, whether the transfer went out whole or was cut short
+  (Ctrl+C, a disconnect): `cmd_stream_grab()` calls `chain_stream_grab_end()`
+  unconditionally after the payload loop. If the restart itself fails,
+  `chain_stream_off()` is called and the stream is left off cleanly - `stream` then
+  reports it, and the GUI is expected to send `stream on` again. The chain is never left
+  half-configured.
+- **The DAC triangle's range is not in the frame** - only `slp` (SLPDAT) and `dachz` are.
+  `triangle_for()` (chaintest.c) always picks the widest range the fixed limits in
+  `dac.h` and `slp` allow, so the GUI reconstructs the same range from `slp` alone
+  (`chain_triangle_range()`, `adc_gui.py`) rather than transmitting two more numbers.
+- **One evaluator, one place.** The GUI's chain tile imports `tri_eval`/`grid_ok` from
+  `tools/eval_chain.py` - the same module `chain all` logs are judged with - instead of a
+  second implementation that could quietly disagree with the firmware's own. The fake
+  target's synthetic triangle uses the same module's `synth()`.
+- **Tested without a board**, per the design brief: `python tools/adc_gui.py --selftest`
+  exercises `FakeTarget.grab()`/`parse_grab_frame()` for a refusal before `stream on`, a
+  clean grab that passes the grid check, the next grab landing in the OTHER buffer half
+  (`from > 0`), a lost-sample grab that correctly fails, a CRC mismatch, a truncated
+  frame, and `Target.grab()` timing out against a serial stub that never answers - the
+  same bounded-wait code path a real disconnected board would hit. Not tested without a
+  board: whether `capture_chain_halt()` really lands cleanly on real silicon timing, and
+  whether the halt/grab/restart cycle holds up at the higher rates (`docs/HARDWARE-LOG.md`,
+  25.09.2026 entry).
 
 ## How the example is built, and what that costs
 

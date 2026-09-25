@@ -1622,21 +1622,31 @@ static void cmd_chain_fn(int argc, char **argv)
 }
 CMD_DEFINE(chain, "chain", cmd_chain_fn, "chain all|<n>|from <n>|run <ksps> [s] - the chain test");
 
+/* "stream grab": one halt/transfer/restart cycle of the standing stream,
+ * defined below (BLK_CHUNK, crc16) - forward-declared here to keep the
+ * "on|off|grab|<report>" dispatch together in one function. */
+static void cmd_stream_grab(void);
+
 /* The chain as the example runs it (chaintest.c): "stream on <ksps>"
  * starts it and returns - main() processes every half from then on -
- * "stream" reports, "stream off" stops. The report is a snapshot taken
- * first and printed afterwards; printing takes the CPU from main() for a
- * few milliseconds, so at high rates each "stream" costs some halves,
- * which then show in the NEXT report's missed count. */
+ * "stream" reports, "stream off" stops, "stream grab" halts it just long
+ * enough to send one contiguous window to the GUI and restarts it (own
+ * binary frame, see cmd_stream_grab() below). The report is a snapshot
+ * taken first and printed afterwards; printing takes the CPU from main()
+ * for a few milliseconds, so at high rates each "stream" costs some
+ * halves, which then show in the NEXT report's missed count. */
 static void cmd_stream_fn(int argc, char **argv)
 {
-    static const char use[] = "stream on <ksps 1..40000> | stream off | stream";
+    static const char use[] = "stream on <ksps 1..40000> | stream off | stream grab | stream";
     uint32_t k = 0u;
     if ((argc == 3) && (strcmp(argv[1], "on") == 0) && arg_u32(argv[2], 1u, 40000u, &k)) {
         if (!chain_stream_on(k)) { put_line("stream: set-up failed (clock, core or trigger) - run 'chain 0'"); cmd_parser_fail(); return; }
     } else if ((argc == 2) && (strcmp(argv[1], "off") == 0)) {
         chain_stream_off();
         put_line("stream: off, boot configuration restored");
+        return;
+    } else if ((argc == 2) && (strcmp(argv[1], "grab") == 0)) {
+        cmd_stream_grab();
         return;
     } else if (argc != 1) {
         usage(use);
@@ -1668,7 +1678,7 @@ static void cmd_stream_fn(int argc, char **argv)
     put_kv("last half max", mx);
     put_kv("last half mean", mean);
 }
-CMD_DEFINE(stream, "stream", cmd_stream_fn, "stream on <ksps>|off - the chain streaming, main() processing");
+CMD_DEFINE(stream, "stream", cmd_stream_fn, "stream on <ksps>|off|grab - the chain streaming, main() processing, one halt/transfer/restart cycle");
 
 static void cmd_snap_fn(int argc, char **argv)
 {
@@ -1810,6 +1820,88 @@ static void cmd_blk_fn(int argc, char **argv)
     if (sent != (2u * n)) { cmd_parser_fail(); }
 }
 CMD_DEFINE(blk, "blk", cmd_blk_fn, "blk [n] - the sample block as binary, with a CRC");
+
+/* ------------------------------------------------------------------ *
+ * "stream grab" - one halt/transfer/restart cycle for the GUI
+ *
+ * With "stream on" already running (chaintest.c): halts the trigger,
+ * sends the half that stood still as one contiguous binary block - same
+ * framing as "blk", a different header - and restarts the SAME trigger.
+ * docs/PLAN-BINARY-TRANSFER.md's frame, extended with what "blk" has no
+ * need of but a repeating GUI cycle does: the actual rate, where in the
+ * raw buffer the window starts, the stream counters since the PREVIOUS
+ * grab, and the DAC triangle setting the GUI's model needs:
+ *
+ *   GRAB n=<count> from=<from> ksps=<ksps> ov=<overrun> late=<late>
+ *        missed=<missed> halves=<halves> xfer=<transfers> slp=<slpdat>
+ *        dachz=<dac_hz>CRLF
+ *   <2*count bytes, uint16 little endian, 12-bit value in bits 11:0>
+ *   CRLF CRC <hex4> CRLF
+ *
+ * On failure (no stream on, or the halt/restart itself failed) the
+ * header says n=0 and every other field 0, no payload follows, and the
+ * command fails - the client's synchronisation on the prompt and
+ * ACK/NAK does not change, exactly as for "blk" with a refused block.
+ * The restart (chain_stream_grab_end()) always runs, whether the
+ * transfer went out whole or was cut short by Ctrl+C or a disconnect: a
+ * short block is for the client to report, not a reason to leave the
+ * chain half-configured (docs/PLAN-BINARY-TRANSFER.md's Ctrl+C risk,
+ * the same one "blk" already has to live with). */
+static void cmd_stream_grab(void)
+{
+    chain_grab_t g;
+    const bool got = chain_stream_grab_begin(&g);
+
+    char head[128];
+    char *p = copy_str(head, "GRAB n=");
+    p = u32_to_str(p, got ? g.win_len : 0u);
+    p = copy_str(p, " from=");   p = u32_to_str(p, got ? g.from : 0u);
+    p = copy_str(p, " ksps=");   p = u32_to_str(p, got ? g.ksps : 0u);
+    p = copy_str(p, " ov=");     p = u32_to_str(p, got ? g.overrun : 0u);
+    p = copy_str(p, " late=");   p = u32_to_str(p, got ? g.late : 0u);
+    p = copy_str(p, " missed="); p = u32_to_str(p, got ? g.missed : 0u);
+    p = copy_str(p, " halves="); p = u32_to_str(p, got ? g.halves : 0u);
+    p = copy_str(p, " xfer=");   p = u32_to_str(p, got ? g.transfers : 0u);
+    p = copy_str(p, " slp=");    p = u32_to_str(p, got ? g.slpdat : 0u);
+    p = copy_str(p, " dachz=");  p = u32_to_str(p, got ? g.dac_hz : 0u);
+    copy_str(p, "\r\n");
+    cmd_parser_write(head);
+
+    if (!got) {
+        cmd_parser_write("CRC 0000\r\n");
+        cmd_parser_fail();
+        return;
+    }
+
+    const uint32_t n = g.win_len;
+    uint8_t  chunk[BLK_CHUNK];
+    uint16_t crc  = CRC16_INIT;
+    uint32_t sent = 0u;
+    for (uint32_t i = 0; i < n; ) {
+        uint32_t k = 0u;
+        while ((k < (BLK_CHUNK - 1u)) && (i < n)) {
+            const uint16_t v = g.win[i++];
+            chunk[k++] = (uint8_t)(v & 0xFFu);
+            chunk[k++] = (uint8_t)((v >> 8) & 0x0Fu);   /* 12-bit result */
+        }
+        crc = crc16_ccitt_false(crc, chunk, k);
+        sent += (uint32_t)console_write_raw(chunk, k);
+        if (cmd_parser_aborted()) { break; }
+    }
+
+    char tail[32];
+    p = copy_str(tail, "\r\nCRC ");
+    for (int d = 12; d >= 0; d -= 4) {
+        const uint32_t nib = ((uint32_t)crc >> d) & 0xFu;
+        *p++ = (char)((nib < 10u) ? ('0' + nib) : ('A' + (nib - 10u)));
+    }
+    copy_str(p, "\r\n");
+    cmd_parser_write(tail);
+
+    /* Restart unconditionally - see the comment above. */
+    const bool resumed = chain_stream_grab_end();
+    if ((sent != (2u * n)) || !resumed) { cmd_parser_fail(); }
+}
 
 static void cmd_reset_fn(int argc, char **argv)
 {

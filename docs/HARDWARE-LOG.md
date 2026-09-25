@@ -1429,3 +1429,49 @@ last segment put a turning point 0.7 samples off. The evaluator now judges the
 - S6: the placeholder processing (a sum over the half) needs about 4 to 5 CPU cycles
   per sample, so the CPU keeps up to about 20 MSPS and misses halves at 40.
 - S8: CLKGEN6 divides as documented (160 and 80 MHz at ratios 2 and 4).
+
+## 2026-09-25, GUI stream cycle prepared, not yet run on the board
+
+The GUI's chain tile drives the standing chain on its own: `stream on <ksps>`, then
+repeatedly `stream grab` (halt the trigger, send one contiguous window as a `GRAB`
+frame, restart the SAME trigger), until stopped. New firmware:
+`capture_chain_halt()`/`_resume()` (`capture.c`, pause/restart the SCCP1 trigger in
+place, DMA channel left armed), `chain_stream_grab_begin()`/`_end()` (`chaintest.c`,
+the per-cycle counters and the DAC triangle fields), `cmd_stream_grab()` (`cli.c`, the
+`GRAB` frame, reusing `blk`'s binary writer and CRC). No new parser slot: `grab` is a
+sub-command of `stream`, dispatched the same way `on`/`off` already are, so the count
+stays 26 commands + help = 27 of 32 slots. Both firmware builds (`tools\build.bat`,
+`tools\build.bat sim`, `tools\build.bat nano`) and both MPLAB X hardware
+configurations (`EV74H48A_Curiosity_Platform_MPS512`, `EV17P63A_Curiosity_Nano_MPS506`,
+`tools\_test_mplabx.bat`) are `-Wall -Wextra` clean; the 7-minute simulator acceptance
+run was not run (the simulator has no SCCP/ADC/DMA and skips the chain test outright,
+same as `chain all` always has). GUI side (`tools/adc_gui.py`): `python
+tools/adc_gui.py --selftest` exercises the new frame parser and the grab cycle against
+the fake target - a refusal before `stream on`, a clean grab that passes the grid
+check, the next grab landing in the other buffer half (`from > 0`), an injected
+lost-sample grab that correctly fails the same `tri_eval`/`grid_ok` the firmware's own
+chain test is judged by, a CRC mismatch, a truncated frame, and `Target.grab()` timing
+out against a serial stub that never answers.
+
+**Not tested without a board, and what the colleague should watch for on first run:**
+
+- Whether `capture_chain_halt()` really leaves the trigger off within the 25-tick wait
+  it uses (the same bound `capture_chain_stop()` already relies on) - if not, the first
+  grab after `stream on` would show a torn or short window rather than a clean triangle.
+- Whether the half `capture_completed_half()` returns right after the halt is always
+  the LAST FULLY completed one and never a partially-written one - the design relies on
+  `ready_half` only ever being set at a HALF/DONE event, which the halt does not touch,
+  but this has not been watched happen on silicon.
+- The GUI cycle's real throughput: each grab is a serial round trip (up to 2048 samples,
+  4 KB, at whatever the port's baud rate is) plus the halt, so the achievable grabs/s at
+  115200 baud is expected to land around 2-3 for the default 1024-sample half, not the
+  "grab interval" the GUI is set to - the interval is a floor, not a guarantee, and the
+  status line says so.
+- Whether the overrun brake (chaintest.c's `OVERRUN_LIMIT`) can fire BETWEEN two grabs
+  while the trigger is halted - it should not, since nothing converts while halted, but
+  if `stream` reports "off" after a grab that returned `ok`, that is the symptom to look
+  for.
+- The first real-hardware measurement of `chain_stream_grab_begin()`'s per-cycle
+  counters: on a clean board they should read 0/0/0 every cycle at low rates; anything
+  else on the very first grab points at the halt/resume pair rather than the chain
+  itself, since the same counters read 0 throughout `chain all` and `stream on` already.

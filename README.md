@@ -397,6 +397,15 @@ half - and `stream off` stops it and restores the boot configuration. Printing
 the report takes the main loop's CPU for a few milliseconds, so at high rates a
 report can itself cost a few halves; they show as `missed` in the next one.
 
+**`stream grab`** is the GUI's own command: with a stream already on, it halts
+the trigger (trigger first, as `stream off` does), sends the half that stood
+still as one binary frame - `GRAB n=... from=... ksps=... ov=... late=...
+missed=... halves=... xfer=... slp=... dachz=...`, then the 2·n sample bytes
+and a CRC line, framed exactly like `blk` (`docs/PLAN-BINARY-TRANSFER.md`) -
+and restarts the same trigger. The counters in the header are *per cycle*
+(since the previous grab), not the running total. See "The GUI's chain
+tile" below for what uses it.
+
 Other forms: `chain <n>` runs one stage (0..9), `chain run <ksps> [seconds]`
 runs the chain at a chosen rate (the nearest 160 MHz / N) for as long as asked,
 with one status line per second, printed after the stream so that printing does
@@ -532,9 +541,10 @@ the cause of the next overrun.
 
 UART2 on the board's MCP2221A USB-UART channel, 115200 8N1, no flow control. The parser
 is [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser), copied unchanged except for
-one line (the command table is 24 entries instead of 16). It runs in the UART receive
-interrupt, below the DMA interrupt — which is why a rate that overruns makes the console
-unresponsive, and why the firmware boots idle.
+one line (the command table is 32 entries instead of 16 — `CMD_PARSER_MAX_COMMANDS`,
+`cmd_parser.h`; 26 commands plus the built-in `help` are registered, `nano-board`). It
+runs in the UART receive interrupt, below the DMA interrupt — which is why a rate that
+overruns makes the console unresponsive, and why the firmware boots idle.
 
 | Command | Does |
 |---|---|
@@ -552,6 +562,9 @@ unresponsive, and why the firmware boots idle.
 | `dac <1\|2> <on\|off> [low] [high] [slpdat]` | triangle on DACOUT1 = RA1 or DACOUT2 = RA8, both sharing CLKGEN7 (the last unit to stop switches it off). `slpdat` is the step per DAC clock, so **larger is faster** (default 8; the DAC test itself starts DAC2 at 64, since 8 leaves the triangle almost standing still inside one captured buffer) |
 | `dactest [halves]` | the DAC test on its own, against whichever DAC is active (`dac_active()` picks DAC2 first if both run) |
 | `stats` / `dump [count] [offset]` | the completed half: min/max/mean, or the raw values |
+| `blk [n]` | a contiguous block of up to 2048 samples as binary, with a CRC — `docs/PLAN-BINARY-TRANSFER.md`, what the GUI's single/live capture uses |
+| `chain all\|<n>\|from <n>\|run <ksps> [s]` | the chain test (`chaintest.c`) — see "The chain test" below |
+| `stream on <ksps>\|off\|grab` | the chain as a standing stream: start it, stop it, or halt/transfer/restart one window for the GUI — see "The chain test" below |
 | `clear` | zero the error counters |
 | `led on\|off\|auto` | LED0 |
 | `reset` | software reset |
@@ -883,10 +896,10 @@ simulator run takes about 2.5 minutes for the 100 halves.
 | `adc.c`, `adc.h` | the ADC core: channel 0 in Integration mode, burst trigger, input/sample-time register |
 | `dma.c`, `dma.h` | DMA channel 0: address window, Repeated Continuous mode, HALF/DONE interrupt, status flags — knows no ADC and no buffer |
 | `sim_dma.c`, `sim.h` | **simulator build only:** stand-in for `dma.c` that produces buffer halves (1 MHz sine) and the ping-pong check; see "In the MPLAB X simulator" |
-| `capture.c`, `capture.h` | the measurement: wires ADC and DMA together, handles the DMA events with every error counter and the burst restart, start/stop/input, self-test, per-half processing, and the triggered stream the chain test uses — what the console may read and control |
+| `capture.c`, `capture.h` | the measurement: wires ADC and DMA together, handles the DMA events with every error counter and the burst restart, start/stop/input, self-test, per-half processing, the triggered stream the chain test uses, and `capture_chain_halt`/`_resume` — pausing and restarting that stream's trigger in place, for the GUI's grab cycle — what the console may read and control |
 | `crc16.c`, `crc16.h` | CRC-16 over a sample block, for the `blk` binary transfer command |
 | `sccp.c`, `sccp.h` | SCCP1 as the chain test's trigger source (clock, mode, event), its timer and compare interrupts as event counters |
-| `chaintest.c`, `chaintest.h` | the chain test itself — `chain all`, its triangle evaluator, the `@` log line format; see "The chain test" below |
+| `chaintest.c`, `chaintest.h` | the chain test itself — `chain all`, its triangle evaluator, the `@` log line format, and `chain_stream_grab_begin`/`_end` — one halt/grab/restart cycle for `stream grab`; see "The chain test" below |
 | `led.c`, `led.h` | LED0 |
 | `diag.c`, `diag.h` | stop codes (`fail()`), trap and unhandled-interrupt handler, boot-stage record, reset cause, register dump |
 | `timebase.c`, `timebase.h` | Timer1 as a 12.5 MHz stopwatch — the independent clock the delivered sample rate is measured against (`test rate`, `test sweep`, and the window length of the DAC test). It does **not** pace the ADC |
@@ -925,6 +938,38 @@ tools\adc_gui.bat --port COM7  the board's console port
 Linux/macOS: `tools/gui_setup.sh`, then `tools/.venv/bin/python tools/adc_gui.py ...`.
 The page opens at http://127.0.0.1:8080. Every command goes through the console and
 waits for the parser's ACK/NAK byte, so the tool never talks over the board.
+
+### The GUI's chain tile: configure, start, and it runs itself
+
+Below the sweep tile, the "chain stream · halt / grab / restart" card drives the
+standing chain (`stream on`/`off`/`grab`, `chaintest.c`) end to end: set the rate
+(kSPS) and the grab interval, press **start**, and from then on the page repeats,
+on its own, until **stop** is pressed:
+
+```
+halt the running stream -> transfer one contiguous window -> restart it -> repeat
+```
+
+Each grab plots the window and evaluates it with `tri_eval` - the very function
+`chaintest.c`'s own chain test uses, ported once in `tools/eval_chain.py` and
+reused here rather than re-implemented, so a **PASS/FAIL** verdict here means the
+same thing it means in a `chain all` log: a lost or repeated sample shifts the
+triangle's turning points off the grid by a whole sample (`slip`), and that is
+what fails it. Chips show the turning-point count, the up/down slope lengths, the
+slope against the model computed from the frame's own `slp`/`dachz` fields
+(`chaintest.c`'s `triangle_for()`), and the per-cycle `overrun`/`late`/`missed`
+counters, highlighted red when non-zero. Every control has a tooltip naming the
+console command it sends.
+
+Start it without a board first (`tools\adc_gui.bat --fake`): the built-in
+stand-in answers `stream on/off` and builds a `GRAB` frame from
+`eval_chain.synth()`'s triangle, so the whole cycle - including a PASS and a
+deliberately induced FAIL - can be seen without hardware. `python
+tools\adc_gui.py --selftest` exercises the same path headlessly: a grab refused
+before `stream on`, a clean grab that passes the grid check, the second grab
+landing in the other buffer half (`from > 0`), a lost-sample grab that correctly
+fails, a corrupted frame caught by its CRC, a truncated frame caught by the frame
+parser, and a target that never answers at all timing out rather than hanging.
 
 ### About `tools/`
 

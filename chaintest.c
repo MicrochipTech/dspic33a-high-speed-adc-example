@@ -1458,8 +1458,16 @@ void chain_run(uint32_t ksps, uint32_t seconds)
  * capture_service(), exactly as the application will, and the console
  * stays free. Nothing prints by itself while it runs; "stream" asks.
  * ------------------------------------------------------------------ */
-static bool     s_on    = false;
-static uint32_t s_ticks = 0u;
+static bool     s_on     = false;
+static uint32_t s_ticks  = 0u;
+static uint16_t s_slpdat = 0u;
+
+/* Baselines for chain_stream_grab_begin()'s per-cycle counters: the
+ * lifetime counter as it stood after the previous grab (or after
+ * "stream on", for the first one - all of them are 0 then, because
+ * capture_chain_start() calls counters_clear()). */
+static uint32_t g_grab_ov0, g_grab_la0, g_grab_mi0, g_grab_hv0;
+static uint64_t g_grab_xf0;
 
 static uint32_t period_for(uint32_t ksps)
 {
@@ -1478,8 +1486,10 @@ bool chain_stream_on(uint32_t ksps)
     (void)triangle_for(rate_hz(n), &slp);
     wait_ticks(TICKS_PER_MS);
     if (!capture_chain_start(n, SCCP_MODE_TIMER, 0u, false)) { restore(); return false; }
-    s_on = true;
-    s_ticks = n;
+    s_on     = true;
+    s_ticks  = n;
+    s_slpdat = slp;
+    g_grab_ov0 = 0u; g_grab_la0 = 0u; g_grab_mi0 = 0u; g_grab_hv0 = 0u; g_grab_xf0 = 0u;
     return true;
 }
 
@@ -1494,6 +1504,42 @@ void chain_stream_off(void)
 bool chain_streaming(void)
 {
     return s_on;
+}
+
+bool chain_stream_grab_begin(chain_grab_t *g)
+{
+    if (!s_on) { return false; }
+    if (!capture_chain_halt()) {
+        /* The brake fired, or the chain was already down under us: leave
+         * nothing half-configured, and let "stream" say it is off. */
+        chain_stream_off();
+        return false;
+    }
+    g->win     = capture_completed_half();
+    g->win_len = capture_half_len();
+    g->from    = (uint32_t)(g->win - capture_buffer());
+    g->ksps    = ksps_of(s_ticks);
+    const uint32_t ov = dma_overrun, la = late_service, mi = proc_missed, hv = blocks_done;
+    const uint64_t xf = capture_transfers();
+    g->overrun   = ov - g_grab_ov0;
+    g->late      = la - g_grab_la0;
+    g->missed    = mi - g_grab_mi0;
+    g->halves    = hv - g_grab_hv0;
+    g->transfers = (uint32_t)(xf - g_grab_xf0);
+    g_grab_ov0 = ov; g_grab_la0 = la; g_grab_mi0 = mi; g_grab_hv0 = hv; g_grab_xf0 = xf;
+    g->slpdat  = s_slpdat;
+    g->dac_hz  = clock_dac_hz();
+    return true;
+}
+
+bool chain_stream_grab_end(void)
+{
+    if (!s_on) { return false; }
+    if (!capture_chain_resume()) {
+        chain_stream_off();
+        return false;
+    }
+    return true;
 }
 
 bool chain_stream_state(uint32_t *ksps, uint64_t *transfers, uint32_t *free_cyc)

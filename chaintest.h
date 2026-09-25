@@ -34,4 +34,38 @@ void chain_stream_off(void);
 bool chain_streaming(void);
 bool chain_stream_state(uint32_t *ksps, uint64_t *transfers, uint32_t *free_cyc);
 
+/* One halt / grab / resume cycle of the standing stream ("stream grab",
+ * cli.c), for the GUI: with chain_stream_on() already running,
+ * chain_stream_grab_begin() halts the trigger (capture_chain_halt():
+ * trigger first) and hands back a pointer to the half that stood still -
+ * contiguous, win_len samples, at offset `from` in the raw buffer (0 or
+ * capture_half_len()) - together with the counters since the PREVIOUS
+ * grab (or since chain_stream_on(), for the first one: "per-cycle"
+ * values, not the running total - a colleague watching the GUI wants to
+ * know what happened in the window just shown) and the DAC triangle
+ * setting the GUI's model needs. False if no stream is on, or the halt
+ * itself failed (the overrun brake firing between two grabs, for
+ * instance) - chain_stream_off() has then already been called, so
+ * chain_streaming() reports it and the caller is expected to send
+ * "stream on" again. The window is only valid until
+ * chain_stream_grab_end() is called - nothing else may run in between.
+ *
+ * chain_stream_grab_end() restarts the SAME trigger (same rate) that was
+ * paused; call it once after every successful begin, whether or not the
+ * transfer in between went out whole. False means the restart itself
+ * failed, in which case the stream is left off, same as above. */
+typedef struct {
+    uint32_t ksps;
+    const volatile uint16_t *win;
+    uint32_t win_len;
+    uint32_t from;
+    uint32_t overrun, late, missed, halves;
+    uint32_t transfers;
+    uint16_t slpdat;
+    uint32_t dac_hz;
+} chain_grab_t;
+
+bool chain_stream_grab_begin(chain_grab_t *g);
+bool chain_stream_grab_end(void);
+
 #endif /* CHAINTEST_H */
