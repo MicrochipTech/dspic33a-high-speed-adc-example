@@ -158,7 +158,11 @@ SETTINGS_DEFAULTS = {
     "board": "EV74H48A",
     "view": {"dac_source": 0},
     "adc": {"core": 3, "pinsel": 5, "samc": 0},
-    "pll": {"postdiv1": 5, "postdiv2": 1},
+    # 5/5 = 8 MSPS back-to-back. Not 5/1 = 40 MSPS: since the DMA runs in
+    # Repeated One-Shot mode (one transfer per conversion, run 18/19) it
+    # cannot follow 40 M conversions/s - a burst there never fills the
+    # buffer and the capture cycle only times out.
+    "pll": {"postdiv1": 5, "postdiv2": 5},
     "buffer": {"size": 2048},
     "capture": {"count": 1024, "interval_ms": 500},
     "sweep": {"halves": 2000, "half_len": 1024},
@@ -1921,7 +1925,15 @@ def selftest() -> int:
 def main_gui(args):
     from nicegui import ui, run
 
-    state = dict(target=None, live=False, busy=False, cycles=0, use_blk=False,
+    # One command at a time on the serial port: the capture loop and the
+    # chain loop each run their commands in worker threads, and without
+    # this they could interleave on the same port. capture_ready: the
+    # capture tile's own settings (rate, core/input, SAMC, DACs) are on the
+    # board - false after connect and after every chain stream, because
+    # 'stream off' restores the firmware's boot configuration (core 3,
+    # PLL 7/7, DAC off).
+    port_lock = asyncio.Lock()
+    state = dict(target=None, live=False, busy=False, cycles=0, use_blk=False, capture_ready=False,
                  buf_size=2048, settings_path=args.settings,
                  chain_live=False, chain_busy=False, chain_grabs=0, chain_t0=None)
 
@@ -2340,14 +2352,27 @@ def main_gui(args):
         console_log.push(f"{time.strftime('%H:%M:%S')}  {line}")
 
     def pll_values():
-        p1, p2 = (pll_sel.value or "5,1").split(",")
+        p1, p2 = (pll_sel.value or "5,5").split(",")
         return int(p1), int(p2)
+
+    # Back-to-back capture above this rate delivers no data on the board:
+    # the DMA (one transfer per conversion) cannot keep up, overruns until
+    # the firmware's brake stops the channel, and the buffer is never full.
+    # Run 19: 8 MSPS clean, 40 MSPS "no data" (chaintest S8.5..S8.8).
+    B2B_MAX_KSPS = 10000.0
 
     def update_rate_label():
         try:
             p1, p2 = pll_values()
-            rate_lbl.text = (f"{rate_ksps(p1, p2)/1000:.3f} MSPS nominal   "
-                             f"(ADC clock {adc_clock_hz(p1, p2)/1e6:.1f} MHz)")
+            ksps = rate_ksps(p1, p2)
+            txt = (f"{ksps/1000:.3f} MSPS nominal   "
+                   f"(ADC clock {adc_clock_hz(p1, p2)/1e6:.1f} MHz)")
+            if ksps > B2B_MAX_KSPS:
+                txt += "   - above ~10 MSPS back-to-back gets no data on the board, pick 5/5 or slower"
+                rate_lbl.classes(replace="text-amber-400 mono")
+            else:
+                rate_lbl.classes(replace="text-cyan-300 mono")
+            rate_lbl.text = txt
         except Exception:
             rate_lbl.text = ""
     pll_sel.on_value_change(lambda e: update_rate_label())
@@ -2804,6 +2829,7 @@ def main_gui(args):
                 push_log(f"--- connecting: {port_sel.value} ---")
                 state["target"] = Target(port_sel.value, on_log=push_log)
             ok, lines = state["target"].cmd("version")
+            state["capture_ready"] = False
             conn_chip.text = (lines[0] if ok and lines else f"{port_sel.value}: connected")
             conn_chip.icon = "link"
             conn_chip.props("color=positive")
@@ -2886,97 +2912,123 @@ def main_gui(args):
     buf_btn.on_click(apply_buf)
 
     # ---- capture ----
+    async def prepare_capture():
+        """Put the capture tile's settings on the board: rate, SAMC,
+        core/input, and every DAC that is switched on here. Called once
+        before the first capture after connecting and after every chain
+        stream (see capture_ready)."""
+        await apply_settings()
+        for u in sorted(dac_ui):
+            if dac_ui[u]["on"].value:
+                await apply_dac(u)
+        state["capture_ready"] = True
+
+    def cycle_failed(text):
+        p1, p2 = pll_values()
+        if rate_ksps(p1, p2) > B2B_MAX_KSPS:
+            text += "   (the rate is above ~10 MSPS back-to-back - pick 5/5 or slower)"
+        cyc_lbl.text = text
+        cyc_lbl.classes(replace="text-red-400 mono")
+        state["live"] = False
+        live_btn.text, live_btn.icon = "live", "play_arrow"
+
     async def one_cycle():
         t = state["target"]
         if not t or state["busy"]:
             return
         state["busy"] = True
         try:
-            count = int(count_sel.value)
-            buf = state["buf_size"]
-            # Both paths deliver the whole buffer now: "blk" always did,
-            # and "dump" follows a "snap", after which all of it is valid.
-            count = min(count, buf)
-            samples, status = await run.io_bound(capture_cycle, t, count, 0.02, state["use_blk"])
-            # The board reports its own clock; fall back to the setting.
-            fs = float(status.get("ksps_nominal", 0)) * 1e3
-            if fs <= 0:
-                fs = rate_ksps(int(status.get("postdiv1", pll_values()[0])),
-                               int(status.get("postdiv2", pll_values()[1]))) * 1e3
-            if not math.isfinite(fs) and "fs_hz" in status:
-                # Back-to-back has no documented rate on real hardware (only a
-                # 'sweep' measurement could tell); the fake target reports its
-                # stand-in rate here instead, so the FFT does not go blank.
-                fs = float(status["fs_hz"])
-            f, db = spectrum(samples, fs)
+            if state["chain_live"]:
+                await chain_stop()        # the chain stream and a capture exclude each other
+            async with port_lock:
+                if not state["capture_ready"]:
+                    cyc_lbl.text = "sending the capture settings (rate, core/input, DACs) ..."
+                    cyc_lbl.classes(replace="text-slate-300 mono")
+                    await prepare_capture()
+                count = int(count_sel.value)
+                buf = state["buf_size"]
+                # Both paths deliver the whole buffer now: "blk" always did,
+                # and "dump" follows a "snap", after which all of it is valid.
+                count = min(count, buf)
+                samples, status = await run.io_bound(capture_cycle, t, count, 0.02, state["use_blk"])
+                # The board reports its own clock; fall back to the setting.
+                fs = float(status.get("ksps_nominal", 0)) * 1e3
+                if fs <= 0:
+                    fs = rate_ksps(int(status.get("postdiv1", pll_values()[0])),
+                                   int(status.get("postdiv2", pll_values()[1]))) * 1e3
+                if not math.isfinite(fs) and "fs_hz" in status:
+                    # Back-to-back has no documented rate on real hardware (only a
+                    # 'sweep' measurement could tell); the fake target reports its
+                    # stand-in rate here instead, so the FFT does not go blank.
+                    fs = float(status["fs_hz"])
+                f, db = spectrum(samples, fs)
 
-            n_samp = max(len(samples) - 1, 1)
-            duration_s = n_samp / fs if math.isfinite(fs) and fs > 0 else 1.0
-            t_scale, t_name = ((1e6, "time (µs)") if duration_s < 1e-3 else
-                               (1e3, "time (ms)") if duration_s < 1.0 else (1.0, "time (s)"))
-            time_chart.options["series"][0]["data"] = [[i, int(v)] for i, v in enumerate(samples)]
-            time_chart.options["xAxis"][0]["max"] = n_samp
-            time_chart.options["xAxis"][1]["max"] = duration_s * t_scale
-            time_chart.options["xAxis"][1]["name"] = t_name
-            time_chart.update()
-            fft_chart.options["series"][0]["data"] = [[float(fx) / 1e3, float(d)] for fx, d in zip(f, db)]
-            fft_chart.options["xAxis"][0]["max"] = float(f[-1]) / 1e3 if len(f) else 1
-            fft_chart.update()
-            state["cycles"] += 1
+                n_samp = max(len(samples) - 1, 1)
+                duration_s = n_samp / fs if math.isfinite(fs) and fs > 0 else 1.0
+                t_scale, t_name = ((1e6, "time (µs)") if duration_s < 1e-3 else
+                                   (1e3, "time (ms)") if duration_s < 1.0 else (1.0, "time (s)"))
+                time_chart.options["series"][0]["data"] = [[i, int(v)] for i, v in enumerate(samples)]
+                time_chart.options["xAxis"][0]["max"] = n_samp
+                time_chart.options["xAxis"][1]["max"] = duration_s * t_scale
+                time_chart.options["xAxis"][1]["name"] = t_name
+                time_chart.update()
+                fft_chart.options["series"][0]["data"] = [[float(fx) / 1e3, float(d)] for fx, d in zip(f, db)]
+                fft_chart.options["xAxis"][0]["max"] = float(f[-1]) / 1e3 if len(f) else 1
+                fft_chart.update()
+                state["cycles"] += 1
 
-            metrics = analyze_spectrum(f, db)
-            peak = metrics.get("fund_freq", float("nan")) / 1e3 if metrics else float("nan")
-            fs_text = f"fs {fs/1e6:.3f} MHz" if math.isfinite(fs) else "fs unknown (back-to-back, real hardware only)"
-            cyc_lbl.text = (f"cycle {state['cycles']}   {len(samples)} samples   "
-                            f"{fs_text}" + (f"   peak {peak:.1f} kHz" if math.isfinite(peak) else ""))
-            for k in chips:
-                if k in status:
-                    set_chip(k, status[k])
-            blocks = status.get("blocks")
-            bursts = status.get("bursts", status.get("burst_starts"))
-            if blocks is not None and bursts and bursts > 1:
-                clean = (blocks == 2 * bursts)
-                ratio_chip.text = (f"blocks/bursts {blocks}/{bursts}"
-                                   + ("" if clean else f"  NOT 1:2 ({blocks / (2 * bursts):.1f}x)"))
-                ratio_chip.props(f'color={"positive" if clean else "negative"}')
-            elif blocks is not None and bursts:
-                # One burst, two blocks - what a one-shot produces by
-                # construction, whether or not the fault exists.
-                ratio_chip.text = f"blocks/bursts {blocks}/{bursts} (one-shot, says nothing)"
-                ratio_chip.props("color=grey-8")
-            else:
-                ratio_chip.text = "blocks/bursts –"
-                ratio_chip.props("color=grey-8")
-            meas, nom = status.get("ksps_measured"), status.get("ksps_nominal")
-            if meas and nom:
-                dev = (meas - nom) / nom * 100.0
-                rate_chip.text = f"rate {meas/1000:.2f} of {nom/1000:.2f} MSPS ({dev:+.1f} %)"
-                rate_chip.props(f'color={"positive" if abs(dev) <= 5.0 else "negative"}')
-            else:
-                rate_chip.text = "rate –"
-                rate_chip.props("color=grey-8")
+                metrics = analyze_spectrum(f, db)
+                peak = metrics.get("fund_freq", float("nan")) / 1e3 if metrics else float("nan")
+                fs_text = f"fs {fs/1e6:.3f} MHz" if math.isfinite(fs) else "fs unknown (back-to-back, real hardware only)"
+                cyc_lbl.classes(replace="text-slate-300 mono")
+                cyc_lbl.text = (f"cycle {state['cycles']}   {len(samples)} samples   "
+                                f"{fs_text}" + (f"   peak {peak:.1f} kHz" if math.isfinite(peak) else ""))
+                for k in chips:
+                    if k in status:
+                        set_chip(k, status[k])
+                blocks = status.get("blocks")
+                bursts = status.get("bursts", status.get("burst_starts"))
+                if blocks is not None and bursts and bursts > 1:
+                    clean = (blocks == 2 * bursts)
+                    ratio_chip.text = (f"blocks/bursts {blocks}/{bursts}"
+                                       + ("" if clean else f"  NOT 1:2 ({blocks / (2 * bursts):.1f}x)"))
+                    ratio_chip.props(f'color={"positive" if clean else "negative"}')
+                elif blocks is not None and bursts:
+                    # One burst, two blocks - what a one-shot produces by
+                    # construction, whether or not the fault exists.
+                    ratio_chip.text = f"blocks/bursts {blocks}/{bursts} (one-shot, says nothing)"
+                    ratio_chip.props("color=grey-8")
+                else:
+                    ratio_chip.text = "blocks/bursts –"
+                    ratio_chip.props("color=grey-8")
+                meas, nom = status.get("ksps_measured"), status.get("ksps_nominal")
+                if meas and nom:
+                    dev = (meas - nom) / nom * 100.0
+                    rate_chip.text = f"rate {meas/1000:.2f} of {nom/1000:.2f} MSPS ({dev:+.1f} %)"
+                    rate_chip.props(f'color={"positive" if abs(dev) <= 5.0 else "negative"}')
+                else:
+                    rate_chip.text = "rate –"
+                    rate_chip.props("color=grey-8")
 
-            if metrics:
-                eval_chips["fundamental"].text = f"fundamental {metrics['fund_freq']/1e3:.2f} kHz"
-                eval_chips["level"].text = f"level {metrics['fund_db']:.1f} dBFS"
-                eval_chips["noise floor"].text = f"noise floor {metrics['noise_db']:.1f} dBFS"
-                eval_chips["SNR"].text = f"SNR {metrics['snr_db']:.1f} dB"
-                eval_chips["THD"].text = f"THD {metrics['thd_pct']:.2f} %"
-                for k in ("SNR",):
-                    eval_chips[k].props(f'color={"positive" if metrics["snr_db"] >= 40 else "negative"}')
-                harmonics = {h["k"]: h for h in metrics["harmonics"]}
-                for k in (2, 3, 4, 5):
-                    chip = eval_chips[f"H{k}"]
-                    if k in harmonics:
-                        chip.text = f"H{k}  {harmonics[k]['rel_db']:.1f} dBc"
-                        chip.props("color=grey-8")
-                    else:
-                        chip.text = f"H{k} –"
-                        chip.props("color=grey-8")
+                if metrics:
+                    eval_chips["fundamental"].text = f"fundamental {metrics['fund_freq']/1e3:.2f} kHz"
+                    eval_chips["level"].text = f"level {metrics['fund_db']:.1f} dBFS"
+                    eval_chips["noise floor"].text = f"noise floor {metrics['noise_db']:.1f} dBFS"
+                    eval_chips["SNR"].text = f"SNR {metrics['snr_db']:.1f} dB"
+                    eval_chips["THD"].text = f"THD {metrics['thd_pct']:.2f} %"
+                    for k in ("SNR",):
+                        eval_chips[k].props(f'color={"positive" if metrics["snr_db"] >= 40 else "negative"}')
+                    harmonics = {h["k"]: h for h in metrics["harmonics"]}
+                    for k in (2, 3, 4, 5):
+                        chip = eval_chips[f"H{k}"]
+                        if k in harmonics:
+                            chip.text = f"H{k}  {harmonics[k]['rel_db']:.1f} dBc"
+                            chip.props("color=grey-8")
+                        else:
+                            chip.text = f"H{k} –"
+                            chip.props("color=grey-8")
         except Exception as ex:
-            cyc_lbl.text = f"cycle failed: {ex}"
-            state["live"] = False
-            live_btn.text, live_btn.icon = "live", "play_arrow"
+            cycle_failed(f"cycle failed: {ex}")
         finally:
             state["busy"] = False
 
@@ -3012,7 +3064,8 @@ def main_gui(args):
             return
         state["chain_busy"] = True
         try:
-            ok, samples, meta = await run.io_bound(t.grab)
+            async with port_lock:
+                ok, samples, meta = await run.io_bound(t.grab)
             if not ok:
                 chain_status_lbl.text = "grab failed: " + meta.get("error", "unknown")
                 chain_verdict_chip.text = "grab failed"
@@ -3075,7 +3128,14 @@ def main_gui(args):
         if not t:
             chain_status_lbl.text = "not connected"
             return
-        ok, lines = await run.io_bound(t.cmd, f"stream on {int(chain_ksps_in.value or 8000)}")
+        if state["live"]:                 # a capture live and the chain exclude each other
+            state["live"] = False
+            live_btn.text, live_btn.icon = "live", "play_arrow"
+        while state["busy"]:              # let a capture in flight finish
+            await asyncio.sleep(0.05)
+        state["capture_ready"] = False    # 'stream on' reconfigures the board
+        async with port_lock:
+            ok, lines = await run.io_bound(t.cmd, f"stream on {int(chain_ksps_in.value or 8000)}")
         if not ok:
             chain_status_lbl.text = "stream on refused: " + " ".join(lines)
             return
@@ -3089,9 +3149,13 @@ def main_gui(args):
     async def chain_stop():
         state["chain_live"] = False
         chain_btn.text, chain_btn.icon = "start", "play_arrow"
+        while state["chain_busy"]:        # let a grab in flight finish
+            await asyncio.sleep(0.05)
         t = state["target"]
         if t:
-            await run.io_bound(t.cmd, "stream off")
+            async with port_lock:
+                await run.io_bound(t.cmd, "stream off")
+        state["capture_ready"] = False    # the board is back in its boot configuration
         chain_status_lbl.text = "stream: off"
 
     def toggle_chain():

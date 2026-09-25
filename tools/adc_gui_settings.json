@@ -36,7 +36,7 @@
   },
   "pll": {
     "postdiv1": 5,
-    "postdiv2": 1
+    "postdiv2": 5
   },
   "version": 1,
   "view": {

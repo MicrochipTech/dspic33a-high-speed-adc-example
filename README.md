@@ -946,6 +946,16 @@ waits for the parser's ACK/NAK byte, so the tool never talks over the board.
 
 ### The GUI's chain tile: configure, start, and it runs itself
 
+**Capture tile and chain tile exclude each other** (since 25.09.2026). Pressing **live**
+or **single** in the capture tile stops a running chain stream first, and **start** in
+the chain tile stops a running capture live; the two never share the serial port. The
+capture tile re-sends its own settings (rate, core/input, SAMC, the DACs switched on) before
+its first capture after connecting and after every chain stream, because `stream off`
+returns the board to its boot configuration. The capture tile's rate is **back-to-back**
+and defaults to 5/5 = 8 MSPS; above about 10 MSPS a back-to-back burst gets no data on
+the board (the DMA, one transfer per conversion, cannot follow), and the rate selector
+says so.
+
 Below the sweep tile, the "chain stream · halt / grab / restart" card drives the
 standing chain (`stream on`/`off`/`grab`, `chaintest.c`) end to end: set the rate
 (kSPS) and the grab interval, press **start**, and from then on the page repeats,
