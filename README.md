@@ -60,6 +60,11 @@ page it rests on.
 
 ## Read this first
 
+**The result, in one document: [`docs/RESULTS.md`](docs/RESULTS.md)** (25.09.2026). The
+chain SCCP1 → ADC → DMA → ping-pong → CPU streams without loss up to 8 MSPS with the CPU
+processing every half, proven on the board; the report explains how it was found, what
+the limits are and what is still open. The history below is kept as it was written.
+
 **What has run on hardware.** Since 23.09.2026 this code runs on the EV74H48A, and
 thirteen runs are recorded with their logs in `docs/HARDWARE-LOG.md`. As of 24.09.2026
 the following is proven on silicon, not argued from the datasheet:
