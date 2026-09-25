@@ -951,10 +951,19 @@ class FakeTarget:
     non-test signal.
     """
 
+    # What board.h's BOARD_NAME says for each profile - the fake answers
+    # 'version' with it exactly as the firmware does ("[build] board: ..."),
+    # so that the GUI's board detection is exercised without a board.
+    FAKE_BOARD_NAMES = {
+        "EV74H48A": "EV74H48A, dsPIC33AK512MPS512 GP DIM",
+        "EV17P63A": "EV17P63A, dsPIC33AK512MPS506 Curiosity Nano",
+    }
+
     def __init__(self, signal_khz: float = 100.0, amplitude: float = 1500.0,
                  noise_std: float = 6.0, harm2_amp: float = 150.0, harm3_amp: float = 0.0,
-                 on_log=None):
+                 on_log=None, board: str = "EV74H48A"):
         self.on_log = on_log  # optional callable(str): the console transcript
+        self.board = board if board in self.FAKE_BOARD_NAMES else "EV74H48A"
         self.port = "fake"
         # Both DACs, as dac.c has them - only ever touched by the 'dac'
         # command, never by 'stream on' itself (the test form's own
@@ -1090,7 +1099,8 @@ class FakeTarget:
                     self.buf_size = n
                 return True, [f"buf: {self.buf_size}", f"half: {self.buf_size // 2}"]
             if c == "version":
-                return True, ["adc_dma_40msps (fake target)", "board: none, synthetic signal"]
+                return True, ["[build] adc_dma_40msps (fake target, synthetic signal)",
+                              "[build] board: " + self.FAKE_BOARD_NAMES[self.board]]
             if c == "help":
                 return True, [
                     "commands: dac buf version stream",
@@ -1366,6 +1376,15 @@ def selftest() -> int:
 
     ok_all &= crc16_ccitt_false(b"123456789") == 0x29B1
 
+    # Board detection from the 'version' reply, both profiles, as the
+    # firmware prints it and as the fake does.
+    ok_nano = detect_board(FakeTarget(board="EV17P63A").cmd("version")[1]) == "EV17P63A"
+    ok_plat = detect_board(["[build] board: EV74H48A, dsPIC33AK512MPS512 GP DIM"]) == "EV74H48A"
+    ok_none = detect_board(["[build] adc_dma_40msps"]) is None
+    ok_all &= ok_nano and ok_plat and ok_none
+    print("board detection from 'version' (Nano, Platform, none):",
+          "PASS" if (ok_nano and ok_plat and ok_none) else "FAIL")
+
     print("selftest", "PASS" if ok_all else "FAIL")
     return 0 if ok_all else 1
 
@@ -1373,6 +1392,17 @@ def selftest() -> int:
 # ---------------------------------------------------------------------------
 # The GUI
 # ---------------------------------------------------------------------------
+def detect_board(lines):
+    """The board profile a 'version' reply names ("[build] board: EV17P63A,
+    ..." - board.h's BOARD_NAME, printed by diag_report_build()), or None
+    if it names none this tool knows."""
+    for line in lines or []:
+        m = re.search(r"board:\s*(EV[0-9A-Z]+)", line)
+        if m and m.group(1) in BOARDS:
+            return m.group(1)
+    return None
+
+
 def main_gui(args):
     from nicegui import ui, run
 
@@ -2019,7 +2049,8 @@ def main_gui(args):
         try:
             if port_sel.value == "fake":
                 push_log("--- connecting: fake target ---")
-                state["target"] = FakeTarget(signal_khz=float(sig_in.value or 100.0),
+                state["target"] = FakeTarget(board=args.fake_board,
+                                             signal_khz=float(sig_in.value or 100.0),
                                              amplitude=float(amp_in.value or 1500.0),
                                              noise_std=float(noise_in.value or 6.0),
                                              harm2_amp=float(harm2_in.value or 150.0),
@@ -2030,7 +2061,18 @@ def main_gui(args):
                 state["target"] = Target(port_sel.value, on_log=push_log)
             ok, lines = state["target"].cmd("version")
             state["acq_active"] = None
+            # The firmware names its board: follow it, and start from that
+            # board's default measurement input when it is a different one.
+            found = detect_board(lines) if ok else None
+            if found and found != ui_state["board"]:
+                push_log(f"--- board detected: {found} - profile and default input switched ---")
+                ui_state["board"] = found
+                core_sel.value = BOARDS[found]["default_core"]
+                input_in.value = BOARDS[found]["default_pinsel"]
+                refresh_channel()
             conn_chip.text = (lines[0] if ok and lines else f"{port_sel.value}: connected")
+            if found:
+                conn_chip.text += f"   ·   {found}"
             conn_chip.icon = "link"
             conn_chip.props("color=positive")
             conn_btn.text, conn_btn.icon = "disconnect", "usb_off"
@@ -2285,6 +2327,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", help="COM port of the board's console")
     ap.add_argument("--fake", action="store_true", help="use the built-in stand-in instead of a board")
+    ap.add_argument("--fake-board", default="EV74H48A", choices=["EV74H48A", "EV17P63A"],
+                    help="which board the stand-in reports (its 'version' reply), for trying the "
+                         "Curiosity Nano profile without one")
     ap.add_argument("--selftest", action="store_true", help="fake target through one cycle, no GUI")
     ap.add_argument("--settings", default=SETTINGS_FILE,
                     help="settings file, read at start and written by 'save' "

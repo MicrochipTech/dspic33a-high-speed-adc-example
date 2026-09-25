@@ -276,6 +276,21 @@ The generator goes to RA2 and GND on the edge connector. Nothing on the Nano has
 yet at the time of writing (`docs/HARDWARE-LOG.md`); the EV74H48A is where the
 measurements come from, and the results carry over because the silicon is the same.
 
+**The chain on the Nano.** Everything the chain uses exists on the 64-pin part as well
+(ADC core 5, SCCP1, the clock monitor, DAC2, `_AD5CH0Interrupt`), so `chain all`,
+`stream on` and the GUI work unchanged; checked against the MPS506 device header and
+by building, not yet on a Nano. The DAC test triangle comes out on **RA8 = DACOUT2 =
+AD5AN3**, edge connector right row, position 10 - the plain `stream on <ksps>` samples
+it there with no wire. A real signal goes to **RA2 = AD1AN0** (right row, position 8),
+which is `stream on <ksps> 1 0` and the GUI's default custom input on this board.
+
+**The GUI follows the board by itself:** after connecting it reads the board name from
+the firmware's `version` reply (`[build] board: EV17P63A, ...`), switches the board
+profile - pinout, edge-connector diagram - and sets that board's default input
+(core 1, PINSEL 0 on the Nano; core 3, PINSEL 5 = mikroBUS A AN on the EV74H48A). The
+console port is the Nano debugger's CDC channel. Without a board:
+`toolsdc_gui.bat --fake --fake-board EV17P63A` lets the stand-in report the Nano.
+
 ## First run on hardware
 
 **The firmware runs no test by itself.** It boots, brings the console up, sets the

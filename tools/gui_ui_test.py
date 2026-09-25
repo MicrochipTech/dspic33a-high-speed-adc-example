@@ -27,7 +27,16 @@ import time
 
 from playwright.sync_api import sync_playwright
 
-PORT = 8098
+def free_port():
+    """A TCP port nothing listens on - a fixed one collided with a GUI left
+    running from an earlier session, and the browser then tested that one."""
+    import socket
+    with socket.socket() as so:
+        so.bind(("127.0.0.1", 0))
+        return so.getsockname()[1]
+
+
+PORT = free_port()
 SCRATCH = r"C:\Users\M91221\AppData\Local\Temp\claude\c--work-Claas-ADC\333dbcfd-bfb8-46c9-aaa8-ccdc3122088f\scratchpad"
 SCREENSHOT = SCRATCH + r"\gui_after.png"
 GUI_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "adc_gui.py")
@@ -91,7 +100,7 @@ try:
         fundamental = page.get_by_text(re.compile(r"^fundamental"))
 
         # ---- connect (fake) ----
-        conn = page.get_by_text(re.compile(r"^adc_dma_40msps"))
+        conn = page.locator(".q-chip").filter(has_text="adc_dma_40msps").first
         ok, txt = wait_text(page, conn, r".", timeout=15.0)
         check("connect (fake)", ok, txt[:80])
 
@@ -157,8 +166,46 @@ finally:
         out = gui.communicate(timeout=10)[0]
     except Exception:
         out = ""
-    errs = [l for l in out.splitlines() if re.search(r"Traceback|Error|Exception", l)]
+    errs = [l for l in out.splitlines() if re.search(r"Traceback|error|exception", l, re.I)]
     check("no server-side exceptions", not errs, "; ".join(errs[:5]))
+
+# ---- the Curiosity Nano profile: a second GUI whose fake reports the EV17P63A ----
+NANO_PORT = free_port()
+gui2 = subprocess.Popen(["python", GUI_SCRIPT, "--fake", "--fake-board", "EV17P63A",
+                         "--no-browser", "--http-port", str(NANO_PORT)],
+                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+try:
+    time.sleep(10)
+    with sync_playwright() as p:
+        b = p.chromium.launch(channel="chrome", headless=True)
+        page = b.new_page(viewport={"width": 1600, "height": 3400})
+        page.goto(f"http://127.0.0.1:{NANO_PORT}/")
+        time.sleep(4)
+        conn = page.locator(".q-chip").filter(has_text="adc_dma_40msps").first
+        ok, txt = wait_text(page, conn, r"EV17P63A", timeout=15.0)
+        check("Nano: the board is detected from 'version'", ok, txt[:90])
+        page.get_by_label(re.compile(r"^input$", re.I)).click()
+        page.get_by_text("custom input", exact=True).click()
+        core_txt = page.get_by_label(re.compile(r"^core \(1\.\.5\)", re.I)).locator("xpath=ancestor::label").inner_text()
+        pin_val = page.get_by_label(re.compile(r"^PINSEL", re.I)).input_value()
+        check("Nano: default input switched to core 1, PINSEL 0 (RA2)",
+              ("ADC1" in core_txt) and pin_val == "0", f"{core_txt.split()[-1]} / {pin_val}")
+        cyc = page.get_by_text(re.compile(r"^(no grab yet|grab \d|cycle failed|grab failed|stream on refused)")).first
+        page.get_by_role("button", name=re.compile(r"^\W*live$", re.I)).click()
+        ok, txt = wait_text(page, cyc, r"^grab [3-9]")
+        check("Nano: LIVE on the default input runs grab cycles", ok, txt[:90])
+        ok, txt = wait_text(page, page.get_by_text(re.compile(r"^fundamental")), r"fundamental")
+        check("Nano: spectrum shows a fundamental", ok, txt[:60])
+        page.get_by_role("button", name=re.compile(r"^\W*stop$", re.I)).first.click()
+        b.close()
+finally:
+    gui2.terminate()
+    try:
+        out = gui2.communicate(timeout=10)[0]
+    except Exception:
+        out = ""
+    errs = [l for l in out.splitlines() if re.search(r"Traceback|error|exception", l, re.I)]
+    check("Nano: no server-side exceptions", not errs, "; ".join(errs[:5]))
 
 print("UI TEST", "PASS" if all(results) else "FAIL")
 print("screenshot:", SCREENSHOT)
