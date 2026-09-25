@@ -1414,3 +1414,62 @@ last segment put a turning point 0.7 samples off. The evaluator now judges the
 - S6: the placeholder processing (a sum over the half) needs about 4 to 5 CPU cycles
   per sample, so the CPU keeps up to about 20 MSPS and misses halves at 40.
 - S8: CLKGEN6 divides as documented (160 and 80 MHz at ratios 2 and 4).
+
+## 2026-09-25, run 17 - master 28e88fa (+ local changes), `test sweep`
+
+The colleague ran the old back-to-back sweep. New in this sweep: the rate over one
+burst (`clean1`) and over ten (`clean10`). Converted into durations:
+
+```
+pll  nominal  t1 us  t10 us  (t10-t1)/9 us   one burst at the set rate
+7/7    4081   506.1   517.4      1.3         501.8
+7/6    4761   434.6   894.8     51.1         430.2
+5/5    8000   261.1   520.3     28.8         256.0
+5/2   20000   107.1   564.8     50.9         102.4
+```
+
+The first burst takes the time the PLL setting predicts; bursts 2 to 10 take 1 to 52 us
+each whatever the setting - 2048 transfers at DMA speed, not 2048 conversions. The 5/1
+row is void (the overrun brake fired, clean1 = 609 GSPS). Read at the time as "reading 2
+of open question 1: repeats"; run 18 found the reason.
+
+## 2026-09-25, run 18 - master 28e88fa (+ local changes), `chain all` - THE DMA MODE WAS WRONG
+
+The log reached us cut off inside S5.6 (pasted into a message that has a length limit);
+S6 to S9 and the summary are missing. Logs should come as files.
+
+- S0: Timer1 1 250 002 per 100 ms. Clock monitor: CLKGEN6 319.996 MHz, CLKGEN7 399.996 MHz
+  - both as intended. The three PLL-output readings failed: code 0xB read 7.996 MHz,
+  0xC 159.996 MHz (that is CLKGEN13), 0xE 399.996 MHz - the ATDF's CNTSEL codes for the
+  PLL outputs do not select what they say. An instrument error, not a clock error.
+  Core 5: no calibration, no other channel; RA8 analog.
+- S1: SCCP1 159.999 MHz - the CLKGEN13 divider divides. Timer mode: 100, 1000, 10006
+  events in 100 ms, exact. Output-compare mode: no event at all, neither CCT1 nor CCP1.
+- S2: static transfer over RA8 at 8 levels: gain 1.030, offset -2.7 LSB, largest
+  deviation 27 LSB; SAMC 31 against 0 at mid scale 1989 against 2051. **SCCP1 -> ADC:
+  100/100, 1000/1000, 10006/10006 results per event** - the triggered path works on
+  silicon for the first time. OC mode 0/0. CPU-stepped DAC: 1 of 256 samples off.
+- S3: 6144 transfers, **15 conversions**, overrun 12; the buffer holds runs of about 400
+  equal values (0x72E, 0xC4C, 0x365, 0x7AA, 0xCC1 ...).
+- S4: about 2.05 M transfers in 50 ms at 100 kSPS and 1 MSPS (41 M/s), 13.6 M with the
+  brake at 4 MSPS and above - at every rate, with CH0RES and with CH0DATA/IRQSEL=1 alike.
+- S5: every window is a staircase of equal values, no triangle.
+
+**Cause:** `dma.c` had `TRMODE = 3`, Repeated Continuous. DS70005591D 13.4.8.4 (p833):
+"a single trigger starts a sequence of back-to-back transfers"; 13.4.8.5 (p834):
+"multiple transfers can occur with each trigger". One conversion, one trigger, then the
+DMA copies the result register at its own speed (~41 M/s) until the block is full. The
+mode for one transfer per trigger is Repeated One-Shot, `TRMODE = 1` (13.4.8.3, p832).
+This was set on the first day and never questioned; it is the "40 MSPS whatever the
+setting", the overrun storms, run 17's `clean10` and in all likelihood the support
+statement "a few transfers per trigger". **Every rate, overrun and missed figure of runs
+1 to 18 was measured in the wrong DMA mode.**
+
+**Changed:** `TRMODE = 1` in `dma.c` (master and nano-board). Nothing else.
+
+**Predictions for the repeat of `chain all`:** S3 passes (6144 transfers for 6144
+conversions, the stepped codes in every buffer index). S4 passes at least up to 16 or
+20 MSPS with overrun 0; above that the DMA's real ceiling and the 31 ns conversion
+time decide. S5 shows triangles, and the slope/model ratio answers open question 4.
+S1's output-compare mode and S0's PLL-output codes stay failing (instrument, not chain).
+

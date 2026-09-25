@@ -329,9 +329,11 @@ would be small and constant, but it would still not be one sample period, so the
 would carry a fixed offset at every burst boundary. The requirement is an unbroken
 grid (top of this document), not a small gap.
 
-The DMA side is not the problem: channel 0 already runs in Repeated Continuous mode
-(`TRMODE = 3`, `RELOADD = RELOADC = 1`, `dma.c`), reloads its destination and count at
-the end of each block and waits for the next trigger without any software. It is the
+The DMA side is not the problem once it runs in Repeated One-Shot mode (`TRMODE = 1`,
+`RELOADD = RELOADC = 1`, `dma.c`): it reloads its destination and count at the end of
+each block and waits for the next trigger without any software. (Until 25.09.2026 it
+ran in Repeated Continuous, `TRMODE = 3`, which copies a whole block per trigger - see
+section E.) It is the
 ADC that stops delivering triggers when the burst ends.
 
 This rules back-to-back out for the example's sentence, whatever the rate question in
@@ -355,7 +357,7 @@ has never been tested correctly here (see the SCCP errors below).
 run correctly on silicon.**
 
 ```
-SCCP/PWM ──► ADC (1 conversion per trigger) ──► DMA (Repeated Continuous) ──► buffer
+SCCP/PWM ──► ADC (1 conversion per trigger) ──► DMA (Repeated One-Shot) ──► buffer
  hardware          hardware                          hardware
                                           HALF/DONE IRQ ──► CPU: processing only
 ```
@@ -397,7 +399,7 @@ p1322).
 - The sampling instant now depends on the trigger alone. The conversion time no longer
   sets the rate; it only has to fit inside the period.
 
-**3. The DMA in Repeated Continuous mode - one transfer per conversion.** The ADC's
+**3. The DMA in Repeated One-Shot mode - one transfer per conversion.** The ADC's
 channel event triggers DMA channel 0, which copies one value from `ADnCH0RES` to the
 next buffer address (`dma.c`). HALF after the first half, DONE at the end of the block;
 then the DMA reloads destination and count by itself and writes from the start again.
@@ -855,6 +857,27 @@ never whether a stream *lasts* with the CPU keeping up, which is the sentence th
 example exists for. Fixed in `2c8137f`.
 
 ## E. What holds, what is likely, what is open
+
+**Found on silicon, run 18 (25.09.2026) - and it rewrites most of what follows:**
+
+- The DMA ran in the wrong mode from the first day. `TRMODE = 3`, Repeated Continuous:
+  "a single trigger starts a sequence of back-to-back transfers" (13.4.8.4, p833),
+  "multiple transfers can occur with each trigger" (13.4.8.5, p834). Every conversion
+  made the DMA copy the result register at its own speed until the block was full. The
+  chain test's S3 counted 6144 transfers for 15 conversions, the buffer held runs of
+  about 400 equal values, and S4 found about 41 M transfers/s at every rate from
+  100 kSPS to 40 MSPS. Repeated One-Shot (`TRMODE = 1`, p832) is one transfer per
+  trigger; fixed in `dma.c`.
+- That answers open question 1 (C.2): the "40 MSPS whatever the setting" in streaming
+  was the DMA's own speed and the samples were repeats; run 17's `clean10` (bursts 2 to
+  10 lasting 29 to 52 us instead of the set rate's 100 to 500 us) says the same. It
+  explains the overrun storms (triggers arriving while the DMA ran a block) and very
+  likely the support statement "a few transfers per trigger". Every rate, overrun and
+  missed figure measured in runs 1 to 18 was taken in the wrong mode.
+- SCCP1 -> ADC works: one ADC result per SCCP1 period at 1, 10 and 100 kHz (S2), SCCP1's
+  clock measured at 160 MHz (S1), CLKGEN6 at 320 MHz and CLKGEN7 at 400 MHz by the clock
+  monitor (S0). The static transfer DAC -> RA8 -> ADC is linear, gain 1.03, offset
+  -2.7 LSB, largest deviation 27 LSB.
 
 **Holds, on silicon:**
 

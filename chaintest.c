@@ -6,7 +6,7 @@
  * The example's sentence, link by link and then as a whole:
  *
  *   SCCP1 (CLKGEN13, 160 MHz) -> ADC core 5, Single Conversion, one
- *   conversion per trigger -> DMA0, Repeated Continuous, one transfer
+ *   conversion per trigger -> DMA0, Repeated One-Shot, one transfer
  *   per conversion -> ping-pong buffer -> the CPU processes each half
  *
  * with DAC2 as the signal, on DACOUT2 = RA8 = AD5AN3 (ANALYSIS.md C.11).

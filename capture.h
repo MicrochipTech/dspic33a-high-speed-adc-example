@@ -227,7 +227,7 @@ const volatile uint16_t *capture_buffer(void);
  *
  * SCCP1 on CLKGEN13 paces channel 0 in Single Conversion mode (the
  * caller has put the ADC in that mode), one DMA transfer per conversion,
- * Repeated Continuous, no burst and no restart. See capture.c.
+ * Repeated One-Shot, no burst and no restart. See capture.c.
  *
  * capture_chain_start()  settle, counters cleared, DMA armed (source
  *                        CH0DATA if src_data, else CH0RES), then SCCP1

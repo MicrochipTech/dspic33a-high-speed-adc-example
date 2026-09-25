@@ -12,7 +12,7 @@ builds, programs, types it once and sends back the UART log. The log is evaluate
 It checks, link by link and then as a whole, the chain the example is meant to show:
 
 ```
-SCCP1 (timer) ──► ADC core 5, Single Conversion ──► DMA0, Repeated Continuous ──► ping-pong buffer ──► CPU
+SCCP1 (timer) ──► ADC core 5, Single Conversion ──► DMA0, Repeated One-Shot ──► ping-pong buffer ──► CPU
    sample clock      one conversion per trigger        one transfer per conversion      HALF / DONE        processing
 ```
 

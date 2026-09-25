@@ -2,7 +2,8 @@
  * dma.c
  *
  * DMA channel 0 of the ADC/DMA example: one channel, peripheral to RAM,
- * Repeated Continuous mode with an interrupt at each half of the block.
+ * Repeated One-Shot mode - one transfer per trigger - with an interrupt at
+ * each half of the block.
  * This file knows the DMA registers and nothing else - what triggers the
  * channel, where the data goes and what to do at HALF and DONE is the
  * caller's business (capture.c).
@@ -52,10 +53,27 @@
  * first day (window 0x4000..0x13FFF, source 0xB64), so the check does
  * not apply to the peripheral side.
  *
- * TRMODE = Repeated Continuous with RELOADD/RELOADC restarts at the
- * buffer start after each block on its own (p812, p829 step 4). HALFEN
- * and DONEEN give one interrupt per half (13.6.1.2, p848). No address
- * is ever rewritten from software while the channel runs.
+ * TRMODE = 01, REPEATED ONE-SHOT: "single transfers occur repeatedly as
+ * long as triggers are being provided ... Each time a trigger occurs ...
+ * DMAxCNT is decremented ... the channel is not disabled when DMAxCNT
+ * reaches 0000h. Instead, the original value of DMAxCNT is reloaded"
+ * (13.4.8.3, p832). One ADC result, one transfer; with RELOADD/RELOADC
+ * the channel restarts at the buffer start after each block on its own
+ * (p812, p829 step 4). HALFEN and DONEEN give one interrupt per half
+ * (13.6.1.2, p848). No address is ever rewritten from software while the
+ * channel runs.
+ *
+ * NOT TRMODE = 11 (Repeated Continuous), which this file used until
+ * 25.09.2026: "a single trigger starts a sequence of back-to-back
+ * transfers" (Continuous, 13.4.8.4, p833) and "multiple transfers can
+ * occur with each trigger" (Repeated Continuous, 13.4.8.5, p834). Every
+ * conversion made the DMA copy the result register as fast as it could,
+ * about 41 M transfers/s, until the block was full: run 18's S3 counted
+ * 6144 transfers for 15 conversions and a buffer of runs of ~400 equal
+ * values, and S4 found 41 M transfers/s at every rate from 100 kSPS to
+ * 40 MSPS. That one bit is the "40 MSPS whatever the setting", the
+ * overrun storms and the "few transfers per trigger" of every earlier
+ * run (docs/HARDWARE-LOG.md, 25.09.2026).
  *
  * DMAxSTAT flags are "R/C/HS" - clearable by writing 0 (legend p815,
  * Example 13-4 p835: "DMA0STATbits.DONE=0"). Writing 1 does not clear.
@@ -93,7 +111,7 @@ void dma0_init(uint32_t trigger, const volatile void *src,
     DMA0CHbits.SIZE    = 1u;          /* 16-bit transfers               */
     DMA0CHbits.SAMODE  = 0u;          /* source address unchanged       */
     DMA0CHbits.DAMODE  = 1u;          /* destination incremented        */
-    DMA0CHbits.TRMODE  = 3u;          /* repeated continuous            */
+    DMA0CHbits.TRMODE  = 1u;          /* repeated one-shot: 1 per trigger (p832) */
     DMA0CHbits.RELOADD = 1u;          /* reload destination each block  */
     DMA0CHbits.RELOADC = 1u;          /* reload count each block        */
     DMA0CHbits.HALFEN  = 1u;          /* interrupt at half              */
