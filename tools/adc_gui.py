@@ -1392,6 +1392,13 @@ def selftest() -> int:
 # ---------------------------------------------------------------------------
 # The GUI
 # ---------------------------------------------------------------------------
+# The DAC loopback both boards have: DAC2 drives DACOUT2 = RA8, which is
+# AD5AN3 on the 128-pin MPS512 and on the Nano's 64-pin MPS506 alike, so
+# ADC core 5 / PINSEL 3 reads the DAC with no wire. The test input
+# ("stream on <ksps>") is exactly this route with the firmware's triangle.
+LOOPBACK = {"core": 5, "pinsel": 3, "samc": 0, "dac": 2}
+
+
 def detect_board(lines):
     """The board profile a 'version' reply names ("[build] board: EV17P63A,
     ..." - board.h's BOARD_NAME, printed by diag_report_build()), or None
@@ -1650,7 +1657,11 @@ def main_gui(args):
             # drawn. Kit, core and channel are repeated on the board tile
             # below and on the sidebar; all of them are the same selection.
             board_ctrls, core_ctrls, chan_ctrls, dac_ctrls = [], [], [], []
-            ui_state = {"board": BOARD_DEFAULT, "sync": False, "dac": 0}
+            # custom: the user's own input (core, pinsel, samc) - kept apart
+            # from the fields, which show the loopback while the test input
+            # is chosen; dac_custom: the signal source shown for it.
+            ui_state = {"board": BOARD_DEFAULT, "sync": False, "dac": 0, "mode": "test",
+                        "custom": None, "dac_custom": 0}
 
             def selection_row(tag):
                 """kit / core / channel, one row, for a tile header."""
@@ -1817,12 +1828,13 @@ def main_gui(args):
         return {
             "version": SETTINGS_VERSION,
             "board": ui_state["board"],
-            "view": {"dac_source": int(ui_state["dac"])},
+            "view": {"dac_source": int(ui_state["dac_custom"] if ui_state["mode"] == "test"
+                                        else ui_state["dac"])},
             "acquisition": {
                 "mode": input_mode_sel.value or "test",
                 "ksps": int(rate_in.value or 8000),
-                "core": int(core_sel.value), "pinsel": int(input_in.value or 0),
-                "samc": int(samc_in.value or 0),
+                "core": custom_input()[0], "pinsel": custom_input()[1],
+                "samc": custom_input()[2],
                 "interval_ms": int(interval_in.value or 500),
             },
             "buffer": {"size": int(buf_in.value or 2048)},
@@ -1843,12 +1855,15 @@ def main_gui(args):
         if cfg.get("board") in BOARDS:
             ui_state["board"] = cfg["board"]
         ui_state["dac"] = int(cfg.get("view", {}).get("dac_source", 0))
+        ui_state["dac_custom"] = ui_state["dac"]
         acq = cfg.get("acquisition", {})
+        ui_state["mode"] = "custom"               # so that on_mode_change() below starts clean
+        # the mode first: setting it can run on_mode_change() at once, which
+        # keeps the fields as they are then - the file's input comes after
         input_mode_sel.value = acq.get("mode") if acq.get("mode") in ("test", "custom") else "test"
+        ui_state["custom"] = (int(acq.get("core", 3)), int(acq.get("pinsel", 5)), int(acq.get("samc", 0)))
         rate_in.value = int(acq.get("ksps", 8000))
-        core_sel.value = int(acq.get("core", 3))
-        input_in.value = int(acq.get("pinsel", 5))
-        samc_in.value = int(acq.get("samc", 0))
+        core_sel.value, input_in.value, samc_in.value = ui_state["custom"]
         interval_in.value = int(acq.get("interval_ms", 500))
         buf_in.value = int(cfg.get("buffer", {}).get("size", 2048))
         for unit, c in dac_ui.items():
@@ -1900,16 +1915,32 @@ def main_gui(args):
     save_as_btn.on_click(lambda e: ask_path("save settings as", do_save, "save"))
     load_as_btn.on_click(lambda e: ask_path("load settings from", do_load, "load"))
 
-    # ---- the input mode: test (fixed core 5 / pin 3) or custom ----
+    # ---- the input mode: test (the DAC loopback, fixed) or custom ----
+    def custom_input():
+        """The user's own input: the fields while custom is chosen, the
+        kept copy while the fields show the loopback."""
+        if ui_state["mode"] == "custom" or ui_state["custom"] is None:
+            return (int(core_sel.value), int(input_in.value or 0), int(samc_in.value or 0))
+        return ui_state["custom"]
+
     def on_mode_change(e=None):
         is_test = input_mode_sel.value == "test"
         if is_test:
-            core_sel.value = 5
-            input_in.value = 3
-            samc_in.value = 0
-        core_sel.set_enabled(not is_test)
-        input_in.set_enabled(not is_test)
-        samc_in.set_enabled(not is_test)
+            if ui_state["mode"] == "custom":          # leaving custom: keep it
+                ui_state["custom"] = (int(core_sel.value), int(input_in.value or 0),
+                                      int(samc_in.value or 0))
+                ui_state["dac_custom"] = int(ui_state["dac"])
+            core_sel.value = LOOPBACK["core"]
+            input_in.value = LOOPBACK["pinsel"]
+            samc_in.value = LOOPBACK["samc"]
+            ui_state["dac"] = LOOPBACK["dac"]
+        elif ui_state["mode"] == "test":               # back to custom: restore it
+            if ui_state["custom"] is not None:
+                core_sel.value, input_in.value, samc_in.value = ui_state["custom"]
+            ui_state["dac"] = int(ui_state["dac_custom"])
+        ui_state["mode"] = "test" if is_test else "custom"
+        for el in [core_sel, input_in, samc_in] + core_ctrls + chan_ctrls + dac_ctrls:
+            el.set_enabled(not is_test)
         refresh_channel()
     input_mode_sel.on_value_change(on_mode_change)
 
@@ -1948,6 +1979,8 @@ def main_gui(args):
                 sel.set_options(opts, value=pinsel)
             unit = int(ui_state["dac"])
             dac_on = bool(dac_ui[unit]["on"].value) if unit in dac_ui else False
+            if ui_state["mode"] == "test":
+                unit, dac_on = LOOPBACK["dac"], True   # 'stream on <ksps>' starts DAC2 itself
             for sel in dac_ctrls:
                 sel.value = unit
             info = channel_pin_info(board_key, core, pinsel)
@@ -2065,10 +2098,18 @@ def main_gui(args):
             # board's default measurement input when it is a different one.
             found = detect_board(lines) if ok else None
             if found and found != ui_state["board"]:
-                push_log(f"--- board detected: {found} - profile and default input switched ---")
+                # A different board: start from the DAC loopback, which works
+                # on both with no wire, and keep the board's own measurement
+                # input as the custom one (Nano: core 1 / PINSEL 0 = RA2).
+                push_log(f"--- board detected: {found} - profile switched, input set to the "
+                         f"DAC2 loopback (core 5, AN3 = RA8) ---")
                 ui_state["board"] = found
-                core_sel.value = BOARDS[found]["default_core"]
-                input_in.value = BOARDS[found]["default_pinsel"]
+                input_mode_sel.value = "test"
+                ui_state["custom"] = (BOARDS[found]["default_core"],
+                                      BOARDS[found]["default_pinsel"], 0)
+                ui_state["dac_custom"] = 0
+                if ui_state["mode"] != "test":
+                    on_mode_change()
                 refresh_channel()
             conn_chip.text = (lines[0] if ok and lines else f"{port_sel.value}: connected")
             if found:

@@ -286,8 +286,13 @@ which is `stream on <ksps> 1 0` and the GUI's default custom input on this board
 
 **The GUI follows the board by itself:** after connecting it reads the board name from
 the firmware's `version` reply (`[build] board: EV17P63A, ...`), switches the board
-profile - pinout, edge-connector diagram - and sets that board's default input
-(core 1, PINSEL 0 on the Nano; core 3, PINSEL 5 = mikroBUS A AN on the EV74H48A). The
+profile - pinout, edge-connector diagram - and sets the input to the **DAC loopback**:
+DAC2 -> DACOUT2 = RA8 = AD5AN3 -> ADC core 5, AN3, the same on both boards and with no
+wire, so the first LIVE shows the test triangle with its PASS/FAIL. The board's own
+measurement input (core 1, PINSEL 0 = RA2 on the Nano; core 3, PINSEL 5 = mikroBUS A AN
+on the EV74H48A) is what "custom input" then starts from. While the test input is
+chosen, every tile shows the loopback (core 5, AN3 · RA8, source DAC2) and its core,
+channel and source selectors are locked. The
 console port is the Nano debugger's CDC channel. Without a board:
 `toolsdc_gui.bat --fake --fake-board EV17P63A` lets the stand-in report the Nano.
 

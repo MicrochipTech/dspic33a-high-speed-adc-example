@@ -37,6 +37,18 @@ def free_port():
 
 
 PORT = free_port()
+
+
+def server_errors(out):
+    """Error lines of a GUI's output. A client that goes away while the
+    server shuts down leaves a ConnectionResetError (WinError 10054) from
+    asyncio's proactor on Windows - that is the browser closing, not the
+    GUI failing, so the traceback it belongs to is not counted."""
+    lines = out.splitlines()
+    if any("WinError 10054" in l for l in lines):
+        lines = [l for l in lines if not re.search(r"_call_connection_lost|10054|Traceback|"
+                                                   r"^\s+File |^\s+\^|self\._sock|ConnectionResetError", l)]
+    return [l for l in lines if re.search(r"Traceback|error|exception", l, re.I)]
 SCRATCH = r"C:\Users\M91221\AppData\Local\Temp\claude\c--work-Claas-ADC\333dbcfd-bfb8-46c9-aaa8-ccdc3122088f\scratchpad"
 SCREENSHOT = SCRATCH + r"\gui_after.png"
 GUI_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "adc_gui.py")
@@ -166,7 +178,7 @@ finally:
         out = gui.communicate(timeout=10)[0]
     except Exception:
         out = ""
-    errs = [l for l in out.splitlines() if re.search(r"Traceback|error|exception", l, re.I)]
+    errs = server_errors(out)
     check("no server-side exceptions", not errs, "; ".join(errs[:5]))
 
 # ---- the Curiosity Nano profile: a second GUI whose fake reports the EV17P63A ----
@@ -184,15 +196,40 @@ try:
         conn = page.locator(".q-chip").filter(has_text="adc_dma_40msps").first
         ok, txt = wait_text(page, conn, r"EV17P63A", timeout=15.0)
         check("Nano: the board is detected from 'version'", ok, txt[:90])
+
+        # The preset after detection is the DAC loopback: DAC2 -> RA8 -> AD5AN3,
+        # shown as such on the board tile (core ADC5, AN3 · RA8, source DAC2).
+        # The tile's selects are disabled in test mode, so they are read as
+        # field texts ("label value"), not looked up by their aria label.
+        fields = [t.replace("\n", " ") for t in page.locator(".q-field").all_inner_texts()]
+
+        def field_text(label):
+            return " ".join(t for t in fields if t.startswith(label))
+        core_t = field_text("core ")
+        chan_t = field_text("channel (PINSEL)")
+        src_t = field_text("signal source")
+        page.screenshot(path=SCRATCH + r"\gui_nano.png", full_page=True)
+        check("Nano: preset is the DAC loopback on the board tile (ADC5, AN3 = RA8, DAC2)",
+              ("ADC5" in core_t) and ("AN3" in chan_t and "RA8" in chan_t) and ("DAC2" in src_t),
+              f"{core_t[:30]} | {chan_t[:40]} | {src_t[:40]}")
+        cyc = page.get_by_text(re.compile(r"^(no grab yet|grab \d|cycle failed|grab failed|stream on refused)")).first
+        page.get_by_role("button", name=re.compile(r"^\W*live$", re.I)).click()
+        ok, txt = wait_text(page, cyc, r"^grab [3-9]")
+        check("Nano: LIVE on the loopback runs grab cycles", ok, txt[:90])
+        ok, txt = wait_text(page, page.get_by_text(re.compile(r"^(PASS|FAIL)$")).first, r"^PASS$")
+        check("Nano: the loopback triangle passes the grid check", ok, txt[:30])
+        page.get_by_role("button", name=re.compile(r"^\W*stop$", re.I)).first.click()
+        time.sleep(1.0)
+
         page.get_by_label(re.compile(r"^input$", re.I)).click()
         page.get_by_text("custom input", exact=True).click()
         core_txt = page.get_by_label(re.compile(r"^core \(1\.\.5\)", re.I)).locator("xpath=ancestor::label").inner_text()
         pin_val = page.get_by_label(re.compile(r"^PINSEL", re.I)).input_value()
         check("Nano: default input switched to core 1, PINSEL 0 (RA2)",
               ("ADC1" in core_txt) and pin_val == "0", f"{core_txt.split()[-1]} / {pin_val}")
-        cyc = page.get_by_text(re.compile(r"^(no grab yet|grab \d|cycle failed|grab failed|stream on refused)")).first
+        c0 = cyc.inner_text()
         page.get_by_role("button", name=re.compile(r"^\W*live$", re.I)).click()
-        ok, txt = wait_text(page, cyc, r"^grab [3-9]")
+        ok, txt = wait_changed(page, cyc, c0, timeout=15.0)
         check("Nano: LIVE on the default input runs grab cycles", ok, txt[:90])
         ok, txt = wait_text(page, page.get_by_text(re.compile(r"^fundamental")), r"fundamental")
         check("Nano: spectrum shows a fundamental", ok, txt[:60])
@@ -204,7 +241,7 @@ finally:
         out = gui2.communicate(timeout=10)[0]
     except Exception:
         out = ""
-    errs = [l for l in out.splitlines() if re.search(r"Traceback|error|exception", l, re.I)]
+    errs = server_errors(out)
     check("Nano: no server-side exceptions", not errs, "; ".join(errs[:5]))
 
 print("UI TEST", "PASS" if all(results) else "FAIL")
