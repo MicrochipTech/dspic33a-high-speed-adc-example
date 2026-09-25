@@ -1637,10 +1637,18 @@ static void cmd_stream_grab(void);
  * halves, which then show in the NEXT report's missed count. */
 static void cmd_stream_fn(int argc, char **argv)
 {
-    static const char use[] = "stream on <ksps 1..40000> | stream off | stream grab | stream";
-    uint32_t k = 0u;
-    if ((argc == 3) && (strcmp(argv[1], "on") == 0) && arg_u32(argv[2], 1u, 40000u, &k)) {
-        if (!chain_stream_on(k)) { put_line("stream: set-up failed (clock, core or trigger) - run 'chain 0'"); cmd_parser_fail(); return; }
+    static const char use[] = "stream on <ksps 1..40000> [<core 1..5> <pinsel 0..15> [<samc 0..31>]] | stream off | stream grab | stream";
+    uint32_t k = 0u, core = 0u, pin = 0u, samc = 0u;
+    /* "stream on <ksps>": core 5, RA8, with the DAC2 triangle as the test
+     * signal. "stream on <ksps> <core> <pinsel> [<samc>]": that input,
+     * the DAC left to the "dac" command. */
+    if ((argc >= 3) && (argc <= 6) && (argc != 4) && (strcmp(argv[1], "on") == 0) &&
+        arg_u32(argv[2], 1u, 40000u, &k) &&
+        ((argc == 3) || (arg_u32(argv[3], 1u, 5u, &core) && arg_u32(argv[4], 0u, 15u, &pin) &&
+                         ((argc == 5) || arg_u32(argv[5], 0u, 31u, &samc))))) {
+        const bool ok = (argc == 3) ? chain_stream_on(k)
+                                    : chain_stream_on_input(k, (uint8_t)core, (uint8_t)pin, (uint8_t)samc, false);
+        if (!ok) { put_line("stream: set-up failed (clock, core or trigger) - run 'chain 0'"); cmd_parser_fail(); return; }
     } else if ((argc == 2) && (strcmp(argv[1], "off") == 0)) {
         chain_stream_off();
         put_line("stream: off, boot configuration restored");
@@ -1662,9 +1670,11 @@ static void cmd_stream_fn(int argc, char **argv)
     const bool brake = capture_overrun_aborted();
     uint32_t mn = 0u, mx = 0u, mean = 0u;
     half_stats(&mn, &mx, &mean);
-    put_line(running ? "stream: on - SCCP1 -> ADC core 5 (RA8, DAC2 triangle) -> DMA0 -> ping-pong -> main()"
+    put_line(running ? "stream: on - SCCP1 -> ADC (single conversion) -> DMA0 -> ping-pong -> main()"
                      : "stream: STOPPED by itself - the overrun brake fired, the rate is not usable");
     put_kv("ksps", ksps);
+    put_kv("core", adc_core());
+    put_kv("pinsel", adc_pinsel());
     put_kv("seconds", (ksps != 0u) ? (uint32_t)(xfer / ((uint64_t)ksps * 1000u)) : 0u);
     put_kv("transfers (millions)", (uint32_t)(xfer / 1000000u));
     put_kv("halves", halves);
@@ -1678,7 +1688,7 @@ static void cmd_stream_fn(int argc, char **argv)
     put_kv("last half max", mx);
     put_kv("last half mean", mean);
 }
-CMD_DEFINE(stream, "stream", cmd_stream_fn, "stream on <ksps>|off|grab - the chain streaming, main() processing, one halt/transfer/restart cycle");
+CMD_DEFINE(stream, "stream", cmd_stream_fn, "stream on <ksps> [core pinsel [samc]]|off|grab - the chain streaming, main() processing, one halt/transfer/restart cycle");
 
 static void cmd_snap_fn(int argc, char **argv)
 {

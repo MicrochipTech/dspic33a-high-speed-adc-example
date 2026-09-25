@@ -30,6 +30,13 @@ void chain_run(uint32_t ksps, uint32_t seconds);
  * cycles per sample; false if no stream is on, or if it stopped itself
  * (overrun brake) - chain_streaming() still says one was started. */
 bool chain_stream_on(uint32_t ksps);
+/* The same with the input chosen: ADC core 1..5, PINSEL 0..15, SAMC 0..31,
+ * and test_signal = whether DAC2's triangle is started as the signal (it
+ * is on RA8 = AD5AN3 and on UREF = ANn7). Without it the DAC is left as it
+ * is, and the grab frame says slp=0. chain_stream_on(ksps) is core 5,
+ * PINSEL 3 (RA8), SAMC 0, with the triangle. */
+bool chain_stream_on_input(uint32_t ksps, uint8_t core, uint8_t pinsel, uint8_t samc,
+                           bool test_signal);
 void chain_stream_off(void);
 bool chain_streaming(void);
 bool chain_stream_state(uint32_t *ksps, uint64_t *transfers, uint32_t *free_cyc);

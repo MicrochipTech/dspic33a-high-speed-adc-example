@@ -585,6 +585,13 @@ static void mark(uint32_t stage)
 static uint32_t setup_rc_pll;
 static bool     setup_trig, setup_dac;
 
+/* setup() with the input the chain samples: core, PINSEL, SAMC, and
+ * whether this module drives DAC2 as the test signal (the chain test and
+ * "stream on <ksps>" do; "stream on <ksps> <core> <pinsel>" leaves the
+ * DAC to whoever set it up - the GUI's DAC controls). */
+static uint8_t s_core = CHAIN_CORE, s_pinsel = CHAIN_PINSEL, s_samc = CHAIN_SAMC;
+static bool    s_test_dac = true;
+
 static bool setup(void)
 {
     timebase_init();
@@ -594,8 +601,8 @@ static bool setup(void)
     setup_rc_pll = capture_set_pll(5u, 1u);           /* 320 MHz, VCO 1600 */
     setup_trig   = clock_trig_on();                   /* CLKGEN13 160 MHz  */
     clock_dac_select(CLOCK_DAC_PLL1_VCO);
-    setup_dac    = dac2_level_start(0x800u);          /* CLKGEN7 400 MHz   */
-    (void)capture_select_core(CHAIN_CORE, CHAIN_PINSEL, CHAIN_SAMC);
+    setup_dac    = s_test_dac ? dac2_level_start(0x800u) : true;   /* CLKGEN7 400 MHz */
+    (void)capture_select_core(s_core, s_pinsel, s_samc);
     adc_set_mode_single(SCCP1_ADC_TRIGGER);
     adc_set_irqsel(0u);
     (void)capture_settle();                           /* DMA down          */
@@ -1499,13 +1506,23 @@ static uint32_t period_for(uint32_t ksps)
 
 bool chain_stream_on(uint32_t ksps)
 {
+    return chain_stream_on_input(ksps, CHAIN_CORE, CHAIN_PINSEL, CHAIN_SAMC, true);
+}
+
+bool chain_stream_on_input(uint32_t ksps, uint8_t core, uint8_t pinsel, uint8_t samc,
+                           bool test_signal)
+{
     chain_stream_off();
-    if (CHAIN_ON_SIMULATOR || (ksps == 0u)) { return false; }
+    if (CHAIN_ON_SIMULATOR || (ksps == 0u) || (core < 1u) || (core > 5u) ||
+        (pinsel > 15u) || (samc > 31u)) { return false; }
     g_trig_hz = TRIG_HZ_NOMINAL;
-    if (!setup()) { restore(); return false; }
+    s_core = core; s_pinsel = pinsel; s_samc = samc; s_test_dac = test_signal;
+    const bool ok = setup();
+    s_core = CHAIN_CORE; s_pinsel = CHAIN_PINSEL; s_samc = CHAIN_SAMC; s_test_dac = true;
+    if (!ok) { restore(); return false; }
     const uint32_t n = period_for(ksps);
-    uint16_t slp = 0u;
-    (void)triangle_for(rate_hz(n), &slp);
+    uint16_t slp = 0u;                        /* 0 in the frame: no test triangle */
+    if (test_signal) { (void)triangle_for(rate_hz(n), &slp); }
     wait_ticks(TICKS_PER_MS);
     if (!capture_chain_start(n, SCCP_MODE_TIMER, 0u, false)) { restore(); return false; }
     s_on     = true;
