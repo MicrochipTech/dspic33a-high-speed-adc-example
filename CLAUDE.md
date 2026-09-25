@@ -212,8 +212,12 @@ them lives, restated here because they were not obvious:
 **Back-to-back is the working path.** The ADC runs in Integration mode (`MODE = 2`) with
 `CNT` conversions per burst, `TRG1SRC = 1` (software start) and `TRG2SRC = 2`
 (back-to-back), `IRQSEL = 0` so that every conversion raises the event the DMA triggers
-on. The DMA is channel 0, Repeated Continuous, its address window exactly the buffer,
-with HALF and DONE interrupts and guard words behind the buffer.
+on. The DMA is channel 0, Repeated One-Shot (`TRMODE = 1`, one transfer per trigger),
+its address window exactly the buffer, with HALF and DONE interrupts and guard words
+behind the buffer. **Never `TRMODE = 3`**: Repeated Continuous copies a whole block per
+trigger at DMA speed - it was set until 25.09.2026 and was the cause of every "40 MSPS
+whatever the setting", every overrun storm and the "few transfers per trigger"
+(run 18, `dma.c`).
 
 **The rate comes from PLL1, not from the CLKGEN6 divider.** `capture_set_pll(p1, p2)`
 sets PLL1's two output dividers; the ADC clock is 1600 MHz / (p1 * p2), p1 >= p2, both
@@ -304,7 +308,18 @@ seconds is a property of the DAC and cannot change. If the measured rate rises b
 the period in samples rises by ten as well, the samples in the stream are repeats and the
 converter never sped up.
 
-## What the board has settled (as of run 16, 24.09.2026)
+## What the board has settled (as of run 18, 25.09.2026)
+
+- **The DMA was misconfigured from the first day.** `TRMODE = 3` (Repeated Continuous)
+  makes one trigger start back-to-back transfers until the block is full (DS70005591D
+  13.4.8.4/13.4.8.5, p833 f.). Run 18: 6144 transfers for 15 conversions at 100 kHz,
+  about 41 M transfers/s at every rate. Fixed to `TRMODE = 1` (Repeated One-Shot). Every
+  rate and overrun figure of runs 1 to 18 was taken with the wrong mode.
+- **SCCP1 -> ADC works** (run 18, S2): one result per SCCP1 period at 1, 10 and 100 kHz,
+  timer mode, CLKGEN13 measured at 160 MHz. The clock monitor reads CLKGEN6 at 320 MHz and
+  CLKGEN7 at 400 MHz. Output-compare mode produced no events; its CM codes for the PLL
+  outputs (0xB/0xC/0xE) do not select what the ATDF says - 0xC read 160 MHz, i.e.
+  CLKGEN13.
 
 - **The chain carries data, complete and in order.** Run 14 captured the DAC triangle
   through UREF: a clean monotonic fall from 3728 to 629, no reversal, largest step 90

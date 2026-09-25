@@ -1033,7 +1033,7 @@ void capture_variant_regs(void)
  * The triggered stream - the chain the example is about (capture.h)
  *
  *   SCCP1 (CLKGEN13) -> ADC channel 0, Single Conversion, TRG1SRC 0x20
- *     -> "ADCn Done CH0" -> DMA0, Repeated Continuous -> buf -> HALF/DONE
+ *     -> "ADCn Done CH0" -> DMA0, Repeated One-Shot -> buf -> HALF/DONE
  *
  * Start order DMA, ADC, trigger last; stop order trigger first
  * (ANALYSIS.md C.10 point 4). The ADC is expected in Single mode already

@@ -47,7 +47,7 @@ To be precise about how much of this code rests on something that has run on sil
 | Clock setup: PLL1/PLL2 divider values, CLKGEN1/CLKGEN6 settings, switching sequence | bit-identical to the MCC-generated `clock.c` of [dspic33ak-curiosity-adc-40msps](https://github.com/microchip-pic-avr-examples/dspic33ak-curiosity-adc-40msps) | yes, in that example |
 | ADC trigger scheme: Integration mode, software trigger starts a burst, the conversions inside it run back-to-back (`MODE = 2`, `TRG1SRC = 1`, `TRG2SRC = 2`, `AD3SWTRG`) | the same as Microchip's 40 MSPS example, plus Example 16-6 (p1331) for the burst | yes — and by elimination. Every documented way to pace the conversions inside a burst was tried on the board and none worked (`docs/HARDWARE-LOG.md` runs 4 to 7): the repeat timer and `SAMC` are ignored, the SCCP1 trigger produces no conversion at all. Back-to-back is what is left, and the rate comes from the ADC clock |
 | DMA basics: `DMALOW`/`DMAHIGH` window, status flags cleared by writing 0, control register layout | MCC `dma.c` of [dspic33a-dac-dma-sinewave](https://github.com/microchip-pic-avr-examples/dspic33a-dac-dma-sinewave) and datasheet Examples 13-1 to 13-4 (p832 ff.) | yes — but memory-to-DAC in Repeated One-Shot mode, the opposite direction and a far lower rate |
-| **ADC burst → DMA in Repeated Continuous mode → one buffer with `HALF`/`DONE` interrupts → burst restarted from the `DONE` ISR** | **our own construction**, assembled from datasheet §13.4.8 (Example 13-4, p835), §13.6.1.2 (HALF interrupt, p848) and §16.4.5 (p1322) | **no.** There is no Microchip example for this combination. This is the part `docs/TROUBLESHOOTING.md` §1.1 flags as the remaining risk |
+| **ADC burst → DMA in Repeated One-Shot mode (Repeated Continuous until 25.09.2026, see `dma.c`) → one buffer with `HALF`/`DONE` interrupts → burst restarted from the `DONE` ISR** | **our own construction**, assembled from datasheet §13.4.8 (Example 13-4, p835), §13.6.1.2 (HALF interrupt, p848) and §16.4.5 (p1322) | **no.** There is no Microchip example for this combination. This is the part `docs/TROUBLESHOOTING.md` §1.1 flags as the remaining risk |
 | Self-test on the internal 15/16·VDD reference (ADxAN6) | the input and its sample time come from datasheet Example 16-3 (p1328), which uses it for gain calibration; the pass/fail logic is ours | the input yes, the check no |
 | Board pins, UART2 on the MCP2221A channel, PPS codes, baud generator setting | the MCC-generated `pins.c` and `uart2.c` of the same 40 MSPS example (`RPINR13bits.U2RXR = 0x32`, `RPOR28bits.RP114R = 0x15`, `U2BRG = 0x364`) and the DIM info sheet | yes, in that example |
 | Command parser (`cmd_parser.c/.h`) | [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser), copied unchanged; it has run on a SAM E54 and a PIC32CM there | yes, on other targets — not yet on this one |
@@ -504,7 +504,7 @@ The per-conversion result is `ADxCH0RES[11:0]`. `ADxCH0DATA` is the burst accumu
 | `SIZE` | 1 | **16-bit transfers** (page 812) |
 | `SAMODE` | 0 | source address stays put |
 | `DAMODE` | 1 | destination increments |
-| `TRMODE` | 3 | repeated continuous |
+| `TRMODE` | 1 | repeated one-shot: one transfer per trigger (page 832). Was 3 (repeated continuous, a whole block per trigger) until 25.09.2026 |
 | `RELOADD`, `RELOADC` | 1 | back to the buffer start after each block, in hardware (page 812) |
 | `HALFEN`, `DONEEN` | 1 | one interrupt when the first half is full, one when the second is (page 848) |
 
@@ -894,7 +894,7 @@ simulator run takes about 2.5 minutes for the 100 halves.
 | `config_bits.c` | every configuration word of the device, with the reason for each value — and why two of them are written as numbers |
 | `clock.c`, `clock.h` | FRC → PLL1 320 MHz (ADC) and PLL2 200 MHz (CPU), the switching order, the clock-fail interrupt, the ADC clock's rate control (`clock_adc_set_pll()`, PLL1's output dividers — the knob that works) and `clock_adc_set_div()` (the CLKGEN6 divider, which does not change the rate on this silicon and is kept only so the behaviour can be reproduced) |
 | `adc.c`, `adc.h` | the ADC core: channel 0 in Integration mode, burst trigger, input/sample-time register |
-| `dma.c`, `dma.h` | DMA channel 0: address window, Repeated Continuous mode, HALF/DONE interrupt, status flags — knows no ADC and no buffer |
+| `dma.c`, `dma.h` | DMA channel 0: address window, Repeated One-Shot mode, HALF/DONE interrupt, status flags — knows no ADC and no buffer |
 | `sim_dma.c`, `sim.h` | **simulator build only:** stand-in for `dma.c` that produces buffer halves (1 MHz sine) and the ping-pong check; see "In the MPLAB X simulator" |
 | `capture.c`, `capture.h` | the measurement: wires ADC and DMA together, handles the DMA events with every error counter and the burst restart, start/stop/input, self-test, per-half processing, the triggered stream the chain test uses, and `capture_chain_halt`/`_resume` — pausing and restarting that stream's trigger in place, for the GUI's grab cycle — what the console may read and control |
 | `crc16.c`, `crc16.h` | CRC-16 over a sample block, for the `blk` binary transfer command |
