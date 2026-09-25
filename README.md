@@ -567,7 +567,7 @@ overruns makes the console unresponsive, and why the firmware boots idle.
 | `dac <1\|2> <on\|off> [low] [high] [slpdat]` | triangle on DACOUT1 = RA1 or DACOUT2 = RA8, both sharing CLKGEN7 (the last unit to stop switches it off). `slpdat` is the step per DAC clock, so **larger is faster** (default 8; the DAC test itself starts DAC2 at 64, since 8 leaves the triangle almost standing still inside one captured buffer) |
 | `dactest [halves]` | the DAC test on its own, against whichever DAC is active (`dac_active()` picks DAC2 first if both run) |
 | `stats` / `dump [count] [offset]` | the completed half: min/max/mean, or the raw values |
-| `blk [n]` | a contiguous block of up to 2048 samples as binary, with a CRC — `docs/PLAN-BINARY-TRANSFER.md`, what the GUI's single/live capture uses |
+| `blk [n]` | a contiguous block of up to 2048 samples as binary, with a CRC — `docs/PLAN-BINARY-TRANSFER.md`. The back-to-back capture command; kept for a terminal, no longer used by `tools/adc_gui.py` (25.09.2026 on, the GUI only drives the triggered chain, `stream grab`) |
 | `chain all\|<n>\|from <n>\|run <ksps> [s]` | the chain test (`chaintest.c`) — see "The chain test" below |
 | `stream on <ksps>\|off\|grab` | the chain as a standing stream: start it, stop it, or halt/transfer/restart one window for the GUI — see "The chain test" below |
 | `clear` | zero the error counters |
@@ -922,21 +922,39 @@ simulator run takes about 2.5 minutes for the 100 halves.
 
 ### The GUI: capture, plot, FFT (`tools/adc_gui.py`)
 
-A browser front end for the console, for looking at what the ADC delivers: set the
-pacing source, the period (the rate is shown), `SAMC` and the input, then capture a
-block and see the time signal and its spectrum. It works in cycles, like a scope with a
-single-shot trigger — `start`, let the board run a moment, `stop`, `dump` one buffer
-half (up to 1024 samples), plot, and in live mode again and again until stopped — because
-115200 baud cannot carry a 20 MSPS stream. Below the time signal sits the FFT (Hann
-window, dBFS, frequency axis from the configured rate), so a known input frequency
-checks the sample rate from the data itself.
+A browser front end for the console, for looking at what the triggered chain
+delivers. The back-to-back burst mode (`pll`/`snap`/`dump`/`blk`, the old sweep tile)
+is retired from this tool as of 25.09.2026 - the owner's decision: the triggered chain
+(`stream on`/`off`/`grab`, `chaintest.c`) is the only data path the GUI shows now. The
+firmware keeps the back-to-back commands for a terminal; the GUI simply no longer sends
+them.
+
+The **acquisition** card sets the rate in kSPS and the input: either the built-in test
+signal (core 5, PINSEL 3 = RA8, the firmware's own DAC2 triangle, `stream on <ksps>`) or
+a custom core/PINSEL/SAMC (`stream on <ksps> <core> <pinsel> <samc>`, the DAC left
+alone - switch a DAC on in its own card if it should drive that pin). **live** starts the
+chain if it is not already running at that rate/input (a change while live is picked up
+before the next grab) and then repeats `stream grab` at the interval shown - halt the
+trigger just long enough to send the half that stood still as one binary frame, restart
+it, plot the time signal and its spectrum (Hann window, dBFS, frequency axis from the
+frame's own actual rate), evaluate, repeat - until **stop**, which sends `stream off`
+and restores the boot configuration. **single** does the same for one grab: if the chain
+is not already streaming it starts it, grabs once, and stops it again; it is disabled
+while live is running. With the test signal, an additional card shows the triangle
+verdict (see below); with any other input that card is hidden, since there is nothing to
+judge against a model.
+
+Board limits from the last hardware run are shown as guidance under the rate field, not
+enforced: clean to about 8 MSPS with the CPU processing, occasional DMA overruns from
+about 10, lost triggers from about 16, the triggered chain measured up to about 18-20
+MSPS.
 
 Set-up once (a private Python environment in `tools\.venv`, nothing touches the system
 Python), then start:
 
 ```
 tools\gui_setup.bat            creates .venv, installs nicegui/pyserial/numpy, runs the self-test
-tools\adc_gui.bat --fake       no board: a built-in stand-in with a synthetic sine, for trying the GUI
+tools\adc_gui.bat --fake       no board: a built-in stand-in with a synthetic signal, for trying the GUI
 tools\adc_gui.bat --port COM7  the board's console port
 ```
 
@@ -944,47 +962,32 @@ Linux/macOS: `tools/gui_setup.sh`, then `tools/.venv/bin/python tools/adc_gui.py
 The page opens at http://127.0.0.1:8080. Every command goes through the console and
 waits for the parser's ACK/NAK byte, so the tool never talks over the board.
 
-### The GUI's chain tile: configure, start, and it runs itself
+### The triangle verdict
 
-**Capture tile and chain tile exclude each other** (since 25.09.2026). Pressing **live**
-or **single** in the capture tile stops a running chain stream first, and **start** in
-the chain tile stops a running capture live; the two never share the serial port. The
-capture tile re-sends its own settings (rate, core/input, SAMC, the DACs switched on) before
-its first capture after connecting and after every chain stream, because `stream off`
-returns the board to its boot configuration. The capture tile's rate is **back-to-back**
-and defaults to 5/5 = 8 MSPS; above about 10 MSPS a back-to-back burst gets no data on
-the board (the DMA, one transfer per conversion, cannot follow), and the rate selector
-says so.
+Each grab's window is plotted and, when it carries the test signal (`slp > 0` in the
+`GRAB` frame), evaluated with `tri_eval` - the very function `chaintest.c`'s own chain
+test uses, ported once in `tools/eval_chain.py` and reused here rather than
+re-implemented, so a **PASS/FAIL** verdict here means the same thing it means in a
+`chain all` log: a lost or repeated sample shifts the triangle's turning points off the
+grid by a whole sample (`slip`), and that is what fails it. Chips show the turning-point
+count, the up/down slope lengths, the slope against the model computed from the frame's
+own `slp`/`dachz` fields (`chaintest.c`'s `triangle_for()`), and the actual rate plus the
+per-cycle `overrun`/`late`/`missed` counters, highlighted red when non-zero. Every
+control has a tooltip naming the console command it sends.
 
-Below the sweep tile, the "chain stream · halt / grab / restart" card drives the
-standing chain (`stream on`/`off`/`grab`, `chaintest.c`) end to end: set the rate
-(kSPS) and the grab interval, press **start**, and from then on the page repeats,
-on its own, until **stop** is pressed:
-
-```
-halt the running stream -> transfer one contiguous window -> restart it -> repeat
-```
-
-Each grab plots the window and evaluates it with `tri_eval` - the very function
-`chaintest.c`'s own chain test uses, ported once in `tools/eval_chain.py` and
-reused here rather than re-implemented, so a **PASS/FAIL** verdict here means the
-same thing it means in a `chain all` log: a lost or repeated sample shifts the
-triangle's turning points off the grid by a whole sample (`slip`), and that is
-what fails it. Chips show the turning-point count, the up/down slope lengths, the
-slope against the model computed from the frame's own `slp`/`dachz` fields
-(`chaintest.c`'s `triangle_for()`), and the per-cycle `overrun`/`late`/`missed`
-counters, highlighted red when non-zero. Every control has a tooltip naming the
-console command it sends.
-
-Start it without a board first (`tools\adc_gui.bat --fake`): the built-in
-stand-in answers `stream on/off` and builds a `GRAB` frame from
-`eval_chain.synth()`'s triangle, so the whole cycle - including a PASS and a
-deliberately induced FAIL - can be seen without hardware. `python
-tools\adc_gui.py --selftest` exercises the same path headlessly: a grab refused
-before `stream on`, a clean grab that passes the grid check, the second grab
-landing in the other buffer half (`from > 0`), a lost-sample grab that correctly
-fails, a corrupted frame caught by its CRC, a truncated frame caught by the frame
-parser, and a target that never answers at all timing out rather than hanging.
+Try it without a board first (`tools\adc_gui.bat --fake`): the built-in stand-in answers
+`stream on/off` and builds a `GRAB` frame - `eval_chain.synth()`'s triangle for the test
+signal, a configured sine with harmonics and noise for any other input (so SNR/THD/
+harmonics show something meaningful) - so the whole cycle, including a PASS and a
+deliberately induced FAIL, can be seen without hardware. `python tools\adc_gui.py
+--selftest` exercises the same path headlessly: a grab refused before `stream on`, a
+clean triangle grab that passes the grid check with the actual rate used as the FFT's
+fs, the second grab landing in the other buffer half (`from > 0`), a lost-sample grab
+that correctly fails, a custom-input grab with `slp=0` and a real FFT peak, a corrupted
+frame caught by its CRC, a truncated frame caught by the frame parser, and a target that
+never answers at all timing out rather than hanging. `tools/gui_ui_test.py` drives the
+page itself with a headless browser against `--fake` (see the header comment there for
+how to run it).
 
 ### About `tools/`
 

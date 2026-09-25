@@ -1,8 +1,10 @@
 # Plan: binary block transfer from the board to the PC
 
-Status: `blk`/`snap`/`rate` implemented and in daily use (23.09.2026). `baud` (step 6)
-not yet implemented. The `GRAB` frame at the end of this document extends the same
-framing for the GUI's chain-stream cycle (25.09.2026). Branch `nano-board`.
+Status: `blk`/`snap`/`rate` implemented (23.09.2026) and still in the firmware for a
+terminal, but retired from `tools/adc_gui.py` as of 25.09.2026 - back-to-back is
+obsolete, the owner's decision, and the GUI's only data path since is the triggered
+chain (`stream grab`, the `GRAB` frame below). `baud` (step 6) not yet implemented.
+Branch `nano-board`.
 
 ## Why
 
@@ -50,9 +52,12 @@ runs at the end are few and each one has an expected output written down.
    to be found out on the board. The client re-opens the port at the new rate.
 5. **Client** (`tools/adc_gui.py`): `Target.blk(n)` reads the header line, exactly
    2·n bytes, the CRC line, then waits for ACK/NAK as usual; verifies the CRC; returns
-   a `numpy` int array. `FakeTarget` produces the identical byte stream. The GUI's
-   capture cycle uses `blk` when the board has it (probe once with `help`) and falls
-   back to `dump` otherwise; "samples per capture" grows to 2048.
+   a `numpy` int array. `FakeTarget` produces the identical byte stream. **Retired from
+   the GUI as of 25.09.2026** - `Target.blk()`/`FakeTarget.blk()`/`parse_blk_frame()`
+   were removed from `adc_gui.py` along with the back-to-back capture tile; the GUI's
+   only capture path since is `stream grab`'s `GRAB` frame, below. The functions stay
+   documented here because the firmware command (and the framing they exercised) is
+   unchanged.
 6. **Firmware self-demonstration in the simulator build**: the simulator has no UART
    receiver, so no command can be typed there - but its transmitter writes to a file.
    With `SIM_BLK_DEMO` (sim.h, simulator build only) the firmware calls the `blk`

@@ -1,33 +1,38 @@
 #!/usr/bin/env python3
 """
-adc_gui.py - a browser GUI for the ADC/DMA example: set the sample rate and
-the ADC parameters over the console, capture a block, transfer it, plot it
-with its FFT, repeat.
+adc_gui.py - a browser GUI for the ADC/DMA example: configure the triggered
+chain stream, capture its live data over the console, plot it with its FFT,
+repeat.
 
 How it works
-  The firmware streams continuously into its ping-pong buffer. This tool
-  does not stream from it (115200 baud could not carry it); it works in
-  cycles, exactly as a scope with a single-shot trigger would:
-
-      start -> let the board run for a moment -> stop -> dump N samples of
-      the last completed buffer half -> plot time signal and FFT -> repeat
-
-  Every command goes through the board's console (cli.c) and is
-  acknowledged with the parser's ACK/NAK byte after the prompt, so the
-  tool never guesses whether the board is ready (cmd_parser.h, "Prompt as
-  a protocol element").
+  The only data path is the triggered chain (SCCP1 -> ADC -> DMA0 ->
+  ping-pong, chaintest.c/cli.c): "stream on <ksps> [core pinsel [samc]]"
+  starts it and the firmware's main loop processes every half from then on;
+  this tool's own cycle is "stream grab" - halt the trigger just long
+  enough to send the half that stood still as one binary frame, restart it,
+  repeat (docs/PLAN-BINARY-TRANSFER.md, the GRAB frame). The back-to-back
+  burst mode ("pll"/"snap"/"dump"/"blk", the sweep tile) is retired from
+  this tool - the owner's decision, 25.09.2026: the triggered chain is the
+  only path the GUI shows now. The firmware keeps the back-to-back commands
+  for a terminal; this tool simply no longer sends them.
 
 Modes
-  --fake        no board: a built-in stand-in answers the same commands and
-                delivers a synthetic signal (sine + harmonic + noise) at the
-                configured rate. For testing the GUI.
+  --fake        no board: a built-in stand-in answers the same commands.
+                With the DAC2 test triangle input it plays back the same
+                synthetic triangle the firmware's own chain test is judged
+                against (tools/eval_chain.py's synth()); with any other
+                input it plays a sine with harmonics and noise, so
+                SNR/THD/harmonics have something to show in the spectrum.
   --port COMx   the board. Without --port the page offers a port list.
-  --selftest    no GUI: run the fake target through one capture cycle,
-                parse, FFT, print the numbers, exit 0/1.
+  --selftest    no GUI: run the fake target through the stream/grab cycle,
+                parse, FFT, judge the triangle, print the numbers, exit 0/1.
   --settings F  settings file, read at start-up and written by "save"
                 (default: adc_gui_settings.json next to this script). Every
                 control on the page is in it, so a session survives a
-                restart; "save as" and "load as" name a different file.
+                restart; "save as" and "load as" name a different file. An
+                older file (from before 25.09.2026, with "pll"/"sweep"/
+                "capture" keys) still loads - those keys are simply not
+                read any more.
 
 Requirements: nicegui, pyserial, numpy  (pip install -r requirements-gui.txt)
 """
@@ -45,74 +50,6 @@ import numpy as np
 ACK = b"\x06"
 NAK = b"\x15"
 BAUD = 115200
-
-# The sample rate
-#
-# Back-to-back only, since the board answered: neither the ADC's repeat
-# timer nor SCCP1 paces a burst, and the CLKGEN6 divider does not change
-# the rate either (HARDWARE-LOG runs 5 to 10). What does change it is the
-# ADC clock from PLL1 - cli.c's `pll <p1> <p2>`, PLL1 VCO / (p1 * p2) -
-# and back-to-back needs 8 ADC clocks per conversion: a conversion is
-# 2 TAD and TAD is 4 / f_adc (adc.c). Run 13 measured 3990 kSPS against a
-# nominal 4081, 2.2 % out, so the formula holds on silicon.
-PLL_INPUT_HZ = 8e6          # the FRC feeding PLL1
-PLL_FBDIV_DEFAULT = 200     # PLL1DIV.PLLFBDIV as clock_init() leaves it
-PLL_VCO_HZ = PLL_INPUT_HZ * PLL_FBDIV_DEFAULT
-ADC_CLOCKS_PER_SAMPLE = 8
-PLL_POSTDIV_MIN, PLL_POSTDIV_MAX = 1, 7
-
-
-def adc_clock_hz(postdiv1: int, postdiv2: int, fbdiv: int = PLL_FBDIV_DEFAULT) -> float:
-    """The ADC input clock: 8 MHz * PLLFBDIV / (POSTDIV1 * POSTDIV2).
-
-    The post-dividers alone give only 21 rates and the steps near the top
-    are 14 to 17 % apart. PLLFBDIV is the fine adjustment the firmware's
-    'rate' command uses, so the clock is no longer a function of the two
-    post-dividers alone - read it back from 'status' rather than assuming
-    the boot value."""
-    d = max(1, int(postdiv1)) * max(1, int(postdiv2))
-    return PLL_INPUT_HZ * max(1, int(fbdiv)) / d
-
-
-def rate_ksps(postdiv1: int, postdiv2: int, fbdiv: int = PLL_FBDIV_DEFAULT) -> float:
-    """Nominal sample rate for a PLL setting, in kSPS."""
-    return adc_clock_hz(postdiv1, postdiv2, fbdiv) / ADC_CLOCKS_PER_SAMPLE / 1e3
-
-
-def rate_options(step_pct: float = 2.0, lo_ksps: float = 4000.0, hi_ksps: float = 40000.0):
-    """The rates the firmware's 'rate' command can actually hit, thinned
-    out to about `step_pct` apart so a dropdown stays usable. Mirrors the
-    search in clock_adc_set_rate(): rate = PLLFBDIV / (p1*p2) MSPS with
-    PLLFBDIV 63..200 (the VCO limits) and p1 >= p2."""
-    seen = []
-    for p1 in range(PLL_POSTDIV_MIN, PLL_POSTDIV_MAX + 1):
-        for p2 in range(PLL_POSTDIV_MIN, p1 + 1):
-            p = p1 * p2
-            for fb in range(63, 201):
-                r = fb * 1000.0 / p
-                if lo_ksps <= r <= hi_ksps:
-                    seen.append(round(r, 3))
-    seen = sorted(set(seen))
-    out, last = [], 0.0
-    for r in seen:
-        if last == 0.0 or (r - last) / last * 100.0 >= step_pct:
-            out.append(r)
-            last = r
-    return out
-
-
-def pll_options():
-    """Every (p1, p2) the firmware takes, best rate first, deduplicated by
-    the rate they produce. cli.c requires p1 >= p2."""
-    seen, out = set(), []
-    for p1 in range(PLL_POSTDIV_MIN, PLL_POSTDIV_MAX + 1):
-        for p2 in range(PLL_POSTDIV_MIN, p1 + 1):
-            r = round(rate_ksps(p1, p2), 3)
-            if r in seen:
-                continue
-            seen.add(r)
-            out.append((p1, p2, r))
-    return sorted(out, key=lambda e: -e[2])
 
 
 # ---------------------------------------------------------------------------
@@ -132,10 +69,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pins128  # noqa: E402  (needs the path above)
 import pins64  # noqa: E402
 from boards import BOARDS  # noqa: E402
-# The chain-stream tile's triangle analysis reuses the SAME evaluator the
-# firmware's tri_eval() (chaintest.c) is ported from, rather than a second
-# implementation that could silently disagree with it; synth() also backs
-# the fake target's "stream grab" frames (host-testable without a board).
+# The triangle analysis reuses the SAME evaluator the firmware's tri_eval()
+# (chaintest.c) is ported from, rather than a second implementation that
+# could silently disagree with it; synth() also backs the fake target's
+# "stream grab" frames for the test input (host-testable without a board).
 from eval_chain import tri_eval as chain_tri_eval  # noqa: E402
 from eval_chain import grid_ok as chain_grid_ok  # noqa: E402
 from eval_chain import synth as chain_synth  # noqa: E402
@@ -152,26 +89,23 @@ from eval_chain import synth as chain_synth  # noqa: E402
 # ---------------------------------------------------------------------------
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              "adc_gui_settings.json")
-SETTINGS_VERSION = 1
+SETTINGS_VERSION = 2
 SETTINGS_DEFAULTS = {
     "version": SETTINGS_VERSION,
     "board": "EV74H48A",
     "view": {"dac_source": 0},
-    "adc": {"core": 3, "pinsel": 5, "samc": 0},
-    # 5/5 = 8 MSPS back-to-back. Not 5/1 = 40 MSPS: since the DMA runs in
-    # Repeated One-Shot mode (one transfer per conversion, run 18/19) it
-    # cannot follow 40 M conversions/s - a burst there never fills the
-    # buffer and the capture cycle only times out.
-    "pll": {"postdiv1": 5, "postdiv2": 5},
+    "acquisition": {
+        "mode": "test",           # "test" (RA8/DAC2 triangle, core 5 pin 3) or "custom"
+        "ksps": 8000,
+        "core": 3, "pinsel": 5, "samc": 0,
+        "interval_ms": 500,
+    },
     "buffer": {"size": 2048},
-    "capture": {"count": 1024, "interval_ms": 500},
-    "sweep": {"halves": 2000, "half_len": 1024},
-    "chain": {"ksps": 8000, "interval_ms": 500},
     "dac": {
         "1": {"on": False, "low": 0x100, "high": 0xF00, "slpdat": 8},
         "2": {"on": False, "low": 0x100, "high": 0xF00, "slpdat": 8},
     },
-    "fake": {"waveform": "sine", "signal_khz": 100.0, "amplitude": 1500.0,
+    "fake": {"signal_khz": 100.0, "amplitude": 1500.0,
              "noise": 6.0, "harmonic2": 150.0, "harmonic3": 0.0},
 }
 
@@ -339,7 +273,7 @@ def channel_site(board_key, core, pinsel):
 # The two DACs with an output buffer, and the ADC input that shares each
 # pin - the only two channels a DAC can reach without a wire (dac.h).
 DAC_UNITS = (1, 2)
-DAC_OPTIONS = {0: "no DAC", 1: "DAC1 \u00b7 RA1", 2: "DAC2 \u00b7 RA8"}
+DAC_OPTIONS = {0: "no DAC", 1: "DAC1 · RA1", 2: "DAC2 · RA8"}
 
 
 def dac_pin(board_key, unit):
@@ -539,7 +473,7 @@ def chip_svg(board_key, core, pinsel, full=False, dac_unit=0, dac_on=False):
                    f'stroke="{CHIP_COL["dac"]}" stroke-width="1.5" stroke-dasharray="4 4"/>')
         out.append(f'<rect x="300" y="{cy - 17:.0f}" width="400" height="34" rx="6" '
                    f'fill="{CHIP_COL["body"]}" stroke="{CHIP_COL["dac"]}" stroke-width="2"/>')
-        out.append(_text(500, cy, f'DAC{dac_unit} ({"on" if dac_on else "off"}) = pin {dpin.n} \u00b7 {dpin.port}',
+        out.append(_text(500, cy, f'DAC{dac_unit} ({"on" if dac_on else "off"}) = pin {dpin.n} · {dpin.port}',
                          CHIP_COL["dac"], 15, weight=True))
     out.append('</svg>')
     return "".join(out)
@@ -777,11 +711,12 @@ def chain_model_slope_samples(slp: int, dac_hz: float, ksps: float) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Binary block transfer ('blk'), see docs/PLAN-BINARY-TRANSFER.md.
-# Frame: "BIN n=<count> pace=<> per=<> samc=<> in=<>\r\n" + 2*count bytes
-# (uint16 LE, 12 bit) + "\r\nCRC <hex4>\r\n" + the usual prompt and ACK/NAK.
+# CRC-16/CCITT-FALSE, shared by every binary frame the firmware sends
+# (docs/PLAN-BINARY-TRANSFER.md): poly 0x1021, init 0xFFFF, no reflect, no
+# xorout. Only "stream grab"'s GRAB frame uses it in this tool now - the
+# back-to-back "blk" block transfer is retired here (the firmware command
+# stays, for a terminal).
 # ---------------------------------------------------------------------------
-_BIN_HEADER_RE = re.compile(r"BIN n=(\d+) p1=(\d+) p2=(\d+) samc=(\d+) in=(\d+)")
 _CRC_LINE_RE = re.compile(rb"CRC ([0-9A-Fa-f]{4})")
 
 
@@ -798,55 +733,15 @@ def crc16_ccitt_false(data: bytes) -> int:
 assert crc16_ccitt_false(b"123456789") == 0x29B1, "CRC-16/CCITT-FALSE check value"
 
 
-def parse_blk_frame(header_line: str, payload: bytes, tail: bytes):
-    """Decode one 'blk' frame from its three pieces (header text line, the
-    payload bytes, everything after the payload up to and including the
-    ACK/NAK). Used by both Target.blk() (read from serial) and
-    FakeTarget.blk() (built in memory), so the same check runs against a real
-    board and against the stand-in. Returns (ok, samples, meta); on any
-    problem meta['error'] is set and ok is False."""
-    m = _BIN_HEADER_RE.match(header_line.strip())
-    if not m:
-        raise RuntimeError(f"blk: no BIN header, got {header_line!r}")
-    n = int(m.group(1))
-    meta = dict(postdiv1=int(m.group(2)), postdiv2=int(m.group(3)),
-                samc=int(m.group(4)), pinsel=int(m.group(5)))
-    m2 = _CRC_LINE_RE.search(tail)
-    if not m2:
-        raise RuntimeError(f"blk: no CRC line, got {tail!r}")
-    crc_frame = int(m2.group(1), 16)
-    crc_calc = crc16_ccitt_false(payload)
-    samples = (np.frombuffer(payload, dtype="<u2").astype(int) & 0x0FFF) if n else np.zeros(0, dtype=int)
-    ok = n > 0 and len(payload) == 2 * n and crc_frame == crc_calc and tail.endswith(ACK)
-    if n == 0:
-        meta["error"] = "NAK: block not produced"
-    elif len(payload) != 2 * n:
-        meta["error"] = f"short block: got {len(payload)} of {2 * n} bytes"
-    elif crc_frame != crc_calc:
-        meta["error"] = f"CRC mismatch: frame {crc_frame:04X}, computed {crc_calc:04X}"
-    elif not tail.endswith(ACK):
-        meta["error"] = "NAK after block"
-    return ok, samples, meta
-
-
-def probe_blk(target) -> bool:
-    """Does this target understand 'blk'? Ask 'help' once, as the plan says,
-    instead of trying 'blk' itself and guessing at a NAK's cause."""
-    try:
-        ok, lines = target.cmd("help")
-    except Exception:
-        return False
-    return ok and any("blk" in l for l in lines)
-
-
 # ---------------------------------------------------------------------------
 # "stream grab": one halt/transfer/restart cycle of the standing chain
-# (chaintest.c chain_stream_grab_begin/_end, cli.c cmd_stream_grab()). Same
-# framing as 'blk' -- a header line, the payload, a CRC line -- with a
-# different, wider header: the actual rate, where in the raw buffer the
-# window starts, the stream counters since the PREVIOUS grab (not the
-# running total), and the DAC triangle setting (slpdat, DAC clock) the
-# model slope is computed from. docs/PLAN-BINARY-TRANSFER.md.
+# (chaintest.c chain_stream_grab_begin/_end, cli.c cmd_stream_grab()). A
+# text header line, the payload, a CRC line, then the usual prompt and
+# ACK/NAK, same shape as the firmware's other binary frame ("blk", not used
+# by this tool any more): the actual rate, where in the raw buffer the
+# window starts, the stream counters since the PREVIOUS grab, and the DAC
+# triangle setting (slpdat, DAC clock) the model slope is computed from.
+# docs/PLAN-BINARY-TRANSFER.md.
 # ---------------------------------------------------------------------------
 _GRAB_HEADER_RE = re.compile(
     r"GRAB n=(\d+) from=(\d+) ksps=(\d+) ov=(\d+) late=(\d+) missed=(\d+) "
@@ -854,11 +749,12 @@ _GRAB_HEADER_RE = re.compile(
 
 
 def parse_grab_frame(header_line: str, payload: bytes, tail: bytes):
-    """Decode one 'stream grab' frame from its three pieces, exactly as
-    parse_blk_frame() does for 'blk' -- the same function serves a real
-    board (Target.grab()) and the stand-in (FakeTarget.grab()). Returns
-    (ok, samples, meta); on any problem meta['error'] is set and ok is
-    False."""
+    """Decode one 'stream grab' frame from its three pieces (header text
+    line, the payload bytes, everything after the payload up to and
+    including the ACK/NAK). Used by both Target.grab() (read from serial)
+    and FakeTarget.grab() (built in memory), so the same check runs against
+    a real board and against the stand-in. Returns (ok, samples, meta); on
+    any problem meta['error'] is set and ok is False."""
     m = _GRAB_HEADER_RE.match(header_line.strip())
     if not m:
         raise RuntimeError(f"grab: no GRAB header, got {header_line!r}")
@@ -886,7 +782,8 @@ def parse_grab_frame(header_line: str, payload: bytes, tail: bytes):
 
 def probe_grab(target) -> bool:
     """Does this target's 'stream' understand the 'grab' sub-command? Ask
-    'help' once, the same probe probe_blk() uses for 'blk'."""
+    'help' once rather than trying 'stream grab' itself and guessing at a
+    NAK's cause."""
     try:
         ok, lines = target.cmd("help")
     except Exception:
@@ -989,7 +886,7 @@ class Target:
                 buf += b
                 if buf.endswith(b"\n"):
                     return buf.decode("ascii", "replace")
-        raise TimeoutError(f"blk: no line within {timeout} s, got {buf!r}")
+        raise TimeoutError(f"grab: no line within {timeout} s, got {buf!r}")
 
     def _read_exact(self, n: int, timeout: float) -> bytes:
         buf = b""
@@ -999,45 +896,17 @@ class Target:
             if chunk:
                 buf += chunk
         if len(buf) < n:
-            raise TimeoutError(f"blk: expected {n} bytes, got {len(buf)} within {timeout} s")
+            raise TimeoutError(f"grab: expected {n} bytes, got {len(buf)} within {timeout} s")
         return buf
-
-    def blk(self, count: int, timeout: float = 10.0):
-        """'blk <n>': a contiguous binary block. Reads the header first to
-        learn the byte count before looking for ACK/NAK -- a sample byte can
-        equal 0x06 or 0x15 by chance, so the generic ACK/NAK scan in
-        _read_until_ready() must not run over the payload. See
-        docs/PLAN-BINARY-TRANSFER.md. Only the ASCII framing is logged to the
-        console transcript (on_log); the sample bytes themselves are not."""
-        self._log(f"> blk {count}")
-        self.ser.reset_input_buffer()
-        self.ser.write(f"blk {count}\r".encode("ascii"))
-        echo = self._read_line(timeout)
-        self._log(f"< {echo.rstrip()}")
-        header_line = self._read_line(timeout)
-        self._log(f"< {header_line.rstrip()}")
-        m = _BIN_HEADER_RE.match(header_line.strip())
-        if not m:
-            raise RuntimeError(f"blk: unsupported or no BIN header, got {header_line!r}")
-        n = int(m.group(1))
-        payload = self._read_exact(2 * n, timeout) if n else b""
-        if payload:
-            self._log(f"< [binary payload, {len(payload)} bytes, not shown]")
-        tail = self._read_until_ready(timeout)  # "...\r\nCRC xxxx\r\n> " + ACK/NAK
-        ok = tail.endswith(ACK)
-        tail_text = tail[:-1].decode("ascii", "replace") if tail else ""
-        for l in tail_text.split("\n"):
-            if l.strip():
-                self._log(f"< {l.rstrip()}")
-        self._log(f"< {'[ACK]' if ok else '[NAK]'}")
-        return parse_blk_frame(header_line, payload, tail)
 
     def grab(self, timeout: float = 10.0):
         """'stream grab': one halt/transfer/restart cycle of the standing
-        chain. Same read sequence as blk() -- echo, header line, exactly
-        2*n payload bytes, then the CRC line and ACK/NAK -- with the wider
-        GRAB header (see parse_grab_frame). Only the ASCII framing is
-        logged; the sample bytes are not."""
+        chain. Reads the header first to learn the byte count before
+        looking for ACK/NAK -- a sample byte can equal 0x06 or 0x15 by
+        chance, so the generic ACK/NAK scan in _read_until_ready() must not
+        run over the payload (see parse_grab_frame). Only the ASCII framing
+        is logged to the console transcript (on_log); the sample bytes
+        themselves are not."""
         self._log("> stream grab")
         self.ser.reset_input_buffer()
         self.ser.write(b"stream grab\r")
@@ -1063,45 +932,53 @@ class Target:
 
 
 class FakeTarget:
-    """Answers like cli.c would, delivers a synthetic signal at the configured
-    rate: a sine at `signal_khz` with a small second harmonic and noise,
-    12-bit around mid scale. Used with --fake and --selftest."""
+    """Answers like cli.c would, for the triggered chain only - 'stream
+    on/off/grab', 'dac', 'buf', 'version', 'help'. The back-to-back
+    commands this tool no longer sends ('pll', 'samc', 'core', 'input',
+    'clk', 'status', 'snap', 'rate', 'dump', 'blk') are not answered here
+    either. Used with --fake and --selftest.
+
+    'stream on <ksps>' (the test form): core 5, PINSEL 3 (RA8), the DAC2
+    test triangle as the signal - grab frames carry the SAME triangle
+    tools/eval_chain.py's synth() and the firmware's own chain test use, so
+    a PASS/FAIL verdict here means the same thing it means in a 'chain all'
+    log.
+    'stream on <ksps> <core> <pinsel> [<samc>]' (the custom form): that
+    input, the DAC left alone (the 'dac' command drives it if wanted) -
+    the stand-in plays a sine with harmonics and noise instead, at the
+    configured level, so SNR/THD/harmonics have something to show; grab
+    frames carry slp=0, exactly as chain_stream_on_input() reports for a
+    non-test signal.
+    """
 
     def __init__(self, signal_khz: float = 100.0, amplitude: float = 1500.0,
                  noise_std: float = 6.0, harm2_amp: float = 150.0, harm3_amp: float = 0.0,
-                 waveform: str = "sine", on_log=None):
+                 on_log=None):
         self.on_log = on_log  # optional callable(str): the console transcript
         self.port = "fake"
-        self.pll1, self.pll2 = 5, 1              # 320 MHz ADC clock = 40 MSPS
-        self.fbdiv = PLL_FBDIV_DEFAULT           # the "rate" command moves this too
-        self.core = 3                            # ADC core 1..5, 'core'; 3+PINSEL 5 = mikroBUS A default
-        self.samc, self.input = 0, 5
-        # Both DACs, as dac.c has them: unit -> its triangle settings.
-        # The stand-in's ADC sees whichever one is on (DAC2 first, the same
-        # order dac_active() uses in the firmware).
+        # Both DACs, as dac.c has them - only ever touched by the 'dac'
+        # command, never by 'stream on' itself (the test form's own
+        # internal DAC2 triangle is modelled separately below, independent
+        # of this dict, exactly as chain_stream_on()'s dac2_level_start()
+        # is independent of the 'dac' command in the firmware).
         self.dac = {1: {"on": False, "low": 0x100, "high": 0xF00, "slp": 8},
                     2: {"on": False, "low": 0x100, "high": 0xF00, "slp": 8}}
-        self.running = False
-        self.signal_khz = signal_khz
-        self.amplitude = amplitude               # fundamental (or triangle) peak, ADC counts
-        self.noise_std = noise_std               # noise, ADC counts (sets the SNR)
-        self.harm2_amp = harm2_amp               # 2nd harmonic peak, ADC counts (sine only)
-        self.harm3_amp = harm3_amp               # 3rd harmonic peak, ADC counts (sine only)
-        self.waveform = waveform                 # "sine" (piezo-like) or "triangle" (DAC2 -> ADC5 self-test)
-        self.clkdiv = 100                        # CLKGEN6 ratio x 100, does not set the rate
-        self.buf_size = 2048                     # total ping-pong buffer, 'buf'
-        self.t0 = None                            # wall-clock anchor, lazy
-        self.counters = dict(overrun=0, late=0, missed=0, addr_err=0, bus_err=0, blocks=0)
+        self.buf_size = 2048                      # total ping-pong buffer, 'buf'
+        self.signal_khz = signal_khz               # custom-input sine, kHz
+        self.amplitude = amplitude                 # fundamental peak, ADC counts
+        self.noise_std = noise_std                 # noise, ADC counts (sets the SNR)
+        self.harm2_amp = harm2_amp                 # 2nd harmonic peak, ADC counts
+        self.harm3_amp = harm3_amp                 # 3rd harmonic peak, ADC counts
+        self.t0 = None                             # wall-clock anchor, lazy
         self.rng = np.random.default_rng(1)
-        # The chain stream ("stream on/off/grab", chaintest.c): a triangle
-        # with a fault the caller injects (grab_fault), so the GUI's PASS/
-        # FAIL verdict and its counter chips can both be exercised without
-        # a board (--selftest, and by hand with --fake).
+        # The chain stream ("stream on/off/grab", chaintest.c).
         self.chain_on = False
         self.chain_ksps = 0
-        self.chain_ready_half = 0                 # alternates like ready_half in capture.c
+        self.chain_core, self.chain_pinsel, self.chain_samc = 5, 3, 0
+        self.chain_test = True                     # DAC2 triangle (True) or the configured input (False)
+        self.chain_ready_half = 0                  # alternates like ready_half in capture.c
         self.chain_grabs = 0
-        self.grab_fault = None                    # None, "drop", "dup", "overrun", "missed"
+        self.grab_fault = None                     # None, "drop", "dup", "overrun", "missed"
 
     def _chain_slpdat(self) -> int:
         """triangle_for()'s SLOPE_TARGET=128-samples-per-slope search, for
@@ -1129,66 +1006,43 @@ class FakeTarget:
             except Exception:
                 pass
 
-    def _fs_hz(self) -> float:
-        """The rate _samples() actually generates at, scaled by the
-        configured CLKGEN6 divider like the real repeat timer is (adc.c:
-        TAD = 4/Fadc). Real hardware in back-to-back mode has no documented
-        rate: back-to-back at the ADC clock, 8 clocks per conversion,
-        the same formula the firmware uses since the rate became the PLL's
-        job alone (cli.c 'pll')."""
-        return rate_ksps(self.pll1, self.pll2, self.fbdiv) * 1e3
+    def _actual_ksps(self, want: int) -> int:
+        """Mirrors chaintest.c's period_for()/ksps_of(): the nearest
+        160 MHz / N (CLKGEN13, g_trig_hz), not a free number - and the
+        SAME value both 'stream'/'stream on' and every 'stream grab'
+        report from then on."""
+        trig_hz = 160_000_000
+        n = max(4, round(trig_hz / 1000.0 / max(1, want)))
+        return round(trig_hz / 1000.0 / n)
 
-    def _samples(self, n: int) -> np.ndarray:
-        """A window of the last `n` samples of an ongoing background signal,
-        as of *now* -- not simply the next `n` samples after the previous
-        call. Models the real board: the piezo signal runs continuously, but
-        115200 baud is far too slow to carry a real stream, so every dump or
-        blk only ever shows a snippet of wherever the signal is at the
-        moment it is asked for. Two calls close together in wall-clock time
-        overlap almost completely; calls far apart show it having moved on."""
-        fs = self._fs_hz()
+    def _custom_wave_samples(self, n: int) -> np.ndarray:
+        """A window of the configured sine (plus harmonics and noise) at
+        the chain's actual rate, as of *now* - not simply the next n
+        samples after the previous call: two grabs close together in
+        wall-clock time overlap almost completely, the same idea the old
+        back-to-back stand-in modelled for a continuously running signal."""
+        fs = self.chain_ksps * 1e3
         if self.t0 is None:
             self.t0 = time.time()
         end_idx = (time.time() - self.t0) * fs
         start_idx = max(end_idx - n, 0.0)
         t = (start_idx + np.arange(n)) / fs
         f = self.signal_khz * 1e3
-        if self.waveform == "triangle":
-            # DAC2 Triangle Wave mode looped back onto ADC5 (dac.c/dactest.c):
-            # a pure triangle, odd harmonics only -- arcsin(sin(x)) is the
-            # standard closed form, no modulo edge cases. Driven by the DAC's
-            # own settings ('dac'), not the sine controls: DAC and ADC codes
-            # share the same 12-bit domain, so DAC low/high map ~1:1 to the
-            # ADC counts ADC5 would read back.
-            d = self.dac_active()
-            if d and d["high"] > d["low"] and d["slp"] > 0:
-                period_ns = dac_period_ns_of(d["low"], d["high"], d["slp"])
-                f_dac = 1e9 / period_ns if period_ns > 0 else 0.0
-                mid = (d["high"] + d["low"]) / 2.0
-                amp = (d["high"] - d["low"]) / 2.0
-                tri = (2.0 / np.pi) * np.arcsin(np.sin(2 * np.pi * f_dac * t))
-                v = mid + amp * tri
-            else:
-                v = np.full(n, 2048.0)  # DAC off: DACOUT2/AD5AN3 floats, no defined level
-        else:
-            v = (2048 + self.amplitude * np.sin(2 * np.pi * f * t)
-                 + self.harm2_amp * np.sin(2 * np.pi * 2 * f * t + 0.7)
-                 + self.harm3_amp * np.sin(2 * np.pi * 3 * f * t + 1.3))
+        v = (2048 + self.amplitude * np.sin(2 * np.pi * f * t)
+             + self.harm2_amp * np.sin(2 * np.pi * 2 * f * t + 0.7)
+             + self.harm3_amp * np.sin(2 * np.pi * 3 * f * t + 1.3))
         v += self.rng.normal(0, self.noise_std, n)
-        if self.input == 6:                       # the internal reference
-            v = np.full(n, 3840.0) + self.rng.normal(0, 2, n)
         return np.clip(np.round(v), 0, 4095).astype(int)
 
-    def dac_active(self):
-        """The DAC the stand-in's ADC sees: DAC2 first, the order
-        dac_active() uses in dac.c, then DAC1, else None."""
-        for unit in (2, 1):
-            if self.dac[unit]["on"]:
-                return self.dac[unit]
-        return None
-
-    def dac_active_or(self, unit):
-        return self.dac_active() or self.dac[unit]
+    def _board_limit_counters(self):
+        """A simplified model of the board's own limits (the last hardware
+        run, HARDWARE-LOG.md): mild overruns from about 10 MSPS, missed
+        halves from about 16 MSPS. Guidance only, exactly like the UI text
+        under the rate field - not a claim about the exact thresholds, and
+        not exercised by anything but this stand-in."""
+        ov = 1 if self.chain_ksps > 10000 else 0
+        missed = 2 if self.chain_ksps > 16000 else 0
+        return ov, missed
 
     def cmd(self, line: str, timeout: float = 5.0):
         """Logs the traffic like Target.cmd() does, then answers like cli.c
@@ -1205,34 +1059,9 @@ class FakeTarget:
         if not parts:
             return True, []
         c, args = parts[0], parts[1:]
+        usage_stream = ["usage: stream on <ksps 1..40000> [<core 1..5> <pinsel 0..15> "
+                        "[<samc 0..31>]] | stream off | stream grab | stream"]
         try:
-            if c == "start":
-                self.running = True;  return True, ["running: 1"]
-            if c == "stop":
-                self.running = False; return True, ["running: 0"]
-            if c == "pll":
-                if len(args) < 2:
-                    return False, ["usage: pll <postdiv1 1..7> <postdiv2 1..7>"]
-                p1, p2 = int(args[0]), int(args[1])
-                if not (PLL_POSTDIV_MIN <= p2 <= p1 <= PLL_POSTDIV_MAX):
-                    return False, ["usage: pll <postdiv1 1..7> <postdiv2 1..7>, p1 >= p2"]
-                self.pll1, self.pll2 = p1, p2
-                return True, [f"postdiv1: {p1}", f"postdiv2: {p2}",
-                              f"adc clock Hz: {int(adc_clock_hz(p1, p2))}",
-                              f"ksps nominal: {int(rate_ksps(p1, p2))}"]
-            if c == "samc":
-                self.samc = int(args[0]);  return True, [f"samc: {self.samc}"]
-            if c == "input":
-                self.input = int(args[0]); return True, [f"input: {self.input}"]
-            if c == "core":
-                if not args:
-                    return False, ["usage: core <1..5> [pinsel]"]
-                core = int(args[0])
-                pinsel = int(args[1]) if len(args) > 1 else self.input
-                if not (1 <= core <= 5) or not (0 <= pinsel <= 15):
-                    return False, ["usage: core <1..5> [pinsel]"]
-                self.core, self.input = core, pinsel
-                return True, [f"core: {core}", f"input: {pinsel}"]
             if c == "dac":
                 usage = ["usage: dac <1|2> <on|off> [low] [high] [slpdat]"]
                 if len(args) < 2 or args[0] not in ("1", "2"):
@@ -1260,165 +1089,69 @@ class FakeTarget:
                         return False, ["usage: buf <n, even, 16..8192> - total ping-pong buffer"]
                     self.buf_size = n
                 return True, [f"buf: {self.buf_size}", f"half: {self.buf_size // 2}"]
-            if c == "clk":
-                # The firmware keeps this one, and says outright that it
-                # does NOT change the rate (run 10: the ADC ignores the
-                # CLKGEN6 divider). The stand-in behaves the same way.
-                if not args:
-                    return False, ["usage: clk <100..1000> - CLKGEN6 ratio x 100"]
-                n = int(args[0])
-                if not (100 <= n <= 1000):
-                    return False, ["usage: clk <100..1000>"]
-                self.clkdiv = n
-                return True, [f"ratio asked for: {n}", f"ratio read back: {n}",
-                              f"adc clock Hz: {int(adc_clock_hz(self.pll1, self.pll2, self.fbdiv))}",
-                              "ok (and the rate does not change)"]
-            if c == "status":
-                # 'start' streams without anyone counting bursts; keep the
-                # two in step so the ratio stays the 1:2 a sound chain has.
-                self.counters["blocks"] += 34
-                self.counters["bursts"] = self.counters.get("bursts", 0) + 17
-                return True, [f"running: {int(self.running)}", f"blocks: {self.counters['blocks']}", f"bursts: {self.counters.get('bursts', 0)}",
-                              "overrun: 0", "late: 0", "missed: 0", "addr_err: 0", "bus_err: 0",
-                              f"core: {self.core}", f"input: {self.input}", f"samc: {self.samc}",
-                              f"postdiv1: {self.pll1}", f"postdiv2: {self.pll2}",
-                              f"adc clock Hz: {int(adc_clock_hz(self.pll1, self.pll2, self.fbdiv))}",
-                              f"ksps nominal: {int(rate_ksps(self.pll1, self.pll2, self.fbdiv))}",
-                              f"pll1 fbdiv: {self.fbdiv}",
-                              f"fs_hz: {round(self._fs_hz())}",
-                              f"buf: {self.buf_size}", f"half: {self.buf_size // 2}",
-                              f"clkdiv (x100, read back): {self.clkdiv}",
-                              f"dac1_on: {int(self.dac[1]['on'])}", f"dac2_on: {int(self.dac[2]['on'])}",
-                              f"dac_low: {self.dac_active_or(1)['low']}",
-                              f"dac_high: {self.dac_active_or(1)['high']}",
-                              f"dac_slp: {self.dac_active_or(1)['slp']}",
-                              "last: 1798", "selftest_mean: 3840", "fail_code: 0"]
             if c == "version":
                 return True, ["adc_dma_40msps (fake target)", "board: none, synthetic signal"]
             if c == "help":
                 return True, [
-                    "commands: start stop snap rate pll clk core samc input dac buf status version dump blk",
-                    "stream on <ksps>|off|grab - the chain streaming, one halt/transfer/restart cycle",
+                    "commands: dac buf version stream",
+                    "stream on <ksps> [core pinsel [samc]] | off | grab - the chain streaming",
                 ]
             if c == "stream":
                 if args and args[0] == "on":
-                    if len(args) < 2 or not args[1].isdigit() or not (1 <= int(args[1]) <= 40000):
-                        return False, ["usage: stream on <ksps 1..40000> | stream off | stream grab | stream"]
+                    rest = args[1:]
+                    if len(rest) not in (1, 3, 4) or not rest[0].isdigit():
+                        return False, usage_stream
+                    ksps = int(rest[0])
+                    if not (1 <= ksps <= 40000):
+                        return False, usage_stream
+                    if len(rest) == 1:
+                        core, pinsel, samc, test = 5, 3, 0, True
+                    else:
+                        if not (rest[1].isdigit() and rest[2].isdigit()):
+                            return False, usage_stream
+                        core, pinsel = int(rest[1]), int(rest[2])
+                        samc = int(rest[3]) if len(rest) == 4 and rest[3].isdigit() else 0
+                        if not (1 <= core <= 5) or not (0 <= pinsel <= 15) or not (0 <= samc <= 31):
+                            return False, usage_stream
+                        test = False
                     self.chain_on = True
-                    self.chain_ksps = int(args[1])
+                    self.chain_ksps = self._actual_ksps(ksps)
+                    self.chain_core, self.chain_pinsel, self.chain_samc = core, pinsel, samc
+                    self.chain_test = test
                     self.chain_ready_half = 0
                     self.chain_grabs = 0
-                    return True, [f"stream: on - {self.chain_ksps} ksps"]
+                    return True, [f"stream: on - {self.chain_ksps} ksps"
+                                  + ("" if test else f"  core {core} pinsel {pinsel} samc {samc}")]
                 if args and args[0] == "off":
                     self.chain_on = False
+                    self.chain_core, self.chain_pinsel, self.chain_samc, self.chain_test = 5, 3, 0, True
                     return True, ["stream: off, boot configuration restored"]
                 if args and args[0] == "grab":
                     return False, ["usage: use target.grab(), not cmd('stream grab') - binary framing"]
                 if args:
-                    return False, ["usage: stream on <ksps 1..40000> | stream off | stream grab | stream"]
+                    return False, usage_stream
                 if not self.chain_on:
                     return True, ["stream: off"]
-                return True, [f"stream: on - {self.chain_ksps} ksps", f"grabs: {self.chain_grabs}"]
-            if c == "snap":
-                # One buffer, and the DMA interrupt ends the stream. The
-                # window that follows is contiguous; that is the whole
-                # point of the command (see capture_cycle).
-                n = self.buf_size
-                fs = self._fs_hz()
-                window_ns = int(n / fs * 1e9) if fs > 0 else 0
-                self.running = False
-                # One burst is one buffer: two halves, so two blocks. The
-                # stand-in models a chain without the double-booking the
-                # board is suspected of, which is what makes it the
-                # reference the GUI's blocks/bursts chip is read against.
-                self.counters["bursts"] = self.counters.get("bursts", 0) + 1
-                self.counters["blocks"] = self.counters.get("bursts", 0) * 2
-                return True, [f"samples: {n}", f"window ns: {window_ns}",
-                              f"ksps measured: {int(fs / 1e3)}",
-                              f"ksps nominal: {int(rate_ksps(self.pll1, self.pll2, self.fbdiv))}",
-                              "overrun during the burst: 0",
-                              f"input: {self.input}", f"adc core: {self.core}"]
-            if c == "rate":
-                # Mirrors clock_adc_set_rate(): the closest PLLFBDIV and
-                # post-divider pair, not a free number.
-                if not args:
-                    return False, ["usage: rate <4000..40000 ksps>"]
-                want = int(args[0])
-                if not (4000 <= want <= 40000):
-                    return False, ["usage: rate <4000..40000 ksps>"]
-                best = None
-                for p1 in range(1, 8):
-                    for p2 in range(1, p1 + 1):
-                        pp = p1 * p2
-                        fb = (want * pp + 500) // 1000
-                        if not (63 <= fb <= 200):
-                            continue
-                        got = fb * 1000 // pp
-                        if not (4000 <= got <= 40000):
-                            continue
-                        d = abs(got - want)
-                        if best is None or d < best[0]:
-                            best = (d, p1, p2, fb, got)
-                if best is None:
-                    return False, ["rate: nothing reachable"]
-                _, self.pll1, self.pll2, self.fbdiv, got = best
-                return True, [f"ksps asked for: {want}", f"ksps set: {got}",
-                              f"pll1 fbdiv: {self.fbdiv}",
-                              f"pll1 postdiv1: {self.pll1}", f"pll1 postdiv2: {self.pll2}",
-                              f"adc clock Hz: {int(adc_clock_hz(self.pll1, self.pll2, self.fbdiv))}",
-                              "the configuration arrived"]
-            if c == "dump":
-                total = self.buf_size
-                count = int(args[0]) if args else 64
-                offset = int(args[1]) if len(args) > 1 else 0
-                if not (1 <= count <= total) or not (0 <= offset <= total - 1):
-                    return False, [f"usage: dump [count 1..{total}] [offset 0..{total - 1}]"]
-                count = min(count, total - offset)
-                v = self._samples(count)
-                lines = []
-                for i in range(0, count, 8):
-                    lines.append(f"{offset + i:04d}:" + "".join(f" {x}" for x in v[i:i + 8]))
-                return True, lines
+                return True, [f"stream: on - {self.chain_ksps} ksps",
+                              f"core: {self.chain_core}", f"pinsel: {self.chain_pinsel}",
+                              f"grabs: {self.chain_grabs}"]
         except (ValueError, IndexError):
             return False, ["usage error"]
         return False, ["unknown command"]
-
-    def blk(self, count: int, timeout: float = 10.0, corrupt_payload: bool = False):
-        """Builds the identical frame bytes a board would send, then decodes
-        them with parse_blk_frame() -- the exact function Target.blk() uses
-        for a real board -- so the wire format is exercised end to end
-        without hardware. `corrupt_payload` flips a byte after the CRC is
-        computed, to prove a damaged block is reported, not accepted. Only
-        the ASCII framing goes to the console transcript (on_log); the
-        sample bytes themselves are not logged."""
-        self._log(f"> blk {count}")
-        n = count if 1 <= count <= self.buf_size else 0
-        header_line = (f"BIN n={n} p1={self.pll1} p2={self.pll2} "
-                        f"samc={self.samc} in={self.input}\r\n")
-        self._log(f"< {header_line.rstrip()}")
-        payload = self._samples(n).astype("<u2").tobytes() if n else b""
-        if payload:
-            self._log(f"< [binary payload, {len(payload)} bytes, not shown]")
-        crc = crc16_ccitt_false(payload)
-        if corrupt_payload and payload:
-            payload = bytes([payload[0] ^ 0xFF]) + payload[1:]
-        self._log(f"< CRC {crc:04X}")
-        ack = ACK if n else NAK
-        self._log(f"< {'[ACK]' if ack == ACK else '[NAK]'}")
-        tail = f"\r\nCRC {crc:04X}\r\n> ".encode("ascii") + ack
-        return parse_blk_frame(header_line, payload, tail)
 
     def grab(self, timeout: float = 10.0, corrupt_payload: bool = False):
         """Builds the identical frame bytes cmd_stream_grab() (cli.c) would
         send for one halt/transfer/restart cycle, then decodes them with
         parse_grab_frame() -- the same function Target.grab() uses for a
         real board. n=0 (NAK) if the stream is not on, mirroring
-        chain_stream_grab_begin() returning false. The synthetic window is
-        eval_chain.synth()'s triangle, with grab_fault injecting exactly
-        the faults tri_eval() is built to catch (see chaintest.c's own
-        host test of the evaluator) -- a lost or repeated sample fails the
-        grid check, and 'overrun'/'missed' only move this cycle's counter
-        chips, not the samples."""
+        chain_stream_grab_begin() returning false. The test form's window
+        is eval_chain.synth()'s triangle, with grab_fault injecting exactly
+        the faults tri_eval() is built to catch (see chaintest.c's own host
+        test of the evaluator); the custom form's window is the configured
+        sine, with slp=0 in the frame, exactly as chain_stream_on_input()
+        reports for a non-test signal. Only the ASCII framing goes to the
+        console transcript (on_log); the sample bytes themselves are not
+        logged."""
         self._log("> stream grab")
         if not self.chain_on:
             header_line = "GRAB n=0 from=0 ksps=0 ov=0 late=0 missed=0 halves=0 xfer=0 slp=0 dachz=0\r\n"
@@ -1433,20 +1166,28 @@ class FakeTarget:
         n = self.buf_size // 2
         frm = self.chain_ready_half * n
         self.chain_ready_half ^= 1
-        slp = self._chain_slpdat()
-        # DAC_CLK_HZ both drives the synthetic samples and is reported as
-        # "dachz", so the GUI's model-vs-measured ratio comes out near 1.0
-        # on a fault-free cycle -- the point of a stand-in, not a claim
-        # about which PLL output the real chain's CLKGEN7 runs from
-        # (docs/CHAIN-TEST-PLAN.md section 3; the frame carries the real
-        # board's actual clock_dac_hz() there).
-        slope_samples = max(1.0, chain_model_slope_samples(slp, DAC_CLK_HZ, self.chain_ksps))
-        drop = n // 2 if self.grab_fault == "drop" else None
-        dup = n // 2 if self.grab_fault == "dup" else None
-        v = chain_synth(n, slope_samples, phase=float(self.chain_grabs * 7 % int(2 * slope_samples) or 1),
-                        drop=drop, dup=dup, seed=self.chain_grabs)
-        ov = 3 if self.grab_fault == "overrun" else 0
-        missed = 2 if self.grab_fault == "missed" else 0
+        ov, missed = self._board_limit_counters()
+        if self.chain_test:
+            slp = self._chain_slpdat()
+            # DAC_CLK_HZ both drives the synthetic samples and is reported
+            # as "dachz", so the GUI's model-vs-measured ratio comes out
+            # near 1.0 on a fault-free cycle -- the point of a stand-in,
+            # not a claim about which PLL output the real chain's CLKGEN7
+            # runs from (the frame carries the real board's actual
+            # clock_dac_hz() there).
+            slope_samples = max(1.0, chain_model_slope_samples(slp, DAC_CLK_HZ, self.chain_ksps))
+            drop = n // 2 if self.grab_fault == "drop" else None
+            dup = n // 2 if self.grab_fault == "dup" else None
+            v = chain_synth(n, slope_samples,
+                            phase=float(self.chain_grabs * 7 % int(2 * slope_samples) or 1),
+                            drop=drop, dup=dup, seed=self.chain_grabs)
+        else:
+            slp = 0
+            v = self._custom_wave_samples(n)
+        if self.grab_fault == "overrun":
+            ov = max(ov, 3)
+        if self.grab_fault == "missed":
+            missed = max(missed, 2)
         header_line = (f"GRAB n={n} from={frm} ksps={self.chain_ksps} ov={ov} late=0 "
                         f"missed={missed} halves=2 xfer={2 * n} slp={slp} dachz={int(DAC_CLK_HZ)}\r\n")
         self._log(f"< {header_line.rstrip()}")
@@ -1459,243 +1200,6 @@ class FakeTarget:
         self._log("< [ACK]")
         tail = f"\r\nCRC {crc:04X}\r\n> ".encode("ascii") + ACK
         return parse_grab_frame(header_line, payload, tail)
-
-
-def parse_dump(lines) -> np.ndarray:
-    """'0000: 2048 2298 ...' lines -> samples, in index order."""
-    vals = {}
-    for l in lines:
-        m = re.match(r"\s*(\d+):((?:\s+\d+)+)\s*$", l)
-        if m:
-            idx = int(m.group(1))
-            for k, x in enumerate(m.group(2).split()):
-                vals[idx + k] = int(x)
-    if not vals:
-        return np.zeros(0, dtype=int)
-    n = max(vals) + 1
-    out = np.zeros(n, dtype=int)
-    for i, x in vals.items():
-        out[i] = x
-    return out[min(vals):]
-
-
-# ---------------------------------------------------------------------------
-# The sweep log: fourteen rows that decide one question
-# ---------------------------------------------------------------------------
-# Each point of 'test sweep' ends when blocks_done reaches the configured
-# number of halves, and the 'loaded' column is the rate measured while it
-# ran. Those two give the point's duration, and the duration times the
-# SET rate gives how many bursts were really started:
-#
-#   duration      = halves * half_len / loaded_rate
-#   bursts honest = halves / 2                    (one burst = one buffer)
-#   bursts double = duration * nominal_rate / (2 * half_len)
-#
-# The two predictions part company by a factor of ten across the sweep, so
-# the measured 'bursts' column picks one of them with nothing left to read
-# into it. A flat line at halves/2 means the counters are honest and the
-# conversions really are that slow; a line climbing with the rate means the
-# handler books the same event more than once and the rate was fine.
-SWEEP_ROW_RE = re.compile(
-    r"\[sweep\]\s+postdiv\s+(\d+)/(\d+)\s+adc clock Hz\s+(\d+)\s+"
-    r"ksps nom\s+(\d+)\s+clean\s+(\d+)\s+loaded\s+(\d+)\s+"
-    r"overrun idle/process/sfr\s+(\S+)\s+late\s+(\d+)\s+missed\s+(\d+)")
-SWEEP_CNT_RE = re.compile(
-    r"\[sweep\]\s+isr\s+(\d+)\s+half\s+(\d+)\s+done\s+(\d+)\s+"
-    r"bursts\s+(\d+)\s+blocks\s+(\d+)")
-SWEEP_HALVES_RE = re.compile(r"\[sweep\] halves per point[:\s]+(\d+)")
-# Since edd6757 the sweep states its own sample geometry, so the numbers
-# below can be checked against the log instead of against an assumption.
-# Older logs have neither line; for those the fallback is the 'half: n' of
-# a 'buf' reply, and failing that the field in the tile.
-SWEEP_SPH_RE = re.compile(r"\[sweep\] samples per half[:\s]+(\d+)")
-SWEEP_SPP_RE = re.compile(r"\[sweep\] samples per point[:\s]+(\d+)")
-SWEEP_HALFLEN_RE = re.compile(r"\bhalf[:\s]+(\d+)")
-
-
-SWEEP_LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                             "..", "docs", "logs")
-
-
-def stored_sweep_logs():
-    """The board runs the repo keeps, newest name last.
-
-    A board run is rare - it needs the kit, and somebody in front of it -
-    so the few that exist are worth having at hand rather than pasted in
-    again from an e-mail. Returns [] when the directory is not there,
-    which is the case on a branch that has not taken the logs yet."""
-    try:
-        names = sorted(n for n in os.listdir(SWEEP_LOG_DIR)
-                       if n.endswith(".txt") and "sweep" in n)
-    except OSError:
-        return []
-    return [os.path.join(SWEEP_LOG_DIR, n) for n in names]
-
-
-def parse_sweep_log(text: str) -> dict:
-    """Pull the sweep table out of a terminal log, whatever else is in it.
-
-    Returns {'rows': [...], 'halves': int|None, 'half_len': int|None}. A
-    counter line ('isr ... bursts ...') is attached to the row above it,
-    which is where the firmware prints it; older builds have no such line
-    and the row simply carries no measured burst count."""
-    rows, halves, half_len, per_point = [], None, None, None
-    for raw in text.splitlines():
-        line = raw.strip()
-        m = SWEEP_HALVES_RE.search(line)
-        if m:
-            halves = int(m.group(1))
-            continue
-        m = SWEEP_SPH_RE.search(line)
-        if m:
-            half_len = int(m.group(1))
-            continue
-        m = SWEEP_SPP_RE.search(line)
-        if m:
-            per_point = int(m.group(1))
-            continue
-        m = SWEEP_ROW_RE.search(line)
-        if m:
-            ov = m.group(7).split("/")
-            rows.append({
-                "postdiv": f"{m.group(1)}/{m.group(2)}",
-                "adc_clock_hz": int(m.group(3)),
-                "nom_ksps": int(m.group(4)),
-                "clean_ksps": int(m.group(5)),
-                "loaded_ksps": int(m.group(6)),
-                "overrun": ov, "late": int(m.group(8)), "missed": int(m.group(9)),
-                "isr": None, "half": None, "done": None,
-                "bursts": None, "blocks": None,
-            })
-            continue
-        m = SWEEP_CNT_RE.search(line)
-        if m and rows:
-            rows[-1].update(isr=int(m.group(1)), half=int(m.group(2)),
-                            done=int(m.group(3)), bursts=int(m.group(4)),
-                            blocks=int(m.group(5)))
-            continue
-        if half_len is None and not line.startswith("[sweep]"):
-            m = SWEEP_HALFLEN_RE.search(line)
-            if m:
-                half_len = int(m.group(1))
-    # The log states the product as well, so the two numbers the whole
-    # prediction rests on can be checked against each other rather than
-    # taken on trust.
-    consistent = None
-    if per_point and halves and half_len:
-        consistent = (per_point == halves * half_len)
-    return {"rows": rows, "halves": halves, "half_len": half_len,
-            "per_point": per_point, "consistent": consistent}
-
-
-def sweep_predict(rows, halves: int, half_len: int):
-    """Add duration and the two competing burst predictions to each row."""
-    out = []
-    for r in rows:
-        r = dict(r)
-        loaded = max(1, r["loaded_ksps"])
-        r["duration_ms"] = halves * half_len / (loaded * 1000.0) * 1000.0
-        r["bursts_honest"] = halves / 2.0
-        r["bursts_double"] = (r["duration_ms"] / 1000.0) * r["nom_ksps"] * 1000.0 \
-            / (2.0 * half_len)
-        out.append(r)
-    return out
-
-
-SWEEP_MIN_SEPARATION = 2.0
-
-
-def sweep_rows_that_decide(rows):
-    """The rows the verdict may rest on, and why the others are left out.
-
-    Two rows of the table carry almost no information and one carries a
-    confound, so a verdict over the whole table is weaker than it looks:
-
-    * the top of the sweep barely separates the models at all - at 40 MSPS
-      they predict 952 against 1000, five percent apart, which measurement
-      noise covers;
-    * the first row is the one point that runs straight after the boot with
-      no stream before it, and run 15 showed it behaving unlike every other
-      row (missed 19 against 1900, process overrun nearly double idle).
-
-    So: drop the first row, keep the rows where the two predictions are at
-    least SWEEP_MIN_SEPARATION apart. Row one is still shown in the table
-    and still compared - just separately, and never as evidence."""
-    have = [r for r in rows if r.get("bursts")]
-    if len(have) < 4:
-        return have, ""
-    body = have[1:]
-    strong = [r for r in body
-              if r["bursts_honest"] >= SWEEP_MIN_SEPARATION * max(1.0, r["bursts_double"])]
-    if len(strong) >= 3:
-        return strong, (f"verdict from {len(strong)} of {len(have)} rows: the first is left out "
-                        f"as the only point that starts from cold, and the fastest rows are left "
-                        f"out because there the two predictions are less than "
-                        f"{SWEEP_MIN_SEPARATION:.0f}x apart")
-    return body, (f"verdict from {len(body)} of {len(have)} rows: the first is left out as the "
-                  f"only point that starts from cold")
-
-
-def sweep_verdict(rows):
-    """Which of the two predictions the measured bursts follow.
-
-    Compares the mean relative error of both models over the rows that can
-    tell them apart. Needs at least three such rows, because at a single
-    point the two can agree by accident."""
-    have, why = sweep_rows_that_decide(rows)
-    if len(have) < 3:
-        return ("grey", "no verdict",
-                "The log carries no 'bursts' column, or fewer than three rows of it. That "
-                "column comes from a firmware newer than the run that produced this log, so "
-                "this is the expected state for every board run recorded so far - not a "
-                "fault in the log. The two predicted curves are drawn anyway: a run that "
-                "does carry the column will land on one of them.")
-    def err(key):
-        return sum(abs(r["bursts"] - r[key]) / max(1.0, r[key]) for r in have) / len(have)
-    why = (why + ". ") if why else ""
-    e_honest, e_double = err("bursts_honest"), err("bursts_double")
-    lo, hi = have[0], have[-1]
-    span = hi["bursts"] / max(1.0, lo["bursts"])
-    if e_double < e_honest / 2.0:
-        return ("negative",
-                f"double-booked: bursts climb {span:.1f}x over the rows used",
-                f"The measured bursts follow the rate, not the buffer count "
-                f"({lo['bursts']} at {lo['nom_ksps']/1000:.1f} MSPS up to {hi['bursts']} at "
-                f"{hi['nom_ksps']/1000:.1f}). One burst still fills one buffer, so the extra "
-                f"blocks are the handler counting the same event again - the rate was never "
-                f"the problem. {why}Mean error: {e_double*100:.0f} % against this model, "
-                f"{e_honest*100:.0f} % against honest counting.")
-    if e_honest < e_double / 2.0:
-        return ("positive",
-                f"honest: bursts flat at {have[0]['bursts_honest']:.0f} whatever the rate",
-                f"The measured bursts stay at halves/2 across the whole sweep, so every "
-                f"counted block really was a buffer half filling up. The conversions are "
-                f"genuinely slower than the setting asks for, and the cause sits in the "
-                f"conversion chain, not in the interrupt handler. {why}Mean error: "
-                f"{e_honest*100:.0f} % against this model, {e_double*100:.0f} % against "
-                f"double-booking.")
-    return ("warning", "neither model fits",
-            f"The measured bursts match neither prediction well ({e_honest*100:.0f} % against "
-            f"honest counting, {e_double*100:.0f} % against double-booking). Check that the "
-            f"halves per point and the samples per half below are the ones this run used.")
-
-
-def parse_status(lines) -> dict:
-    """The firmware prints "key: value" pairs, and since the back-to-back
-    rework the keys carry digits, spaces and a parenthesised note
-    ("postdiv1: 5", "ksps nominal: 40000", "clkdiv (x100, read back): 100").
-    Normalise each to snake_case without the note, so a lookup is stable:
-    "ksps nominal" -> ksps_nominal, "clkdiv (x100, read back)" -> clkdiv."""
-    d = {}
-    for l in lines:
-        m = re.match(r"\s*([A-Za-z][\w ()/,.-]*?)\s*:\s*(-?\d+)\s*$", l)
-        if not m:
-            continue
-        key = re.sub(r"\(.*?\)", "", m.group(1))
-        key = re.sub(r"[^A-Za-z0-9]+", "_", key).strip("_").lower()
-        if key:
-            d[key] = int(m.group(2))
-    return d
 
 
 def spectrum(samples: np.ndarray, fs_hz: float):
@@ -1749,105 +1253,37 @@ def analyze_spectrum(f: np.ndarray, db: np.ndarray, n_harmonics: int = 5, exclud
                 snr_db=fund_db - noise_db, thd_pct=thd_pct, harmonics=harmonics)
 
 
-# ---------------------------------------------------------------------------
-# One capture cycle: start, run a moment, stop, dump, status
-# ---------------------------------------------------------------------------
-def capture_cycle(target, count: int, settle_s: float = 0.02, blk: bool = False):
-    """One capture: 'snap' fills the buffer exactly once and the DMA
-    interrupt itself ends the stream, then 'dump' reads the window out.
-
-    It does NOT do start / wait / stop / dump any more, and that is not a
-    style question. At the rates this board runs, the main loop is tens of
-    milliseconds behind the DMA: the half being read has been overwritten
-    a thousand times in the meantime and the result is a mixture of old
-    and new data - 8552 halves missed between eight copies in run 11, with
-    single steps of 3126 counts in what should have been a smooth ramp. A
-    spectrum of that is meaningless and looks perfectly plausible. On top
-    of it, at a rate with overruns the 'stop' never arrives at all,
-    because the console's receive interrupt sits below the DMA channel in
-    priority and never gets the CPU.
-
-    After 'snap' the whole buffer stands still and nothing is writing it,
-    so the window is contiguous by construction. `settle_s` is kept for
-    call compatibility and is no longer used."""
-    del settle_s
-    if blk:
-        ok, samples, meta = target.blk(count)
-        if not ok:
-            raise RuntimeError("blk refused: " + meta.get("error", "unknown"))
-        ok, st = target.cmd("status")
-        return samples, parse_status(st) if ok else {}
-    ok, snap_lines = target.cmd("snap", timeout=10.0)
-    if not ok:
-        raise RuntimeError("snap refused: " + " ".join(snap_lines))
-    ok, lines = target.cmd(f"dump {count} 0", timeout=20.0)
-    if not ok:
-        raise RuntimeError("dump refused: " + " ".join(lines))
-    samples = parse_dump(lines)
-    ok, st = target.cmd("status")
-    status = parse_status(st) if ok else {}
-    # 'snap' measures the window with Timer1, so it knows the delivered
-    # rate better than any nominal figure, and it also reports the
-    # overruns of that one burst. Carry all of it: none of its keys
-    # collide with 'status', which owns blocks and bursts.
-    status.update(parse_status(snap_lines))
-    return samples, status
-
-
 def selftest() -> int:
     ok_all = True
-    t = FakeTarget(signal_khz=250.0)
-    for c in ("pll 5 1", "samc 0", "input 5"):
-        ok, r = t.cmd(c)
-        assert ok, (c, r)
-    fs = rate_ksps(5, 1) * 1e3
+    t = FakeTarget(signal_khz=250.0, amplitude=1500.0)
 
-    samples, status = capture_cycle(t, 1024, settle_s=0.0, blk=False)
-    f, db = spectrum(samples, fs)
-    peak = f[np.argmax(db[1:]) + 1]
-    print(f"dump: {len(samples)} samples, min {samples.min()} max {samples.max()} mean {samples.mean():.0f}")
-    print(f"fs {fs/1e6:.3f} MHz, FFT peak at {peak/1e3:.1f} kHz (expect 250.0), status keys {sorted(status)[:5]}...")
-    ok = len(samples) == 1024 and abs(peak - 250e3) < fs / 1024 and status.get("postdiv1") == 5
-    ok_all &= ok
-    print("dump selftest", "PASS" if ok else "FAIL")
-
-    # 'blk' path (docs/PLAN-BINARY-TRANSFER.md): probe, full 2048-sample block, CRC.
-    assert probe_blk(t), "fake target must advertise 'blk' in help"
-    samples, status = capture_cycle(t, 2048, blk=True)
-    f, db = spectrum(samples, fs)
-    peak = f[np.argmax(db[1:]) + 1]
-    print(f"blk: {len(samples)} samples, FFT peak at {peak/1e3:.1f} kHz (expect 250.0)")
-    ok = len(samples) == 2048 and abs(peak - 250e3) < fs / 2048
-    ok_all &= ok
-    print("blk selftest", "PASS" if ok else "FAIL")
-
-    # A damaged block must be reported, never silently accepted.
-    ok, _, meta = t.blk(64, corrupt_payload=True)
-    ok_corrupt = (not ok) and "CRC mismatch" in meta.get("error", "")
-    ok_all &= ok_corrupt
-    print("blk corruption caught:", "PASS" if ok_corrupt else "FAIL", "-", meta.get("error"))
-
-    ok_all &= crc16_ccitt_false(b"123456789") == 0x29B1
-
-    # ---- "stream grab" (docs/PLAN-BINARY-TRANSFER.md's frame, extended) ----
+    # ---- 'stream grab' before 'stream on': refused, exactly what
+    # chain_stream_grab_begin() returning false produces on the board. ----
     assert probe_grab(t), "fake target's help must advertise 'stream' and 'grab'"
-
-    # No stream on yet: NAK, exactly what chain_stream_grab_begin() returning
-    # false produces on the board (cli.c cmd_stream_grab()).
     ok, samples, meta = t.grab()
     ok_no_stream = (not ok) and len(samples) == 0 and "error" in meta
     ok_all &= ok_no_stream
     print("grab without 'stream on' refused:", "PASS" if ok_no_stream else "FAIL", "-", meta.get("error"))
 
+    # ---- the test form: 'stream on <ksps>' - core 5, RA8, DAC2 triangle ----
     ok, lines = t.cmd("stream on 8000")
     assert ok, ("stream on", lines)
     ok, samples, meta = t.grab()
     r = chain_tri_eval([int(v) for v in samples])
     ok_grab = (ok and len(samples) == t.buf_size // 2 and meta["from_"] == 0
-              and meta["ksps"] == 8000 and chain_grid_ok(r))
+              and meta["slpdat"] > 0 and chain_grid_ok(r))
     ok_all &= ok_grab
-    print(f"grab (clean triangle): {len(samples)} samples, from {meta['from_']}, "
-          f"slip {r['slip']:.3f} -> {'PASS' if ok_grab else 'FAIL'}")
+    print(f"grab (test triangle): {len(samples)} samples, from {meta['from_']}, "
+          f"slp {meta['slpdat']}, slip {r['slip']:.3f} -> {'PASS' if ok_grab else 'FAIL'}")
+
+    # The frame's own 'ksps' is the actual rate (the nearest 160 MHz / N,
+    # chaintest.c's ksps_of()) - the FFT must use it as fs, not the number
+    # typed at 'stream on'.
+    ok_fs = abs(meta["ksps"] - 8000) < 200
+    ok_all &= ok_fs
+    f, db = spectrum(np.asarray(samples), meta["ksps"] * 1e3)
+    print(f"grab actual rate: {meta['ksps']} ksps (asked for 8000), used as FFT fs ->",
+          "PASS" if ok_fs else "FAIL")
 
     # The buffer alternates halves like ready_half does in capture.c - the
     # second grab must land at the OTHER half (from > 0), not the same one.
@@ -1858,8 +1294,7 @@ def selftest() -> int:
 
     # A lost/repeated sample must fail the SAME grid check the firmware's
     # own tri_eval() uses - the fake target injects exactly what
-    # chaintest.c's host test of the evaluator injects (CHAIN-TEST-PLAN.md
-    # section 9).
+    # chaintest.c's host test of the evaluator injects.
     t.grab_fault = "drop"
     ok3, samples3, meta3 = t.grab()
     r3 = chain_tri_eval([int(v) for v in samples3])
@@ -1870,8 +1305,22 @@ def selftest() -> int:
           "PASS" if ok_fault else "FAIL")
     t.grab_fault = None
 
-    # A damaged block must be reported, never silently accepted - same
-    # check as 'blk corruption caught' above, for the grab frame.
+    # ---- the custom form: 'stream on <ksps> <core> <pinsel> [<samc>]' ----
+    ok, lines = t.cmd("stream on 5000 3 5 0")
+    assert ok, ("stream on (custom input)", lines)
+    ok, samples, meta = t.grab()
+    ok_custom = ok and meta["slpdat"] == 0 and len(samples) == t.buf_size // 2
+    ok_all &= ok_custom
+    print(f"grab (custom input, core 3 pin 5): slp={meta['slpdat']} (expect 0) ->",
+          "PASS" if ok_custom else "FAIL")
+    f2, db2 = spectrum(np.asarray(samples), meta["ksps"] * 1e3)
+    metrics = analyze_spectrum(f2, db2)
+    ok_peak = bool(metrics) and abs(metrics["fund_freq"] - 250e3) < meta["ksps"] * 1e3 / len(samples)
+    ok_all &= ok_peak
+    print(f"grab (custom input) FFT peak {metrics.get('fund_freq', 0)/1e3:.1f} kHz (expect 250.0) ->",
+          "PASS" if ok_peak else "FAIL")
+
+    # A damaged frame must be reported, never silently accepted.
     ok4, _, meta4 = t.grab(corrupt_payload=True)
     ok_grab_corrupt = (not ok4) and "CRC mismatch" in meta4.get("error", "")
     ok_all &= ok_grab_corrupt
@@ -1915,6 +1364,8 @@ def selftest() -> int:
     ok_all &= ok_timeout
     print("grab timeout (no bytes at all) caught:", "PASS" if ok_timeout else "FAIL")
 
+    ok_all &= crc16_ccitt_false(b"123456789") == 0x29B1
+
     print("selftest", "PASS" if ok_all else "FAIL")
     return 0 if ok_all else 1
 
@@ -1925,33 +1376,23 @@ def selftest() -> int:
 def main_gui(args):
     from nicegui import ui, run
 
-    # One command at a time on the serial port: the capture loop and the
-    # chain loop each run their commands in worker threads, and without
-    # this they could interleave on the same port. capture_ready: the
-    # capture tile's own settings (rate, core/input, SAMC, DACs) are on the
-    # board - false after connect and after every chain stream, because
-    # 'stream off' restores the firmware's boot configuration (core 3,
-    # PLL 7/7, DAC off).
+    # One command at a time on the serial port: the live loop runs its
+    # commands in worker threads, and without this they could interleave
+    # on the same port. acq_active: the (mode, ksps, core, pinsel, samc)
+    # the board is currently streaming - None until 'stream on' succeeds,
+    # and cleared by 'stream off' or by a failed grab, so the next cycle
+    # knows to send 'stream on' again.
     port_lock = asyncio.Lock()
-    state = dict(target=None, live=False, busy=False, cycles=0, use_blk=False, capture_ready=False,
-                 buf_size=2048, settings_path=args.settings,
-                 chain_live=False, chain_busy=False, chain_grabs=0, chain_t0=None)
+    state = dict(target=None, live=False, busy=False, cycles=0, grabs=0,
+                 acq_active=None, live_t0=None, buf_size=2048,
+                 settings_path=args.settings)
 
-    def update_count_options():
-        """The selectable capture sizes ('windows') follow the buffer size:
-        never offer more samples than 'buf' currently holds."""
-        buf = state["buf_size"]
-        opts = sorted({n for n in (64, 128, 256, 512, 1024, 2048, 4096, 8192) if n <= buf} | {buf})
-        count_sel.options = opts
-        if count_sel.value not in opts:
-            count_sel.value = opts[-1]
-        count_sel.update()
-
-    # Every control that shows the selection registers itself here, so
-    # refresh_channel() can write one change back to all of them.
-    board_ctrls, core_ctrls, chan_ctrls, dac_ctrls = [], [], [], []
-    dac_ui = {}                       # unit -> its card's controls
-    ui_state = {"board": BOARD_DEFAULT, "sync": False, "dac": 0}
+    def ports():
+        try:
+            from serial.tools import list_ports
+            return [p.device for p in list_ports.comports()]
+        except Exception:
+            return []
 
     # ---- look: dark, one accent colour, rounded cards ----
     ACCENT, ACCENT2, DIM = "#22d3ee", "#a78bfa", "#94a3b8"
@@ -1997,25 +1438,17 @@ def main_gui(args):
                                                                {"offset": 1, "color": colour + "00"}]}}}],
         }, theme="dark").classes("w-full h-80 rounded-xl")
 
-    def ports():
-        try:
-            from serial.tools import list_ports
-            return [p.device for p in list_ports.comports()]
-        except Exception:
-            return []
-
     # ---- header ----
     with ui.header().classes("items-center gap-4 px-6").style("background: #0f172a; border-bottom: 1px solid #1f2937"):
         ui.icon("show_chart", size="md").classes("text-cyan-400")
         with ui.column().classes("gap-0"):
             ui.label("dsPIC33A ADC / DMA").classes("text-lg font-medium leading-tight")
-            ui.label("capture · plot · FFT over the console").classes("text-xs text-slate-400 leading-tight")
+            ui.label("triggered chain · capture · plot · FFT").classes("text-xs text-slate-400 leading-tight")
         ui.space()
         port_sel = ui.select(options=["fake"] + ports(), value=args.port or ("fake" if args.fake else None),
                              label="port").classes("w-44").props("dense outlined")
         conn_btn = ui.button("connect", icon="usb").props("unelevated")
         conn_chip = ui.chip("not connected", icon="link_off", color="grey-8").props("outline")
-        xfer_chip = ui.chip("transfer: -", icon="swap_horiz", color="grey-8").props("outline")
 
     with ui.row().classes("w-full p-4 gap-4 items-start no-wrap"):
         # ---- left: settings ----
@@ -2028,19 +1461,15 @@ def main_gui(args):
                     save_as_btn = ui.button("save as", icon="save_as").props("outline dense").classes("flex-grow")
                     load_as_btn = ui.button("load as", icon="folder_open").props("outline dense").classes("flex-grow")
                 settings_msg_lbl = ui.label().classes("text-xs text-slate-400 mono")
+
             with ui.card().classes("w-full rounded-xl p-4 gap-2"):
-                ui.label("sample rate · PLL1").classes("card-title")
-                # The rate is the ADC clock and nothing else: back-to-back
-                # conversions at 8 clocks each (cli.c 'pll').
-                pll_sel = ui.select({f"{p1},{p2}": f"{r/1000:.3f} MSPS  (p1 {p1}, p2 {p2})"
-                                     for p1, p2, r in pll_options()},
-                                    value="5,1", label="PLL1 post-dividers").props("dense outlined")
-                rate_lbl = ui.label().classes("text-cyan-300 mono")
-                ui.label("back-to-back only; the repeat timer, SCCP1 and the CLKGEN6 divider "
-                         "were all measured to leave the rate untouched")\
-                    .classes("text-xs text-slate-500")
-            with ui.card().classes("w-full rounded-xl p-4 gap-2"):
-                ui.label("adc core & channel").classes("card-title")
+                ui.label("acquisition · triggered chain").classes("card-title")
+                rate_in = ui.number("rate, kSPS (1..40000)", value=8000, min=1, max=40000,
+                                    step=100, format="%d").props("dense outlined")
+                rate_hint_lbl = ui.label().classes("text-xs mono")
+                input_mode_sel = ui.select(
+                    {"test": "RA8 / DAC2 test triangle (core 5, pin 3)", "custom": "custom input"},
+                    value="test", label="input").props("dense outlined")
                 with ui.row().classes("w-full gap-2"):
                     core_sel = ui.select({n: f"ADC{n}" for n in range(1, 6)}, value=3,
                                          label="core (1..5)").props("dense outlined").classes("flex-grow")
@@ -2048,23 +1477,27 @@ def main_gui(args):
                                          step=1, format="%d").props("dense outlined").classes("flex-grow")
                 channel_info_lbl = ui.label().classes("text-xs text-slate-400")
                 samc_in = ui.number("SAMC · sample time (0..31)", value=0, min=0, max=31, step=1, format="%d").props("dense outlined")
-                ui.label("fake target signal only").classes("text-xs text-slate-500")
-                waveform_sel = ui.select(
-                    {"sine": "sine (piezo-like)", "triangle": "triangle (DAC2 → ADC5 self-test)"},
-                    value="sine", label="fake waveform").props("dense outlined")
-                waveform_hint_lbl = ui.label().classes("text-xs text-amber-300")
-                sig_in = ui.number("fake signal, kHz (sine only)", value=100.0, min=0.1, max=20000.0, step=10).props("dense outlined")
-                amp_in = ui.number("amplitude, counts (pk, sine only)", value=1500.0, min=0.0, max=2000.0, step=50).props("dense outlined")
+                interval_in = ui.number("grab interval, ms", value=500, min=50, max=5000, step=50, format="%d").props("dense outlined")
+                with ui.row().classes("w-full gap-2"):
+                    single_btn = ui.button("single", icon="camera").props("unelevated").classes("flex-grow")
+                    live_btn = ui.button("live", icon="play_arrow").props("unelevated").classes("flex-grow")
+
+            with ui.card().classes("w-full rounded-xl p-4 gap-2"):
+                ui.label("fake target signal · custom input only").classes("card-title")
+                sig_in = ui.number("frequency, kHz", value=100.0, min=0.1, max=20000.0, step=10).props("dense outlined")
+                amp_in = ui.number("amplitude, counts (pk)", value=1500.0, min=0.0, max=2000.0, step=50).props("dense outlined")
                 noise_in = ui.number("noise, counts (std dev, sets SNR)", value=6.0, min=0.0, max=500.0, step=1).props("dense outlined")
-                harm2_in = ui.number("2nd harmonic, counts (pk, sine only)", value=150.0, min=0.0, max=1000.0, step=10).props("dense outlined")
-                harm3_in = ui.number("3rd harmonic, counts (pk, sine only)", value=0.0, min=0.0, max=1000.0, step=10).props("dense outlined")
-                apply_btn = ui.button("apply to board", icon="upload").props("unelevated").classes("w-full")
-                apply_lbl = ui.label().classes("text-xs text-slate-400 mono")
+                harm2_in = ui.number("2nd harmonic, counts (pk)", value=150.0, min=0.0, max=1000.0, step=10).props("dense outlined")
+                harm3_in = ui.number("3rd harmonic, counts (pk)", value=0.0, min=0.0, max=1000.0, step=10).props("dense outlined")
+
             # One card per DAC. Both units are the same hardware with
             # different registers (dac.c), and each has its own output pin:
             # DAC1 on RA1, DAC2 on RA8. Either can feed an ADC channel -
             # its own pin without a wire, any other pin with one, which is
-            # what the board tile spells out.
+            # what the board tile spells out. Switched on here, they are
+            # applied automatically whenever the chain runs with a custom
+            # (non-test) input.
+            dac_ui = {}
             for _unit, _pin_name in ((1, "RA1"), (2, "RA8")):
                 with ui.card().classes("w-full rounded-xl p-4 gap-2"):
                     ui.label(f"dac{_unit} · triangle ({_pin_name})").classes("card-title")
@@ -2082,73 +1515,45 @@ def main_gui(args):
                     _msg = ui.label().classes("text-xs text-slate-400 mono")
                     dac_ui[_unit] = {"on": _on, "low": _low, "high": _high, "slp": _slp,
                                      "freq": _freq, "btn": _btn, "msg": _msg}
+
             with ui.card().classes("w-full rounded-xl p-4 gap-2"):
-                ui.label("capture").classes("card-title")
+                ui.label("buffer").classes("card-title")
                 with ui.row().classes("w-full gap-2 items-end"):
                     buf_in = ui.number("buffer size, total ('buf')", value=2048, min=16, max=8192, step=16,
                                        format="%d").props("dense outlined").classes("flex-grow")
                     buf_btn = ui.button("apply", icon="tune").props("unelevated dense")
                 buf_lbl = ui.label("buf: not queried yet").classes("text-xs text-slate-400 mono")
-                count_sel = ui.select([64, 128, 256, 512, 1024, 2048], value=1024,
-                                      label="samples per capture (limited by buffer size)").props("dense outlined")
-                interval_in = ui.number("live interval, ms", value=500, min=100, max=5000, step=100, format="%d").props("dense outlined")
-                with ui.row().classes("w-full gap-2"):
-                    single_btn = ui.button("single", icon="camera").props("unelevated").classes("flex-grow")
-                    live_btn = ui.button("live", icon="play_arrow").props("unelevated").classes("flex-grow")
 
         # ---- right: results ----
         with ui.column().classes("flex-grow gap-4"):
             with ui.row().classes("w-full items-center gap-2"):
-                cyc_lbl = ui.label("no capture yet").classes("text-slate-300 mono")
+                cyc_lbl = ui.label("no grab yet").classes("text-slate-300 mono")
                 ui.space()
                 COUNTER_TIPS = {
-                    "overrun": "The DMA was triggered again while the previous transfer was still "
-                               "running, so a result was lost. Read it as a LOWER BOUND, not a "
-                               "count of lost samples: OVERRUN is one bit in DMA0STAT and the "
-                               "handler counts one per entry that found it set, so three losses "
+                    "overrun": "DMA overruns since the PREVIOUS grab, not a running total - a "
+                               "lower bound, as always: OVERRUN is one bit in DMA0STAT and the "
+                               "handler counts one per entry that found it set, so several losses "
                                "between two entries still move it by one.",
-                    "late": "Both HALF and DONE were pending at the same entry: the handler "
-                            "arrived more than a whole half late and the first half had already "
-                            "been overwritten.",
-                    "missed": "The main loop did not fetch a half before the DMA came round to it "
-                              "again. It says the CPU is behind, not that the DMA lost anything.",
-                    "addr_err": "The DMA tried to write outside the address window it was given, "
-                                "which is exactly the sample buffer. The hardware refuses the "
-                                "transfer and switches the channel off; anything but 0 is a bug "
-                                "in the set-up, not a rate problem.",
-                    "bus_err": "A bus error on the DMA's write. With RETEN left at 0 (an erratum) "
-                               "this effectively counts write errors only.",
+                    "late": "HALF and DONE both pending at once since the previous grab: the "
+                            "handler ran a whole half late.",
+                    "missed": "Halves the firmware's own main-loop processing skipped since the "
+                              "previous grab - this page's own halt/grab/restart cycle does not "
+                              "count against it.",
                 }
                 chips = {}
-                for _k in ("overrun", "late", "missed", "addr_err", "bus_err"):
+                for _k in ("overrun", "late", "missed"):
                     chips[_k] = ui.chip(f"{_k} –", color="grey-8").props("dense outline")
                     with chips[_k]:
                         ui.tooltip(COUNTER_TIPS[_k]).style("font-size: 14px; max-width: 24rem;")
-                # A burst is CNT = 2 * half_len conversions, one whole
-                # buffer: HALF at the middle, DONE at the end. So blocks
-                # must be exactly twice the bursts - arithmetic, not an
-                # assumption about the silicon. Anything else means the
-                # handler books the same event more than once.
-                ratio_chip = ui.chip("blocks/bursts –", color="grey-8").props("dense outline")
-                rate_chip = ui.chip("rate –", color="grey-8").props("dense outline")
-                with ratio_chip:
-                    ui.tooltip("Completed buffer halves against started bursts. One burst fills "
-                               "one buffer, so it raises HALF once and DONE once: blocks must be "
-                               "exactly 2 x bursts. More than that means an event was counted "
-                               "again - the interrupt saw a flag that had not cleared, and that "
-                               "grows with the overrun rate. ONLY MEANINGFUL IN A FREE-RUNNING "
-                               "STREAM: a one-shot clears the counters and waits for exactly two "
-                               "blocks, so 2/1 there is arithmetic, not evidence - the chip stays "
-                               "grey for it. Grey too while the firmware does not report "
-                               "'bursts' in status.")\
-                        .style("font-size: 14px; max-width: 24rem;")
+                rate_chip = ui.chip("actual rate –", color="grey-8").props("dense outline")
+                halves_chip = ui.chip("halves/xfer –", color="grey-8").props("dense outline")
                 with rate_chip:
-                    ui.tooltip("What the burst really delivered, timed with Timer1 by 'snap', "
-                               "against the rate the PLL setting asks for. This is the other half "
-                               "of the same question: if the counters stay at 1:2 and the rate "
-                               "still falls short, the conversions are producing more DMA "
-                               "transfers than results - the silicon's trigger fault - rather "
-                               "than the handler counting one event twice.")\
+                    ui.tooltip("The frame's own 'ksps' - the nearest 160 MHz / N (CLKGEN13) the "
+                               "chain actually runs at, not the number typed on the left. Used as "
+                               "fs for the time axis and the FFT.").style("font-size: 14px; max-width: 24rem;")
+                with halves_chip:
+                    ui.tooltip("Buffer halves completed and DMA transfers since the previous grab "
+                               "(chain_stream_grab_begin()'s per-cycle counters).")\
                         .style("font-size: 14px; max-width: 24rem;")
             with ui.card().classes("w-full rounded-xl p-2"):
                 time_chart = chart("time signal", "sample", "ADC counts", 0, 4096, ACCENT, second_x_name="time")
@@ -2175,11 +1580,48 @@ def main_gui(args):
                             ui.tooltip(EVAL_TOOLTIPS[k]).style("font-size: 14px; max-width: 22rem;")
                         eval_chips[k] = chip
 
+            # ---- the triangle verdict: only meaningful for the test input ----
+            with ui.card().classes("w-full rounded-xl p-3 gap-2") as triangle_card:
+                with ui.row().classes("w-full items-center gap-3 flex-wrap"):
+                    ui.label("triangle verdict · test input only").classes("card-title")
+                    triangle_verdict_chip = ui.chip("no grab yet", color="grey-8").props("dense outline")
+                ui.label(
+                    "Shown only when the grab's own frame says a test triangle was the signal "
+                    "(slp > 0 in the GRAB header) - a custom input's grab has nothing to judge "
+                    "against a model, and this card is hidden for it. Evaluated with the same "
+                    "tri_eval()/grid_ok() the firmware's own chain test uses (tools/eval_chain.py, "
+                    "imported, not re-implemented): a lost or repeated sample shifts a turning "
+                    "point off the grid by a whole sample and fails it."
+                ).classes("text-xs text-slate-400")
+                with ui.row().classes("w-full gap-2 flex-wrap"):
+                    TRIANGLE_TIPS = {
+                        "turning points": "Coarse peaks and troughs tri_eval() found in the window.",
+                        "up": "Complete rising slopes: count and mean length in samples.",
+                        "down": "Complete falling slopes: count and mean length in samples.",
+                        "slip": "The grid verdict's own number: a lost or repeated sample shifts "
+                                "later turning points by a whole sample: PASS needs it under 0.5.",
+                        "model": "Measured mean slope length over the model from slpdat and the "
+                                 "DAC clock the frame reports (chaintest.c triangle_for()) - near "
+                                 "1.0 on a clean grid.",
+                        "steps": "Lost (zero) or repeated (dbl) single-sample steps, only checked "
+                                 "once the slope is steep enough (>= 40 LSB/sample) to tell them "
+                                 "from DAC/DNL noise.",
+                    }
+                    triangle_chips = {}
+                    for _k in ("turning points", "up", "down", "slip", "model", "steps"):
+                        chip = ui.chip(f"{_k} –", color="grey-8").props("dense outline")
+                        with chip:
+                            ui.tooltip(TRIANGLE_TIPS[_k]).style("font-size: 14px; max-width: 22rem;")
+                        triangle_chips[_k] = chip
+
             # ---- the package: where the selected channel physically is ----
             # Full width, every pin labelled with its number and port name.
             # The eval kit decides which device, and so which package, is
             # drawn. Kit, core and channel are repeated on the board tile
             # below and on the sidebar; all of them are the same selection.
+            board_ctrls, core_ctrls, chan_ctrls, dac_ctrls = [], [], [], []
+            ui_state = {"board": BOARD_DEFAULT, "sync": False, "dac": 0}
+
             def selection_row(tag):
                 """kit / core / channel, one row, for a tile header."""
                 board = ui.select(BOARD_OPTIONS, value=BOARD_DEFAULT, label="eval kit") \
@@ -2215,132 +1657,6 @@ def main_gui(args):
                 board_html = ui.html("").classes("w-full").style("max-width: 1100px; margin: 0 auto")
                 board_note_lbl = ui.label().classes("text-xs text-slate-400")
 
-            # ---- the sweep: fourteen rows that separate two explanations ----
-            with ui.card().classes("w-full rounded-xl p-3 gap-2"):
-                with ui.row().classes("w-full items-center gap-3 flex-wrap"):
-                    ui.label("sweep · are the counters honest?").classes("card-title")
-                    sw_verdict_chip = ui.chip("no log yet", color="grey-8").props("dense outline")
-                ui.label(
-                    "A sweep point ends after a fixed number of buffer halves, so its duration "
-                    "and the rate it was set to say how many bursts were really started. If the "
-                    "counters are honest that number is the same at every rate; if the handler "
-                    "books an event twice it follows the rate. Paste a 'test sweep' log, or run "
-                    "one on a connected target."
-                ).classes("text-xs text-slate-400")
-                with ui.row().classes("w-full items-end gap-3 flex-wrap"):
-                    sw_halves_in = ui.number("halves per point", value=2000, format="%d") \
-                        .props("dense outlined").classes("w-40")
-                    sw_halflen_in = ui.number("samples per half", value=1024, format="%d") \
-                        .props("dense outlined").classes("w-40")
-                    sw_parse_btn = ui.button("read the log below").props("dense outline")
-                    sw_stored = stored_sweep_logs()
-                    sw_stored_btn = ui.button(
-                        os.path.basename(sw_stored[-1]) if sw_stored else "no stored log"
-                    ).props("dense outline")
-                    if not sw_stored:
-                        sw_stored_btn.disable()
-                    sw_run_btn = ui.button("run on target").props("dense outline")
-                    sw_msg_lbl = ui.label().classes("text-xs text-slate-400")
-                sw_text = ui.textarea(placeholder="paste the terminal log of a 'test sweep' here") \
-                    .props("dense outlined rows=5").classes("w-full font-mono") \
-                    .style("font-size: 11px")
-                sw_chart = ui.echart({
-                    "backgroundColor": "transparent", "animation": False,
-                    "title": {"text": "bursts started against the rate they were set to",
-                              "left": 16, "top": 8,
-                              "textStyle": {"color": "#e5e7eb", "fontSize": 14,
-                                            "fontWeight": "normal"}},
-                    "grid": {"left": 64, "right": 24, "top": 68, "bottom": 44},
-                    "legend": {"top": 34, "textStyle": {"color": DIM}},
-                    "tooltip": {"trigger": "axis", "backgroundColor": "#1f2937",
-                                "borderColor": "#374151", "textStyle": {"color": "#e5e7eb"}},
-                    "xAxis": {"type": "value", "name": "set rate MSPS", "min": 0,
-                              "nameTextStyle": {"color": DIM},
-                              "axisLine": {"lineStyle": {"color": "#374151"}},
-                              "axisLabel": {"color": DIM},
-                              "splitLine": {"lineStyle": {"color": "#1f2937"}}},
-                    "yAxis": {"type": "value", "name": "bursts", "min": 0,
-                              "nameTextStyle": {"color": DIM},
-                              "axisLine": {"lineStyle": {"color": "#374151"}},
-                              "axisLabel": {"color": DIM},
-                              "splitLine": {"lineStyle": {"color": "#1f2937"}}},
-                    "series": [],
-                }, theme="dark").classes("w-full h-80 rounded-xl")
-                sw_table = ui.table(columns=[
-                    {"name": "postdiv", "label": "postdiv", "field": "postdiv", "align": "left"},
-                    {"name": "nom", "label": "set MSPS", "field": "nom", "align": "right"},
-                    {"name": "clean", "label": "clean MSPS", "field": "clean", "align": "right"},
-                    {"name": "dur", "label": "point ms", "field": "dur", "align": "right"},
-                    {"name": "honest", "label": "bursts if honest", "field": "honest",
-                     "align": "right"},
-                    {"name": "double", "label": "bursts if double-booked", "field": "double",
-                     "align": "right"},
-                    {"name": "meas", "label": "bursts measured", "field": "meas", "align": "right"},
-                    {"name": "over", "label": "overrun idle/proc/sfr", "field": "over",
-                     "align": "right"},
-                    {"name": "missed", "label": "missed", "field": "missed", "align": "right"},
-                ], rows=[], row_key="postdiv").props("dense flat").classes("w-full")
-
-            # ---- the chain stream: halt / grab / transfer / restart ----
-            with ui.card().classes("w-full rounded-xl p-3 gap-2"):
-                with ui.row().classes("w-full items-center gap-3 flex-wrap"):
-                    ui.label("chain stream · halt / grab / restart").classes("card-title")
-                    chain_verdict_chip = ui.chip("no grab yet", color="grey-8").props("dense outline")
-                ui.label(
-                    "'stream on' starts the chain (SCCP1 -> ADC core 5 -> DMA0 -> ping-pong, DAC2 "
-                    "triangle on RA8) and this page then repeats a cycle of its own: 'stream "
-                    "grab' halts the trigger just long enough to send one contiguous window, "
-                    "restarts it, and the window is evaluated here with the same triangle method "
-                    "the firmware's own chain test uses (tri_eval, ported in tools/eval_chain.py) "
-                    "- so a FAIL means the grid slipped, not that the page disagrees with itself."
-                ).classes("text-xs text-slate-400")
-                with ui.row().classes("w-full items-end gap-3 flex-wrap"):
-                    chain_ksps_in = ui.number("rate, kSPS (1..40000)", value=8000, min=1, max=40000,
-                                              step=100, format="%d").props("dense outlined").classes("w-48")
-                    chain_interval_in = ui.number("grab interval, ms", value=500, min=50, max=5000,
-                                                  step=50, format="%d").props("dense outlined").classes("w-40")
-                    chain_btn = ui.button("start", icon="play_arrow").props("unelevated")
-                chain_status_lbl = ui.label("stream: off").classes("text-xs text-slate-400 mono")
-                chain_chart = chart("chain window (last grab)", "sample", "ADC counts", 0, 4096, ACCENT2)
-                with ui.row().classes("w-full gap-2 flex-wrap"):
-                    CHAIN_COUNTER_TIPS = {
-                        "overrun": "DMA overruns since the PREVIOUS grab, not the running total - "
-                                   "a lower bound, as elsewhere (see the capture counters above).",
-                        "late": "HALF and DONE both pending at once since the previous grab: the "
-                                "handler ran a whole half late.",
-                        "missed": "Halves the firmware's own processing skipped since the previous "
-                                  "grab - this page's own halt/grab/restart cycle does not count "
-                                  "against it; it is the chain's main-loop budget, chain_run()'s.",
-                    }
-                    chain_counter_chips = {}
-                    for _k in ("overrun", "late", "missed"):
-                        chip = ui.chip(f"{_k} –", color="grey-8").props("dense outline")
-                        with chip:
-                            ui.tooltip(CHAIN_COUNTER_TIPS[_k]).style("font-size: 14px; max-width: 22rem;")
-                        chain_counter_chips[_k] = chip
-                    chain_rate_chip = ui.chip("actual rate –", color="grey-8").props("dense outline")
-                    chain_halves_chip = ui.chip("halves/xfer –", color="grey-8").props("dense outline")
-                with ui.row().classes("w-full gap-2 flex-wrap"):
-                    CHAIN_EVAL_TIPS = {
-                        "turning points": "Coarse peaks and troughs tri_eval() found in the window.",
-                        "up": "Complete rising slopes: count and mean length in samples.",
-                        "down": "Complete falling slopes: count and mean length in samples.",
-                        "slip": "The grid verdict's own number: a lost or repeated sample shifts "
-                                "later turning points by a whole sample: PASS needs it under 0.5.",
-                        "model": "Measured mean slope length over the model from slpdat and the "
-                                 "DAC clock the frame reports (chaintest.c triangle_for()) - near "
-                                 "1.0 on a clean grid.",
-                        "steps": "Lost (zero) or repeated (dbl) single-sample steps, only checked "
-                                 "once the slope is steep enough (>= 40 LSB/sample) to tell them "
-                                 "from DAC/DNL noise.",
-                    }
-                    chain_eval_chips = {}
-                    for _k in ("turning points", "up", "down", "slip", "model", "steps"):
-                        chip = ui.chip(f"{_k} –", color="grey-8").props("dense outline")
-                        with chip:
-                            ui.tooltip(CHAIN_EVAL_TIPS[_k]).style("font-size: 14px; max-width: 22rem;")
-                        chain_eval_chips[_k] = chip
-
     # ---- console: the CLI traffic with the target (real or fake) ----
     with ui.card().classes("w-full rounded-xl p-3 mx-4 mb-4"):
         ui.label("console").classes("card-title")
@@ -2351,32 +1667,27 @@ def main_gui(args):
     def push_log(line: str):
         console_log.push(f"{time.strftime('%H:%M:%S')}  {line}")
 
-    def pll_values():
-        p1, p2 = (pll_sel.value or "5,5").split(",")
-        return int(p1), int(p2)
-
-    # Back-to-back capture above this rate delivers no data on the board:
-    # the DMA (one transfer per conversion) cannot keep up, overruns until
-    # the firmware's brake stops the channel, and the buffer is never full.
-    # Run 19: 8 MSPS clean, 40 MSPS "no data" (chaintest S8.5..S8.8).
-    B2B_MAX_KSPS = 10000.0
-
-    def update_rate_label():
+    # Board limits from the last hardware run (HARDWARE-LOG.md), shown as
+    # guidance only - the rate field does not enforce any of this.
+    def update_rate_hint():
         try:
-            p1, p2 = pll_values()
-            ksps = rate_ksps(p1, p2)
-            txt = (f"{ksps/1000:.3f} MSPS nominal   "
-                   f"(ADC clock {adc_clock_hz(p1, p2)/1e6:.1f} MHz)")
-            if ksps > B2B_MAX_KSPS:
-                txt += "   - above ~10 MSPS back-to-back gets no data on the board, pick 5/5 or slower"
-                rate_lbl.classes(replace="text-amber-400 mono")
-            else:
-                rate_lbl.classes(replace="text-cyan-300 mono")
-            rate_lbl.text = txt
-        except Exception:
-            rate_lbl.text = ""
-    pll_sel.on_value_change(lambda e: update_rate_label())
-    update_rate_label()
+            ksps = float(rate_in.value or 0)
+        except (TypeError, ValueError):
+            ksps = 0.0
+        if ksps <= 8000:
+            txt, cls = "the board ran clean to about 8 MSPS with the CPU processing", "text-cyan-300 mono"
+        elif ksps <= 10000:
+            txt, cls = "guidance: close to where the board showed occasional DMA overruns (~10 MSPS)", "text-amber-400 mono"
+        elif ksps <= 16000:
+            txt, cls = "guidance: occasional DMA overruns reported in this range (~10-16 MSPS)", "text-amber-400 mono"
+        elif ksps <= 20000:
+            txt, cls = "guidance: lost triggers reported from ~16 MSPS; the chain measured up to ~18-20 MSPS", "text-amber-400 mono"
+        else:
+            txt, cls = "guidance: above the ~18-20 MSPS the triggered chain has reached so far", "text-red-400 mono"
+        rate_hint_lbl.text = txt
+        rate_hint_lbl.classes(replace=cls)
+    rate_in.on_value_change(lambda e: update_rate_hint())
+    update_rate_hint()
 
     # ---- tooltips ----------------------------------------------------
     # Every control says what it is and what it changes on the board. The
@@ -2390,75 +1701,68 @@ def main_gui(args):
                    "sends a console command and waits for the prompt before the next one."),
         (conn_chip, "Connection state. It also shows the firmware's build line once connected, "
                     "which carries the git revision it was built from."),
-        (xfer_chip, "How samples are fetched. 'dump' is the text listing every firmware has; "
-                    "'blk' is the binary block with a CRC, used when the board offers it - "
-                    "same data, far fewer bytes."),
         (save_btn, "Write every setting on this page back to the settings file named above."),
         (save_as_btn, "Write the settings to a file you name, without changing which file the "
                       "page started from."),
         (load_as_btn, "Read settings from a file you name and put them on the page. Keys the "
                       "file does not carry keep their built-in default."),
-        (pll_sel, "The sample rate, and the only thing that sets it. The ADC clock is PLL1's "
-                  "1600 MHz divided by the two post-dividers, and back-to-back conversion takes "
-                  "8 ADC clocks. Console: 'pll <p1> <p2>'. The repeat timer, SCCP1 and the "
-                  "CLKGEN6 divider were all measured on the board to leave the rate untouched."),
-        (core_sel, "Which of the five ADC cores converts. They are independent and have different "
-                   "pins, so this also changes which pins the channel list below can reach. "
-                   "Console: 'core <1..5> [pinsel]'."),
-        (input_in, "PINSEL: the analog input of that core. 6 is the internal 15/16 x VDD "
-                   "reference used by the self-test, 7 the internal UREF line. The chip and board "
-                   "tiles show which pin the pair lands on. Console: 'input <0..15>'."),
+        (rate_in, "The chain's sample rate: 'stream on <ksps> ...' - the nearest 160 MHz / N "
+                  "(CLKGEN13) is what actually runs, and the frame's own 'ksps' (shown as 'actual "
+                  "rate' once a grab has come in) is what the charts use as fs. The label "
+                  "underneath is guidance from the last hardware run, not a limit."),
+        (input_mode_sel, "The chain's input. The test triangle is core 5 / PINSEL 3 (RA8) with "
+                         "the firmware's own DAC2 triangle started as the signal: 'stream on "
+                         "<ksps>'. Any other input leaves the DAC alone - switch a DAC on below "
+                         "if it should drive this pin - and sends 'stream on <ksps> <core> "
+                         "<pinsel> <samc>'."),
+        (core_sel, "ADC core (1..5), part of the chain's input when 'custom' is selected above - "
+                   "fixed at 5 for the test triangle. Also the core shown in the chip and board "
+                   "tiles below."),
+        (input_in, "PINSEL: the analog input of that core - fixed at 3 (RA8) for the test "
+                   "triangle. 6 is the internal 15/16 x VDD reference, 7 the internal UREF line."),
         (samc_in, "SAMC: how long the ADC samples before it converts, in steps of 2 x SAMC + 0.5 "
-                  "TAD. It sets the aperture, not the rate - a high source impedance needs more "
-                  "of it. Console: 'samc <0..31>'."),
-        (waveform_sel, "What the stand-in target generates. 'sine' uses the three fields below; "
-                       "'triangle' mirrors a DAC driving the ADC pin and needs a DAC switched on."),
-        (sig_in, "Frequency of the stand-in's sine, in kHz. Only meaningful below half the sample "
-                 "rate - above that the FFT shows the alias, which is itself worth seeing."),
-        (amp_in, "Amplitude of the stand-in's sine in ADC counts, peak. Full scale is 4096 counts, "
-                 "so 2048 is the largest undistorted swing around mid scale."),
-        (noise_in, "Gaussian noise the stand-in adds, standard deviation in counts. This is what "
-                   "sets the SNR the evaluation row reports."),
-        (harm2_in, "Second harmonic the stand-in adds, peak counts. Use it to see what the THD and "
-                   "H2 figures do with a known distortion."),
-        (harm3_in, "Third harmonic the stand-in adds, peak counts."),
-        (apply_btn, "Send the rate, sample time, core and channel above to the board, one command "
-                    "at a time. The line underneath reports each one."),
-        (buf_in, "Total size of the ping-pong buffer in samples; each half is half of it. The DMA "
-                 "fills one half while the CPU works on the other. Console: 'buf <n>'."),
-        (buf_btn, "Send the buffer size. The firmware sets the ADC burst length and the DMA block "
-                  "to match at the next start."),
-        (count_sel, "How many samples one capture fetches. At most one buffer half over 'dump', "
-                    "a whole buffer over 'blk'."),
-        (interval_in, "How often 'live' repeats the capture cycle, in milliseconds."),
-        (single_btn, "One cycle: start, let it run briefly, stop, fetch the samples, plot and "
-                     "transform them."),
-        (live_btn, "Repeat that cycle at the interval above until stopped."),
-        (chain_ksps_in, "The rate the standing chain is started at when 'start' is pressed. "
-                        "Console: 'stream on <ksps>' (chaintest.c chain_stream_on(), the nearest "
-                        "160 MHz / N)."),
-        (chain_interval_in, "How often this page halts the chain for one grab, in milliseconds "
-                            "(plus however long the transfer itself takes at the current baud "
-                            "rate). Does not need to match the firmware's own rate."),
-        (chain_btn, "Start: 'stream on <ksps>', then repeat 'stream grab' at the interval above "
-                    "until stopped. Stop: one final 'stream off', which restores the boot "
-                    "configuration."),
+                  "TAD. Part of 'stream on ... <samc>' for a custom input; fixed at 0 for the "
+                  "test triangle."),
+        (interval_in, "How often this page halts the chain for one grab, in milliseconds (plus "
+                      "however long the transfer itself takes at the current baud rate)."),
+        (single_btn, "One grab: if the chain is not already streaming, start it first ('stream "
+                     "on'), take one 'stream grab', then stop it again ('stream off'). Disabled "
+                     "while LIVE is running - stop LIVE first."),
+        (live_btn, "Start the chain if it is not already running at this rate/input, then repeat "
+                   "'stream grab' at the interval above until stopped. A rate or input change "
+                   "while LIVE is running is picked up before the next grab. STOP sends 'stream "
+                   "off', which restores the boot configuration."),
+        (sig_in, "Frequency of the fake target's sine, in kHz - only used with --fake and a "
+                 "custom input. Only meaningful below half the sample rate - above that the FFT "
+                 "shows the alias, which is itself worth seeing."),
+        (amp_in, "Amplitude of the fake target's sine in ADC counts, peak. Full scale is 4096 "
+                 "counts, so 2048 is the largest undistorted swing around mid scale."),
+        (noise_in, "Gaussian noise the fake target adds, standard deviation in counts. This is "
+                   "what sets the SNR the evaluation row reports."),
+        (harm2_in, "Second harmonic the fake target adds, peak counts. Use it to see what the THD "
+                   "and H2 figures do with a known distortion."),
+        (harm3_in, "Third harmonic the fake target adds, peak counts."),
+        (buf_in, "Total size of the ping-pong buffer in samples; each half is half of it - and "
+                 "half of it is exactly what one 'stream grab' sends. Console: 'buf <n>'."),
+        (buf_btn, "Send the buffer size. The firmware sets the DMA block to match at the next "
+                  "'stream on'."),
     ]
     for _u, _c in sorted(dac_ui.items()):
         _pin = "RA1" if _u == 1 else "RA8"
         TIPS += [
             (_c["on"], f"Switch DAC{_u} on or off. It drives pin {_pin} with a triangle in "
                        "hardware, no CPU involved, and that pin is also an ADC input of core 5 - "
-                       "so the ADC can read it back with no wire. Console: "
-                       f"'dac {_u} on|off ...'."),
+                       "so the ADC can read it back with no wire. Applied automatically whenever "
+                       "the chain runs with a custom input, or directly with this button. "
+                       f"Console: 'dac {_u} on|off ...'."),
             (_c["low"], "Lower end of the triangle, as a 12-bit DAC code. 0 is ground, 4095 is "
                         "VDD, and the DAC's own limits keep the usable range a little inside that."),
             (_c["high"], "Upper end of the triangle, as a 12-bit DAC code. Must be above the lower "
                          "end. The difference is the swing the ADC should see."),
             (_c["slp"], "SLPDAT: how many DAC codes the slope generator steps per DAC clock. "
                         "Larger is faster, so the period shown below shrinks."),
-            (_c["btn"], f"Send these settings to DAC{_u}. The line underneath is the board's own "
-                        "answer, including the period it computed."),
+            (_c["btn"], f"Send these settings to DAC{_u} right now. The line underneath is the "
+                        "board's own answer, including the period it computed."),
         ]
     for _sel in board_ctrls:
         TIPS.append((_sel, "Which evaluation kit is in front of you. It picks the device and so "
@@ -2466,8 +1770,8 @@ def main_gui(args):
                            "the EV74H48A has mikroBUS and XPLAINED PRO headers, the Nano two rows "
                            "of edge pads."))
     for _sel in core_ctrls:
-        TIPS.append((_sel, "ADC core, the same selection as in the sidebar. Changing it here "
-                           "changes it everywhere and redraws both tiles."))
+        TIPS.append((_sel, "ADC core, the same selection as in the acquisition card. Changing it "
+                           "here changes it everywhere and redraws both tiles."))
     for _sel in chan_ctrls:
         TIPS.append((_sel, "Analog input of that core, with the pin it sits on. Internal inputs "
                            "are marked as such: they have no pin and cannot be wired to."))
@@ -2484,19 +1788,18 @@ def main_gui(args):
             "version": SETTINGS_VERSION,
             "board": ui_state["board"],
             "view": {"dac_source": int(ui_state["dac"])},
-            "adc": {"core": int(core_sel.value), "pinsel": int(input_in.value or 0),
-                    "samc": int(samc_in.value or 0)},
-            "pll": {"postdiv1": pll_values()[0], "postdiv2": pll_values()[1]},
+            "acquisition": {
+                "mode": input_mode_sel.value or "test",
+                "ksps": int(rate_in.value or 8000),
+                "core": int(core_sel.value), "pinsel": int(input_in.value or 0),
+                "samc": int(samc_in.value or 0),
+                "interval_ms": int(interval_in.value or 500),
+            },
             "buffer": {"size": int(buf_in.value or 2048)},
-            "capture": {"count": int(count_sel.value), "interval_ms": int(interval_in.value or 500)},
-            "sweep": {"halves": int(sw_halves_in.value or 2000),
-                      "half_len": int(sw_halflen_in.value or 1024)},
-            "chain": {"ksps": int(chain_ksps_in.value or 8000),
-                      "interval_ms": int(chain_interval_in.value or 500)},
             "dac": {str(u): {"on": bool(c["on"].value), "low": int(c["low"].value or 0),
                              "high": int(c["high"].value or 0), "slpdat": int(c["slp"].value or 0)}
                     for u, c in dac_ui.items()},
-            "fake": {"waveform": waveform_sel.value, "signal_khz": float(sig_in.value or 0.0),
+            "fake": {"signal_khz": float(sig_in.value or 0.0),
                      "amplitude": float(amp_in.value or 0.0), "noise": float(noise_in.value or 0.0),
                      "harmonic2": float(harm2_in.value or 0.0),
                      "harmonic3": float(harm3_in.value or 0.0)},
@@ -2504,29 +1807,20 @@ def main_gui(args):
 
     def settings_apply(cfg):
         """Write a settings dict onto the controls. Anything out of range
-        for the current build is skipped rather than forced."""
+        for the current build is skipped rather than forced. Keys from an
+        older settings file (pll/sweep/capture/chain, before 25.09.2026)
+        are simply not read."""
         if cfg.get("board") in BOARDS:
             ui_state["board"] = cfg["board"]
         ui_state["dac"] = int(cfg.get("view", {}).get("dac_source", 0))
-        adc = cfg.get("adc", {})
-        core_sel.value = int(adc.get("core", 3))
-        input_in.value = int(adc.get("pinsel", 5))
-        samc_in.value = int(adc.get("samc", 0))
-        pll = cfg.get("pll", {})
-        key = f"{int(pll.get('postdiv1', 5))},{int(pll.get('postdiv2', 1))}"
-        if key in pll_sel.options:
-            pll_sel.value = key
+        acq = cfg.get("acquisition", {})
+        input_mode_sel.value = acq.get("mode") if acq.get("mode") in ("test", "custom") else "test"
+        rate_in.value = int(acq.get("ksps", 8000))
+        core_sel.value = int(acq.get("core", 3))
+        input_in.value = int(acq.get("pinsel", 5))
+        samc_in.value = int(acq.get("samc", 0))
+        interval_in.value = int(acq.get("interval_ms", 500))
         buf_in.value = int(cfg.get("buffer", {}).get("size", 2048))
-        cap = cfg.get("capture", {})
-        if int(cap.get("count", 1024)) in count_sel.options:
-            count_sel.value = int(cap.get("count", 1024))
-        interval_in.value = int(cap.get("interval_ms", 500))
-        swc = cfg.get("sweep", {})
-        sw_halves_in.value = int(swc.get("halves", 2000))
-        sw_halflen_in.value = int(swc.get("half_len", 1024))
-        chc = cfg.get("chain", {})
-        chain_ksps_in.value = int(chc.get("ksps", 8000))
-        chain_interval_in.value = int(chc.get("interval_ms", 500))
         for unit, c in dac_ui.items():
             d = cfg.get("dac", {}).get(str(unit), {})
             c["on"].value = bool(d.get("on", False))
@@ -2534,15 +1828,14 @@ def main_gui(args):
             c["high"].value = int(d.get("high", 0xF00))
             c["slp"].value = int(d.get("slpdat", 8))
         fake = cfg.get("fake", {})
-        if fake.get("waveform") in waveform_sel.options:
-            waveform_sel.value = fake["waveform"]
         sig_in.value = float(fake.get("signal_khz", 100.0))
         amp_in.value = float(fake.get("amplitude", 1500.0))
         noise_in.value = float(fake.get("noise", 6.0))
         harm2_in.value = float(fake.get("harmonic2", 150.0))
         harm3_in.value = float(fake.get("harmonic3", 0.0))
         update_dac_freq_label()
-        refresh_channel()
+        update_rate_hint()
+        on_mode_change()
 
     def show_settings_path():
         settings_path_lbl.text = state["settings_path"]
@@ -2576,6 +1869,19 @@ def main_gui(args):
     save_btn.on_click(lambda e: do_save())
     save_as_btn.on_click(lambda e: ask_path("save settings as", do_save, "save"))
     load_as_btn.on_click(lambda e: ask_path("load settings from", do_load, "load"))
+
+    # ---- the input mode: test (fixed core 5 / pin 3) or custom ----
+    def on_mode_change(e=None):
+        is_test = input_mode_sel.value == "test"
+        if is_test:
+            core_sel.value = 5
+            input_in.value = 3
+            samc_in.value = 0
+        core_sel.set_enabled(not is_test)
+        input_in.set_enabled(not is_test)
+        samc_in.set_enabled(not is_test)
+        refresh_channel()
+    input_mode_sel.on_value_change(on_mode_change)
 
     # One selection - eval kit, ADC core, channel - shown by the sidebar
     # and by both tiles. Any of them may change it; refresh_channel() writes
@@ -2622,14 +1928,6 @@ def main_gui(args):
             chip_pin_lbl.text = site[2] or site[1]
             needed, head, _sub = wire_hint(board_key, core, pinsel, unit)
             board_pin_lbl.text = site[1] + (f"   |   {head}" if head else "")
-            # A triangle needs a DAC running - on the board and in the
-            # stand-in alike, an idle DAC leaves the pin at whatever it
-            # floats to, which is a flat trace and looks like a bug.
-            any_dac_on = any(bool(c["on"].value) for c in dac_ui.values())
-            waveform_hint_lbl.text = (
-                "no DAC is on, so nothing drives the pin and the trace stays flat - "
-                "switch DAC1 or DAC2 on and press its apply button"
-                if (waveform_sel.value == "triangle" and not any_dac_on) else "")
             board_note_lbl.text = (
                 "Cyan = where the channel comes out. Grey pads carry another signal, dark pads are "
                 "power, ground or not on the device. Hover a pad for its device pin. Sources: DIM "
@@ -2668,7 +1966,6 @@ def main_gui(args):
 
     for sel in dac_ctrls:
         sel.on_value_change(on_dac_pick)
-    waveform_sel.on_value_change(lambda e: refresh_channel())
     for _u, _c in dac_ui.items():
         _c["on"].on_value_change(lambda e: refresh_channel())
     core_sel.on_value_change(lambda e: refresh_channel())
@@ -2704,146 +2001,42 @@ def main_gui(args):
         c.text = f"{name} {value}"
         c.props(f'color={"positive" if value == 0 else "negative"}')
 
-    # ---- the sweep tile ----
-    def sweep_show(text):
-        """Parse a log, fill table and chart, and say which model it backs."""
-        got = parse_sweep_log(text or "")
-        if not got["rows"]:
-            sw_msg_lbl.text = "no '[sweep] postdiv ...' line in that text"
-            sw_table.rows = []
-            sw_chart.options["series"] = []
-            sw_chart.update()
-            sw_verdict_chip.text, = ("no log yet",)
-            sw_verdict_chip.props("color=grey-8")
-            return
-        # The log's own header wins over the fields: it is what the run used.
-        if got["halves"]:
-            sw_halves_in.value = got["halves"]
-        if got["half_len"]:
-            sw_halflen_in.value = got["half_len"]
-        halves = int(sw_halves_in.value or 2000)
-        half_len = int(sw_halflen_in.value or 1024)
-        rows = sweep_predict(got["rows"], halves, half_len)
-        sw_table.rows = [{
-            "postdiv": r["postdiv"],
-            "nom": f"{r['nom_ksps']/1000:.2f}",
-            "clean": f"{r['clean_ksps']/1000:.2f}",
-            "dur": f"{r['duration_ms']:.1f}",
-            "honest": f"{r['bursts_honest']:.0f}",
-            "double": f"{r['bursts_double']:.0f}",
-            "meas": "–" if r["bursts"] is None else str(r["bursts"]),
-            "over": "/".join(r["overrun"]),
-            "missed": str(r["missed"]),
-        } for r in rows]
-        xs = [r["nom_ksps"] / 1000.0 for r in rows]
-        def line(name, key, colour, dashed):
-            return {"type": "line", "name": name, "showSymbol": True, "symbolSize": 6,
-                    "data": [[x, round(r[key], 1)] for x, r in zip(xs, rows)],
-                    "lineStyle": {"width": 1.5, "color": colour,
-                                  "type": "dashed" if dashed else "solid"},
-                    "itemStyle": {"color": colour}}
-        series = [line("if honest", "bursts_honest", ACCENT, True),
-                  line("if double-booked", "bursts_double", ACCENT2, True)]
-        meas = [[x, r["bursts"]] for x, r in zip(xs, rows) if r["bursts"] is not None]
-        if meas:
-            series.append({"type": "line", "name": "measured", "showSymbol": True,
-                           "symbolSize": 9, "data": meas,
-                           "lineStyle": {"width": 2.5, "color": "#f59e0b"},
-                           "itemStyle": {"color": "#f59e0b"}})
-        sw_chart.options["series"] = series
-        sw_chart.update()
-        colour, headline, detail = sweep_verdict(rows)
-        sw_verdict_chip.text = headline
-        sw_verdict_chip.props(f"color={colour}")
-        notes = [f"{len(rows)} rows"]
-        if got.get("consistent") is False:
-            notes.append(f"WARNING: the log says {got['per_point']} samples per point, but "
-                         f"{halves} halves x {half_len} samples is {halves*half_len} - the "
-                         f"predictions below rest on those two numbers")
-        first = rows[0]
-        if first.get("bursts"):
-            notes.append(f"row one separately (it is the only point starting from cold): "
-                         f"{first['bursts']} bursts against {first['bursts_honest']:.0f} if "
-                         f"honest and {first['bursts_double']:.0f} if double-booked")
-        notes.append(detail)
-        sw_msg_lbl.text = " · ".join(notes)
-
-    sw_parse_btn.on_click(lambda: sweep_show(sw_text.value))
-
-    async def sweep_run():
-        t = state["target"]
-        if not t:
-            sw_msg_lbl.text = "not connected"
-            return
-        sw_msg_lbl.text = "running 'test sweep' on the target, this takes about a minute ..."
-        sw_run_btn.disable()
-        try:
-            _ok, lines = await run.io_bound(t.cmd, "test sweep", 240.0)
-        finally:
-            sw_run_btn.enable()
-        sw_text.value = "\n".join(lines)
-        sweep_show(sw_text.value)
-    sw_run_btn.on_click(sweep_run)
-
-    def sweep_load_stored():
-        if not sw_stored:
-            return False
-        try:
-            with open(sw_stored[-1], encoding="utf-8", errors="replace") as fh:
-                sw_text.value = fh.read()
-        except OSError as exc:
-            sw_msg_lbl.text = f"cannot read {sw_stored[-1]}: {exc}"
-            return False
-        sweep_show(sw_text.value)
-        return True
-    sw_stored_btn.on_click(sweep_load_stored)
-
-    # Open on the real run rather than on an empty box: the two predicted
-    # curves are worth seeing even where the measured one is still missing,
-    # and it shows at a glance what the tile wants to be fed.
-    sweep_load_stored()
-
     # ---- connection ----
     def do_connect():
         if state["target"]:
             push_log(f"--- disconnected: {state['target'].port} ---")
             state["live"] = False
             live_btn.text, live_btn.icon = "live", "play_arrow"
-            state["chain_live"] = False
-            chain_btn.text, chain_btn.icon = "start", "play_arrow"
-            chain_status_lbl.text = "stream: off (disconnected)"
+            single_btn.enable()
             state["target"].close()
             state["target"] = None
+            state["acq_active"] = None
             conn_btn.text, conn_btn.icon = "connect", "usb"
             conn_chip.text, conn_chip.icon = "not connected", "link_off"
             conn_chip.props("color=grey-8")
-            xfer_chip.text = "transfer: -"
-            xfer_chip.props("color=grey-8")
             buf_lbl.text = "buf: not queried yet"
             return
         try:
             if port_sel.value == "fake":
                 push_log("--- connecting: fake target ---")
-                state["target"] = FakeTarget(signal_khz=float(sig_in.value or 100.0), on_log=push_log)
+                state["target"] = FakeTarget(signal_khz=float(sig_in.value or 100.0),
+                                             amplitude=float(amp_in.value or 1500.0),
+                                             noise_std=float(noise_in.value or 6.0),
+                                             harm2_amp=float(harm2_in.value or 150.0),
+                                             harm3_amp=float(harm3_in.value or 0.0),
+                                             on_log=push_log)
             else:
                 push_log(f"--- connecting: {port_sel.value} ---")
                 state["target"] = Target(port_sel.value, on_log=push_log)
             ok, lines = state["target"].cmd("version")
-            state["capture_ready"] = False
+            state["acq_active"] = None
             conn_chip.text = (lines[0] if ok and lines else f"{port_sel.value}: connected")
             conn_chip.icon = "link"
             conn_chip.props("color=positive")
             conn_btn.text, conn_btn.icon = "disconnect", "usb_off"
-            # docs/PLAN-BINARY-TRANSFER.md: probe once with 'help', use 'blk'
-            # (contiguous, up to 2048 samples) when the target has it, else
-            # fall back to the legacy 'dump' (last completed half, max 1024).
-            state["use_blk"] = probe_blk(state["target"])
-            xfer_chip.text = "transfer: blk (binary)" if state["use_blk"] else "transfer: dump (text)"
-            xfer_chip.props(f'color={"positive" if state["use_blk"] else "grey-8"}')
             state["buf_size"] = query_buf(state["target"])
             buf_in.value = state["buf_size"]
             buf_lbl.text = f"buf: {state['buf_size']} (half {state['buf_size'] // 2})"
-            update_count_options()
         except Exception as ex:
             push_log(f"--- connect failed: {ex} ---")
             conn_chip.text = f"connect failed: {ex}"
@@ -2851,28 +2044,6 @@ def main_gui(args):
             conn_chip.props("color=negative")
             state["target"] = None
     conn_btn.on_click(do_connect)
-
-    async def apply_settings():
-        t = state["target"]
-        if not t:
-            apply_lbl.text = "not connected"
-            return
-        if isinstance(t, FakeTarget):
-            t.signal_khz = float(sig_in.value or 100.0)
-            t.amplitude = float(amp_in.value or 0.0)
-            t.noise_std = float(noise_in.value or 0.0)
-            t.harm2_amp = float(harm2_in.value or 0.0)
-            t.harm3_amp = float(harm3_in.value or 0.0)
-            t.waveform = waveform_sel.value or "sine"
-        msgs = []
-        _p1, _p2 = pll_values()
-        for c in (f"pll {_p1} {_p2}",
-                  f"samc {int(samc_in.value or 0)}",
-                  f"core {int(core_sel.value)} {int(input_in.value or 0)}"):
-            ok, lines = await run.io_bound(t.cmd, c)
-            msgs.append(("✓ " if ok else "✗ ") + c)
-        apply_lbl.text = "   ".join(msgs)
-    apply_btn.on_click(apply_settings)
 
     async def apply_dac(unit):
         """cli.c: dac <1|2> <on|off> [low] [high] [slpdat]"""
@@ -2892,13 +2063,22 @@ def main_gui(args):
     for _u in sorted(dac_ui):
         dac_ui[_u]["btn"].on_click(lambda e, u=_u: apply_dac(u))
 
+    async def apply_active_dacs():
+        """Every DAC switched on in its card, sent to the board - what a
+        custom (non-test) input needs, since 'stream on <ksps> <core>
+        <pinsel> <samc>' leaves the DAC alone on purpose (chaintest.c)."""
+        for u in sorted(dac_ui):
+            if dac_ui[u]["on"].value:
+                await apply_dac(u)
+
     async def apply_buf():
         t = state["target"]
         if not t:
             buf_lbl.text = "not connected"
             return
         n = int(buf_in.value or state["buf_size"])
-        ok, lines = await run.io_bound(t.cmd, f"buf {n}")
+        async with port_lock:
+            ok, lines = await run.io_bound(t.cmd, f"buf {n}")
         got = _parse_buf(lines)
         if ok and got is not None:
             state["buf_size"] = got
@@ -2906,31 +2086,59 @@ def main_gui(args):
             buf_lbl.text = f"buf: {got} (half {got // 2})"
         else:
             buf_lbl.text = "buf refused: " + " ".join(lines)
-        update_count_options()  # the capture 'windows' follow the new buffer size
-        if ok:
-            await one_cycle()  # refresh the charts immediately against the new size
+        if ok and not state["live"]:
+            await one_cycle()   # refresh the charts immediately against the new size
     buf_btn.on_click(apply_buf)
 
-    # ---- capture ----
-    async def prepare_capture():
-        """Put the capture tile's settings on the board: rate, SAMC,
-        core/input, and every DAC that is switched on here. Called once
-        before the first capture after connecting and after every chain
-        stream (see capture_ready)."""
-        await apply_settings()
-        for u in sorted(dac_ui):
-            if dac_ui[u]["on"].value:
-                await apply_dac(u)
-        state["capture_ready"] = True
+    # ---- acquisition: configure, start/keep the chain, grab, repeat ----
+    def current_acq_cfg():
+        mode = input_mode_sel.value or "test"
+        ksps = int(rate_in.value or 8000)
+        if mode == "test":
+            return dict(mode="test", ksps=ksps, core=5, pinsel=3, samc=0)
+        return dict(mode="custom", ksps=ksps, core=int(core_sel.value),
+                    pinsel=int(input_in.value or 0), samc=int(samc_in.value or 0))
 
-    def cycle_failed(text):
-        p1, p2 = pll_values()
-        if rate_ksps(p1, p2) > B2B_MAX_KSPS:
-            text += "   (the rate is above ~10 MSPS back-to-back - pick 5/5 or slower)"
+    def sync_fake_signal(t):
+        if isinstance(t, FakeTarget):
+            t.signal_khz = float(sig_in.value or 100.0)
+            t.amplitude = float(amp_in.value or 0.0)
+            t.noise_std = float(noise_in.value or 0.0)
+            t.harm2_amp = float(harm2_in.value or 0.0)
+            t.harm3_amp = float(harm3_in.value or 0.0)
+
+    def cycle_failed(text, stop_live=True):
         cyc_lbl.text = text
         cyc_lbl.classes(replace="text-red-400 mono")
-        state["live"] = False
-        live_btn.text, live_btn.icon = "live", "play_arrow"
+        if stop_live and state["live"]:
+            state["live"] = False
+            live_btn.text, live_btn.icon = "live", "play_arrow"
+            single_btn.enable()
+
+    async def ensure_streaming():
+        """Send 'stream on ...' only when the chain is not already running
+        at this rate/input - and resend it (which reconfigures cleanly:
+        chain_stream_on_input() calls chain_stream_off() first) as soon as
+        the rate or the input changes."""
+        t = state["target"]
+        if not t:
+            return False
+        cfg = current_acq_cfg()
+        if state["acq_active"] == cfg:
+            return True
+        cmd = (f"stream on {cfg['ksps']}" if cfg["mode"] == "test"
+               else f"stream on {cfg['ksps']} {cfg['core']} {cfg['pinsel']} {cfg['samc']}")
+        async with port_lock:
+            ok, lines = await run.io_bound(t.cmd, cmd)
+        if not ok:
+            cycle_failed("stream on refused: " + " ".join(lines))
+            return False
+        state["acq_active"] = cfg
+        state["grabs"] = 0
+        state["live_t0"] = time.time()
+        if cfg["mode"] == "custom":
+            await apply_active_dacs()
+        return True
 
     async def one_cycle():
         t = state["target"]
@@ -2938,101 +2146,109 @@ def main_gui(args):
             return
         state["busy"] = True
         try:
-            if state["chain_live"]:
-                await chain_stop()        # the chain stream and a capture exclude each other
+            sync_fake_signal(t)
+            if not await ensure_streaming():
+                return
             async with port_lock:
-                if not state["capture_ready"]:
-                    cyc_lbl.text = "sending the capture settings (rate, core/input, DACs) ..."
-                    cyc_lbl.classes(replace="text-slate-300 mono")
-                    await prepare_capture()
-                count = int(count_sel.value)
-                buf = state["buf_size"]
-                # Both paths deliver the whole buffer now: "blk" always did,
-                # and "dump" follows a "snap", after which all of it is valid.
-                count = min(count, buf)
-                samples, status = await run.io_bound(capture_cycle, t, count, 0.02, state["use_blk"])
-                # The board reports its own clock; fall back to the setting.
-                fs = float(status.get("ksps_nominal", 0)) * 1e3
-                if fs <= 0:
-                    fs = rate_ksps(int(status.get("postdiv1", pll_values()[0])),
-                                   int(status.get("postdiv2", pll_values()[1]))) * 1e3
-                if not math.isfinite(fs) and "fs_hz" in status:
-                    # Back-to-back has no documented rate on real hardware (only a
-                    # 'sweep' measurement could tell); the fake target reports its
-                    # stand-in rate here instead, so the FFT does not go blank.
-                    fs = float(status["fs_hz"])
-                f, db = spectrum(samples, fs)
+                ok, samples, meta = await run.io_bound(t.grab)
+            if not ok:
+                cycle_failed("grab failed: " + meta.get("error", "unknown"))
+                state["acq_active"] = None        # the board says it is not streaming any more
+                return
+            state["cycles"] += 1
+            state["grabs"] += 1
+            fs = meta["ksps"] * 1e3
+            f, db = spectrum(samples, fs)
 
-                n_samp = max(len(samples) - 1, 1)
-                duration_s = n_samp / fs if math.isfinite(fs) and fs > 0 else 1.0
-                t_scale, t_name = ((1e6, "time (µs)") if duration_s < 1e-3 else
-                                   (1e3, "time (ms)") if duration_s < 1.0 else (1.0, "time (s)"))
-                time_chart.options["series"][0]["data"] = [[i, int(v)] for i, v in enumerate(samples)]
-                time_chart.options["xAxis"][0]["max"] = n_samp
-                time_chart.options["xAxis"][1]["max"] = duration_s * t_scale
-                time_chart.options["xAxis"][1]["name"] = t_name
-                time_chart.update()
-                fft_chart.options["series"][0]["data"] = [[float(fx) / 1e3, float(d)] for fx, d in zip(f, db)]
-                fft_chart.options["xAxis"][0]["max"] = float(f[-1]) / 1e3 if len(f) else 1
-                fft_chart.update()
-                state["cycles"] += 1
+            n_samp = max(len(samples) - 1, 1)
+            duration_s = n_samp / fs if fs > 0 else 1.0
+            t_scale, t_name = ((1e6, "time (µs)") if duration_s < 1e-3 else
+                               (1e3, "time (ms)") if duration_s < 1.0 else (1.0, "time (s)"))
+            time_chart.options["series"][0]["data"] = [[i, int(v)] for i, v in enumerate(samples)]
+            time_chart.options["xAxis"][0]["max"] = n_samp
+            time_chart.options["xAxis"][1]["max"] = duration_s * t_scale
+            time_chart.options["xAxis"][1]["name"] = t_name
+            time_chart.update()
+            fft_chart.options["series"][0]["data"] = [[float(fx) / 1e3, float(d)] for fx, d in zip(f, db)]
+            fft_chart.options["xAxis"][0]["max"] = float(f[-1]) / 1e3 if len(f) else 1
+            fft_chart.update()
 
-                metrics = analyze_spectrum(f, db)
-                peak = metrics.get("fund_freq", float("nan")) / 1e3 if metrics else float("nan")
-                fs_text = f"fs {fs/1e6:.3f} MHz" if math.isfinite(fs) else "fs unknown (back-to-back, real hardware only)"
-                cyc_lbl.classes(replace="text-slate-300 mono")
-                cyc_lbl.text = (f"cycle {state['cycles']}   {len(samples)} samples   "
-                                f"{fs_text}" + (f"   peak {peak:.1f} kHz" if math.isfinite(peak) else ""))
-                for k in chips:
-                    if k in status:
-                        set_chip(k, status[k])
-                blocks = status.get("blocks")
-                bursts = status.get("bursts", status.get("burst_starts"))
-                if blocks is not None and bursts and bursts > 1:
-                    clean = (blocks == 2 * bursts)
-                    ratio_chip.text = (f"blocks/bursts {blocks}/{bursts}"
-                                       + ("" if clean else f"  NOT 1:2 ({blocks / (2 * bursts):.1f}x)"))
-                    ratio_chip.props(f'color={"positive" if clean else "negative"}')
-                elif blocks is not None and bursts:
-                    # One burst, two blocks - what a one-shot produces by
-                    # construction, whether or not the fault exists.
-                    ratio_chip.text = f"blocks/bursts {blocks}/{bursts} (one-shot, says nothing)"
-                    ratio_chip.props("color=grey-8")
-                else:
-                    ratio_chip.text = "blocks/bursts –"
-                    ratio_chip.props("color=grey-8")
-                meas, nom = status.get("ksps_measured"), status.get("ksps_nominal")
-                if meas and nom:
-                    dev = (meas - nom) / nom * 100.0
-                    rate_chip.text = f"rate {meas/1000:.2f} of {nom/1000:.2f} MSPS ({dev:+.1f} %)"
-                    rate_chip.props(f'color={"positive" if abs(dev) <= 5.0 else "negative"}')
-                else:
-                    rate_chip.text = "rate –"
-                    rate_chip.props("color=grey-8")
+            now = time.time()
+            rate_txt = ""
+            if state["live_t0"] and now > state["live_t0"]:
+                rate_txt = f"   {state['grabs'] / (now - state['live_t0']):.2f} grabs/s"
+            cyc_lbl.classes(replace="text-slate-300 mono")
+            cyc_lbl.text = (f"grab {state['cycles']}   n={len(samples)}   from={meta['from_']}   "
+                            f"{meta['ksps']} kSPS actual{rate_txt}")
+            for k in ("overrun", "late", "missed"):
+                set_chip(k, meta[k])
+            rate_chip.text = f"actual rate {meta['ksps']} kSPS"
+            rate_chip.props("color=grey-8")
+            halves_chip.text = f"halves {meta['halves']} / xfer {meta['transfers']}"
+            halves_chip.props("color=grey-8")
 
-                if metrics:
-                    eval_chips["fundamental"].text = f"fundamental {metrics['fund_freq']/1e3:.2f} kHz"
-                    eval_chips["level"].text = f"level {metrics['fund_db']:.1f} dBFS"
-                    eval_chips["noise floor"].text = f"noise floor {metrics['noise_db']:.1f} dBFS"
-                    eval_chips["SNR"].text = f"SNR {metrics['snr_db']:.1f} dB"
-                    eval_chips["THD"].text = f"THD {metrics['thd_pct']:.2f} %"
-                    for k in ("SNR",):
-                        eval_chips[k].props(f'color={"positive" if metrics["snr_db"] >= 40 else "negative"}')
-                    harmonics = {h["k"]: h for h in metrics["harmonics"]}
-                    for k in (2, 3, 4, 5):
-                        chip = eval_chips[f"H{k}"]
-                        if k in harmonics:
-                            chip.text = f"H{k}  {harmonics[k]['rel_db']:.1f} dBc"
-                            chip.props("color=grey-8")
-                        else:
-                            chip.text = f"H{k} –"
-                            chip.props("color=grey-8")
+            metrics = analyze_spectrum(f, db)
+            if metrics:
+                eval_chips["fundamental"].text = f"fundamental {metrics['fund_freq']/1e3:.2f} kHz"
+                eval_chips["level"].text = f"level {metrics['fund_db']:.1f} dBFS"
+                eval_chips["noise floor"].text = f"noise floor {metrics['noise_db']:.1f} dBFS"
+                eval_chips["SNR"].text = f"SNR {metrics['snr_db']:.1f} dB"
+                eval_chips["THD"].text = f"THD {metrics['thd_pct']:.2f} %"
+                eval_chips["SNR"].props(f'color={"positive" if metrics["snr_db"] >= 40 else "negative"}')
+                harmonics = {h["k"]: h for h in metrics["harmonics"]}
+                for k in (2, 3, 4, 5):
+                    chip = eval_chips[f"H{k}"]
+                    if k in harmonics:
+                        chip.text = f"H{k}  {harmonics[k]['rel_db']:.1f} dBc"
+                    else:
+                        chip.text = f"H{k} –"
+                    chip.props("color=grey-8")
+
+            if meta["slpdat"] > 0:
+                triangle_card.set_visibility(True)
+                r = chain_tri_eval([int(v) for v in samples])
+                verdict = chain_grid_ok(r)
+                triangle_verdict_chip.text = "PASS" if verdict else "FAIL"
+                triangle_verdict_chip.props(f'color={"positive" if verdict else "negative"}')
+                triangle_chips["turning points"].text = f"turning points {r['tps']}"
+                triangle_chips["up"].text = f"up {r['n_up']} · {r['l_up']:.2f} smp"
+                triangle_chips["down"].text = f"down {r['n_dn']} · {r['l_dn']:.2f} smp"
+                triangle_chips["slip"].text = f"slip {r['slip']:.2f} (k={r['slip_k']}, {r['slip_n']} spans)"
+                model = chain_model_slope_samples(meta["slpdat"], meta["dac_hz"], meta["ksps"])
+                mean_len = (r["l_up"] + r["l_dn"]) / 2.0 if (r["n_up"] or r["n_dn"]) else 0.0
+                triangle_chips["model"].text = (f"slope/model {mean_len / model:.3f}"
+                                                if model > 0 and mean_len > 0 else "slope/model –")
+                triangle_chips["steps"].text = (f"zero {r['zero']} dbl {r['dbl']}" if r["step_checked"]
+                                                else "steps not checked (slope < 40 LSB/sample)")
+                triangle_chips["steps"].props(
+                    f'color={"positive" if (not r["step_checked"]) or (r["zero"] == 0 and r["dbl"] == 0) else "negative"}')
+            else:
+                triangle_card.set_visibility(False)
         except Exception as ex:
             cycle_failed(f"cycle failed: {ex}")
+            state["acq_active"] = None
         finally:
             state["busy"] = False
 
-    single_btn.on_click(one_cycle)
+    async def stop_stream():
+        t = state["target"]
+        if t:
+            async with port_lock:
+                await run.io_bound(t.cmd, "stream off")
+        state["acq_active"] = None
+
+    async def do_single():
+        """One grab: if nothing is streaming yet, start it, grab once, and
+        stop it again - LIVE leaves the chain running between grabs, SINGLE
+        does not. Disabled while LIVE is running (see the live_btn/
+        single_btn enable/disable pairing below)."""
+        if state["live"] or not state["target"]:
+            return
+        pre_active = state["acq_active"] is not None
+        await one_cycle()
+        if not pre_active:
+            await stop_stream()
+    single_btn.on_click(do_single)
 
     async def live_loop():
         while state["live"]:
@@ -3040,130 +2256,19 @@ def main_gui(args):
             await asyncio.sleep(max(0.05, float(interval_in.value or 500) / 1000.0))
 
     def toggle_live():
-        state["live"] = not state["live"]
-        live_btn.text = "stop" if state["live"] else "live"
-        live_btn.icon = "stop" if state["live"] else "play_arrow"
         if state["live"]:
-            asyncio.create_task(live_loop())
-    live_btn.on_click(toggle_live)
-
-    # ---- the chain stream cycle: halt -> transfer -> restart -> repeat ----
-    def set_chain_counter_chip(key, value):
-        chip = chain_counter_chips[key]
-        chip.text = f"{key} {value}"
-        chip.props(f'color={"positive" if value == 0 else "negative"}')
-
-    async def chain_cycle():
-        """One 'stream grab': halted on the board for as long as this call
-        takes, so the interval below is a floor, not a guarantee - a slow
-        link (115200 baud, a big buffer) makes the real cycle longer, which
-        is the halt/transfer/restart design working as intended, not a bug
-        in this loop."""
-        t = state["target"]
-        if not t or state["chain_busy"]:
-            return
-        state["chain_busy"] = True
-        try:
-            async with port_lock:
-                ok, samples, meta = await run.io_bound(t.grab)
-            if not ok:
-                chain_status_lbl.text = "grab failed: " + meta.get("error", "unknown")
-                chain_verdict_chip.text = "grab failed"
-                chain_verdict_chip.props("color=negative")
-                state["chain_live"] = False
-                chain_btn.text, chain_btn.icon = "start", "play_arrow"
-                return
-            state["chain_grabs"] += 1
-            r = chain_tri_eval([int(v) for v in samples])
-            verdict = chain_grid_ok(r)
-            chain_chart.options["series"][0]["data"] = [[i, int(v)] for i, v in enumerate(samples)]
-            chain_chart.options["xAxis"][0]["max"] = max(len(samples) - 1, 1)
-            chain_chart.update()
-
-            chain_verdict_chip.text = "PASS" if verdict else "FAIL"
-            chain_verdict_chip.props(f'color={"positive" if verdict else "negative"}')
-            chain_eval_chips["turning points"].text = f"turning points {r['tps']}"
-            chain_eval_chips["up"].text = f"up {r['n_up']} · {r['l_up']:.2f} smp"
-            chain_eval_chips["down"].text = f"down {r['n_dn']} · {r['l_dn']:.2f} smp"
-            chain_eval_chips["slip"].text = f"slip {r['slip']:.2f} (k={r['slip_k']}, {r['slip_n']} spans)"
-            model = chain_model_slope_samples(meta["slpdat"], meta["dac_hz"], meta["ksps"])
-            mean_len = (r["l_up"] + r["l_dn"]) / 2.0 if (r["n_up"] or r["n_dn"]) else 0.0
-            chain_eval_chips["model"].text = (f"slope/model {mean_len / model:.3f}"
-                                              if model > 0 and mean_len > 0 else "slope/model –")
-            chain_eval_chips["steps"].text = (f"zero {r['zero']} dbl {r['dbl']}" if r["step_checked"]
-                                              else "steps not checked (slope < 40 LSB/sample)")
-            chain_eval_chips["steps"].props(
-                f'color={"positive" if (not r["step_checked"]) or (r["zero"] == 0 and r["dbl"] == 0) else "negative"}')
-
-            for k in ("overrun", "late", "missed"):
-                set_chain_counter_chip(k, meta[k])
-            chain_rate_chip.text = f"actual rate {meta['ksps']} kSPS"
-            chain_rate_chip.props("color=grey-8")
-            chain_halves_chip.text = f"halves {meta['halves']} / xfer {meta['transfers']}"
-            chain_halves_chip.props("color=grey-8")
-
-            now = time.time()
-            rate_txt = ""
-            if state["chain_t0"] is not None and now > state["chain_t0"]:
-                rate_txt = f"   {state['chain_grabs'] / (now - state['chain_t0']):.2f} grabs/s"
-            chain_status_lbl.text = (f"grab {state['chain_grabs']}   n={len(samples)}   "
-                                     f"from={meta['from_']}   slpdat={meta['slpdat']}   "
-                                     f"dac {meta['dac_hz'] / 1e6:.1f} MHz{rate_txt}")
-        except Exception as ex:
-            chain_status_lbl.text = f"grab failed: {ex}"
-            chain_verdict_chip.text = "grab failed"
-            chain_verdict_chip.props("color=negative")
-            state["chain_live"] = False
-            chain_btn.text, chain_btn.icon = "start", "play_arrow"
-        finally:
-            state["chain_busy"] = False
-
-    async def chain_live_loop():
-        while state["chain_live"]:
-            await chain_cycle()
-            await asyncio.sleep(max(0.05, float(chain_interval_in.value or 500) / 1000.0))
-
-    async def chain_start():
-        t = state["target"]
-        if not t:
-            chain_status_lbl.text = "not connected"
-            return
-        if state["live"]:                 # a capture live and the chain exclude each other
             state["live"] = False
             live_btn.text, live_btn.icon = "live", "play_arrow"
-        while state["busy"]:              # let a capture in flight finish
-            await asyncio.sleep(0.05)
-        state["capture_ready"] = False    # 'stream on' reconfigures the board
-        async with port_lock:
-            ok, lines = await run.io_bound(t.cmd, f"stream on {int(chain_ksps_in.value or 8000)}")
-        if not ok:
-            chain_status_lbl.text = "stream on refused: " + " ".join(lines)
-            return
-        state["chain_live"] = True
-        state["chain_grabs"] = 0
-        state["chain_t0"] = time.time()
-        chain_btn.text, chain_btn.icon = "stop", "stop"
-        chain_status_lbl.text = f"stream: on - {int(chain_ksps_in.value or 8000)} ksps"
-        asyncio.create_task(chain_live_loop())
-
-    async def chain_stop():
-        state["chain_live"] = False
-        chain_btn.text, chain_btn.icon = "start", "play_arrow"
-        while state["chain_busy"]:        # let a grab in flight finish
-            await asyncio.sleep(0.05)
-        t = state["target"]
-        if t:
-            async with port_lock:
-                await run.io_bound(t.cmd, "stream off")
-        state["capture_ready"] = False    # the board is back in its boot configuration
-        chain_status_lbl.text = "stream: off"
-
-    def toggle_chain():
-        if state["chain_live"]:
-            asyncio.create_task(chain_stop())
+            single_btn.enable()
+            asyncio.create_task(stop_stream())
         else:
-            asyncio.create_task(chain_start())
-    chain_btn.on_click(toggle_chain)
+            if not state["target"]:
+                return
+            state["live"] = True
+            live_btn.text, live_btn.icon = "stop", "stop"
+            single_btn.disable()
+            asyncio.create_task(live_loop())
+    live_btn.on_click(toggle_live)
 
     if args.fake or args.port:
         ui.timer(0.5, do_connect, once=True)

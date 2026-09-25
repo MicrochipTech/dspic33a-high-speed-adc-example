@@ -46,7 +46,7 @@ come from. That convention is kept.
 | `diag.c/.h` | `fail()` codes, trap handler, boot record in persistent RAM (including `chain_mark`, the chain test's stage), `RCON` report, `regs_dump()` | every module's `*_regs_dump()` |
 | `cli.c`, `console.h` | UART2, the commands, the `sweep`, the `test` suite, the variant matrix, the chain/stream commands (`stream grab`'s `GRAB` frame builder among them), the binary block transfer (`snap`, `rate`, `blk`) | clock, capture, dactest, led, diag |
 | `sim.h` | the hooks the simulator build needs; all empty on silicon | - |
-| `tools/adc_gui.py` | NiceGUI front end: sets rate/pacing/SAMC/input over the console, captures a buffer half per cycle, plots time signal and FFT; `--fake` uses a built-in stand-in, `--selftest` runs the pipeline without GUI. Its "chain stream" tile drives `stream on/off/grab` on its own, in a loop, and evaluates every grab with `tools/eval_chain.py`'s `tri_eval`/`grid_ok` (imported, not re-implemented). `tools/gui_setup.bat` makes its venv (`tools/.venv`, ignored). `tools/boards.py`, `tools/pins64.py`, `tools/pins128.py` hold the board/pin tables the GUI's board tile reads | the console protocol only |
+| `tools/adc_gui.py` | NiceGUI front end for the triggered chain only (25.09.2026 on - back-to-back retired from this tool, owner's decision): one acquisition card drives `stream on <ksps> [core pinsel [samc]]` / `off` / `grab` in a loop, plots the time signal and FFT from each grab, and evaluates the test signal's triangle with `tools/eval_chain.py`'s `tri_eval`/`grid_ok` (imported, not re-implemented) when the frame's own `slp > 0`; `--fake` uses a built-in stand-in (the same triangle for the test signal, a configured sine with harmonics for any other input), `--selftest` runs the pipeline without GUI. `tools/gui_ui_test.py` drives the page itself with a headless browser (Playwright) against `--fake`. `tools/gui_setup.bat` makes its venv (`tools/.venv`, ignored). `tools/boards.py`, `tools/pins64.py`, `tools/pins128.py` hold the board/pin tables the GUI's board tile reads | the console protocol only |
 | `tools/eval_chain.py` | `chain all` log evaluator (`tri_eval`, `grid_ok`, `synth`) and CLI report; imported by `adc_gui.py` for the chain tile and by `FakeTarget.grab()` for its synthetic frames, so there is one triangle evaluator and one synthetic-triangle generator, not two | - |
 | `cmd_parser.c/.h` | the command parser, unchanged from github.com/zabooh/cmd_parser (Apache 2.0) - do not edit | - |
 
@@ -146,22 +146,32 @@ Build the simulator variant to prove it still compiles; run it when asked.
   `stream`, dispatched inside `cmd_stream_fn()`, exactly like `stream on`/`off` - it did
   not need a 27th slot, and was chosen that way on purpose to keep the 5 free.**
 
-## Binary block transfer (`snap`, `rate`, `blk`)
+## Binary block transfer (`snap`, `rate`, `blk`) - firmware only, since 25.09.2026
 
 `docs/PLAN-BINARY-TRANSFER.md`: a `blk <n>` command sends a contiguous block of up to
 2048 samples as binary with a text header and a CRC-16 line (`crc16.c/.h`); `snap` fills
 the buffer once and stops so the block being read is not being overwritten; `rate <ksps>`
-sets the sample rate directly. Built and in daily use by `tools/adc_gui.py` (the GUI
-falls back to the older text `dump` protocol if `blk` is not present, so it also drives
-older firmware). An optional `baud` command to raise the UART rate is designed
+sets the sample rate directly. These are the back-to-back commands; the firmware keeps
+them for a terminal, but `tools/adc_gui.py` no longer sends any of them (owner's
+decision, 25.09.2026: the triggered chain, `stream grab`'s `GRAB` frame below, is the
+GUI's only data path now). An optional `baud` command to raise the UART rate is designed
 (`docs/PLAN-BINARY-TRANSFER.md` step 6) but not yet implemented.
 
 ## The GUI's chain stream cycle (`stream grab`, since 25.09.2026)
 
 The goal: from the GUI, configure and start the chain stream, and then, continuously and
 automatically, halt it, transfer a contiguous window, restart it, visualise and analyse -
-until the user stops it. Design decisions, all documented where the code that implements
-them lives, restated here because they were not obvious:
+until the user stops it. Since 25.09.2026 this is the GUI's ONLY capture path: the
+back-to-back capture tile, the PLL rate selector and the sweep tile were removed from
+`tools/adc_gui.py` (owner's decision - back-to-back is obsolete), and what used to be a
+second "chain stream" tile is now the one and only acquisition card, with one chart and
+one set of evaluation chips. `chain_stream_on_input()` (chaintest.c, cli.c's
+`stream on <ksps> <core> <pinsel> [<samc>]`) lets the GUI point the same cycle at any ADC
+input, not only the DAC2 test triangle on RA8 - the DAC is then left alone (`slp=0` in
+the frame) and the GUI plays a sine with harmonics through `--fake` instead, so
+SNR/THD/harmonics still show something with a custom input. Design decisions, all
+documented where the code that implements them lives, restated here because they were
+not obvious:
 
 - **The halt does not tear the chain down.** `capture_chain_halt()`/`_resume()`
   (`capture.c`) stop and restart the SCCP1 trigger only - the DMA channel stays armed,
@@ -199,13 +209,19 @@ them lives, restated here because they were not obvious:
   target's synthetic triangle uses the same module's `synth()`.
 - **Tested without a board**, per the design brief: `python tools/adc_gui.py --selftest`
   exercises `FakeTarget.grab()`/`parse_grab_frame()` for a refusal before `stream on`, a
-  clean grab that passes the grid check, the next grab landing in the OTHER buffer half
-  (`from > 0`), a lost-sample grab that correctly fails, a CRC mismatch, a truncated
-  frame, and `Target.grab()` timing out against a serial stub that never answers - the
-  same bounded-wait code path a real disconnected board would hit. Not tested without a
-  board: whether `capture_chain_halt()` really lands cleanly on real silicon timing, and
-  whether the halt/grab/restart cycle holds up at the higher rates (`docs/HARDWARE-LOG.md`,
-  25.09.2026 entry).
+  clean test-triangle grab that passes the grid check with the frame's own actual rate
+  used as the FFT's fs, the next grab landing in the OTHER buffer half (`from > 0`), a
+  lost-sample grab that correctly fails, a custom-input grab (`stream on <ksps> <core>
+  <pinsel> <samc>`) with `slp=0` and a real FFT peak from the fake sine, a CRC mismatch, a
+  truncated frame, and `Target.grab()` timing out against a serial stub that never
+  answers - the same bounded-wait code path a real disconnected board would hit.
+  `tools/gui_ui_test.py` (Playwright, headless Chrome) additionally drives the page
+  itself against `--fake`: connect, LIVE with the test input (fs follows the rate, a PASS
+  verdict), a rate change while LIVE, LIVE with a custom input (a spectrum with a
+  fundamental, the triangle card hidden), STOP, SINGLE, no server-side exception. Not
+  tested without a board: whether `capture_chain_halt()` really lands cleanly on real
+  silicon timing, and whether the halt/grab/restart cycle holds up at the higher rates
+  (`docs/HARDWARE-LOG.md`, 25.09.2026 entry).
 
 ## How the example is built, and what that costs
 
