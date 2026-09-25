@@ -1,6 +1,9 @@
 # dsPIC33AK512MPS512: continuous ADC acquisition through the DMA at a selectable rate
 
-Results report, status of 25.09.2026 (master `c3bc644`, nano-board `0e7244f`)
+Results report, 25.09.2026. Evidence from master `fbfd883` (run 19, `chain all`) and
+nano-board `8861adc` (GUI live test); the code described is master `c3bc644` / nano-board
+`0e7244f`, which adds the corrected test verdict and the faster processing loop (not yet
+run on the board).
 
 ## 1. What this was about
 
