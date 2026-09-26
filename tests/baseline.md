@@ -116,3 +116,49 @@ will be captured by the first `[SMOKE]` run (P0.7), per the plan.
 The simulator was **not** run for this baseline (`tools\sim_trap.py` requires explicit
 user go-ahead, per `CLAUDE.md`/the task instructions); nothing above comes from running
 it, only from the existing board logs and from the `build.bat sim` compile.
+
+# P0.6 Disassembly comparison (`tools/fncmp.py`)
+
+Git revision: `49dae4d` (firmware unchanged since `b41af3b`). Date: 27.09.2026.
+
+`python tools\fncmp.py A.elf B.elf [--ignore-strings]` compares two ELFs function by
+function (rules in the script's header); `--count NAME` / `--indirect NAME` answer the
+P8.1 questions for one function. `--ignore-strings` is needed whenever the two ELFs
+were built at different times: `BUILD_ID` carries `__DATE__`/`__TIME__`, and the four
+functions that embed that line (`_main`, `_cli_init`, `_diag_report_build`,
+`chaintest.c:_stage0`) differ between any two builds otherwise.
+
+## `_DMA0Interrupt` (P8.1 compares against this)
+
+```
+python tools\fncmp.py build\adc_dma_40msps.elf build\adc_dma_40msps_nano.elf --count _DMA0Interrupt --indirect _DMA0Interrupt
+adc_dma_40msps.elf: __DMA0Interrupt: 42 instructions (0 of them neop), 94 bytes
+adc_dma_40msps.elf: __DMA0Interrupt: 0 indirect call(s), 0 computed jump(s)
+adc_dma_40msps_nano.elf: __DMA0Interrupt: 42 instructions (0 of them neop), 94 bytes
+adc_dma_40msps_nano.elf: __DMA0Interrupt: 0 indirect call(s), 0 computed jump(s)
+```
+
+The 42 instructions are: 19 saves (`push 0x8`, `push.l fsr`, `push.l fcr`, w0..w7 via
+`mov.l wN, [w15++]`, `push.l f0`..`f7`), `bclr.b 0x99, #0x5` (the flag),
+`mov.l 0x002318, w0` (DMA0STAT), `rcall <_dma0_event>`, the 19 restores and `retfie`. The simulator build has no `_DMA0Interrupt` (`sim_dma.c`
+links instead of `dma.c`), so the count is for the hardware and nano builds only.
+
+An indirect call in this ISA is `call wN` (the command dispatcher `_cmd_parser_write`
+has two: `call w2`, `call w0`); a computed jump is `bra wN` (the compiler's switch
+tables). `--indirect` exits 1 when the function has an indirect call.
+
+## Verification of the tool (27.09.2026, hardware build)
+
+| Check | Result |
+|---|---|
+| ELF against itself (hw, sim, nano) | 375/332/375 functions, 0 differ, exit 0 |
+| one constant changed (`CCP1CON1bits.MOD` 1 -> 2 in `sccp.c`, reverted) | exactly 1 function: `_sccp1_start`, the diff shows `bfins.l #0, #4, #0x1` -> `#0x2` with the SFR address `0x1b00` left as it is |
+| an unused global function + variable inserted at the top of `clock.c` (every later function and variable moved; reverted) | `--ignore-strings`: 0 differ, only `_fncmp_dummy` reported as "only in B" |
+| the sixteen sources linked in reverse order (everything moved, code and data) | `--ignore-strings`: 375 same, 0 differ, exit 0 |
+| two builds of the same source ten minutes apart | `--ignore-strings`: 0 differ; without it the four `BUILD_ID` functions |
+| hw against nano | 12 functions differ (`_led_*`, `_console_*`, `_main`, `cli.c:_cmd_core_fn`, `chaintest.c:_restore`, `_diag_report_build`): the board profile |
+
+A full comparison of two hardware ELFs takes about 3 s (three toolchain calls per ELF:
+`objdump -d`, `objdump -s`, `readelf -s`; `xc-dsc-objdump` needs `-mdfp=` exactly like
+`bin2hex`, otherwise "can't disassemble for architecture UNKNOWN"). `hosttest.bat`
+1/1 and `trace.bat` 13/13 still pass; no firmware source changed.
