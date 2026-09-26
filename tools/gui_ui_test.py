@@ -170,6 +170,23 @@ try:
         ok, txt = wait_changed(page, cyc, c0, timeout=15.0)
         check("SINGLE grabs once when not live", ok, txt[:100])
 
+        # ---- tooltips: readable size, and the header checkbox hides them ----
+        rate_field.hover()
+        time.sleep(1.5)
+        tip = page.locator(".q-tooltip").first
+        vis = tip.is_visible()
+        size = tip.evaluate("e => getComputedStyle(e).fontSize") if vis else "-"
+        check("tooltip shows on hover, at 15px", vis and size == "15px", size)
+        page.mouse.move(5, 5)
+        time.sleep(0.8)
+        page.get_by_role("checkbox", name=re.compile(r"tooltips", re.I)).click()
+        time.sleep(0.5)
+        rate_field.hover()
+        time.sleep(1.5)
+        hidden = all(not t.is_visible() for t in page.locator(".q-tooltip").all())
+        check("header checkbox 'tooltips' off hides every tooltip", hidden)
+        page.get_by_role("checkbox", name=re.compile(r"tooltips", re.I)).click()
+
         page.screenshot(path=SCREENSHOT, full_page=True)
         b.close()
 finally:

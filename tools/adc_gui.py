@@ -93,7 +93,7 @@ SETTINGS_VERSION = 2
 SETTINGS_DEFAULTS = {
     "version": SETTINGS_VERSION,
     "board": "EV74H48A",
-    "view": {"dac_source": 0},
+    "view": {"dac_source": 0, "tooltips": True},
     "acquisition": {
         "mode": "test",           # "test" (RA8/DAC2 triangle, core 5 pin 3) or "custom"
         "ksps": 8000,
@@ -1440,6 +1440,11 @@ def main_gui(args):
       .q-field__label, .q-field__native, .q-field__control { color: #e5e7eb; }
       .card-title { color: #94a3b8; font-size: 0.75rem; letter-spacing: .12em; text-transform: uppercase; }
       .mono { font-family: ui-monospace, Consolas, monospace; }
+      /* Tooltips readable, and switchable off from the header ("tooltips").
+         !important because some tooltips carry an inline font-size. */
+      .q-tooltip { font-size: 15px !important; line-height: 1.45 !important;
+                   max-width: 34rem !important; padding: 8px 12px !important; }
+      body.no-tips .q-tooltip { display: none !important; }
     </style>""")
 
     def chart(title, x_name, y_name, y_min, y_max, colour, second_x_name=None):
@@ -1482,6 +1487,16 @@ def main_gui(args):
             ui.label("dsPIC33A ADC / DMA").classes("text-lg font-medium leading-tight")
             ui.label("triggered chain · capture · plot · FFT").classes("text-xs text-slate-400 leading-tight")
         ui.space()
+        # Every control on this page explains itself in a tooltip; this
+        # switches them all off (a CSS class on <body>, see the style above).
+        tips_cb = ui.checkbox("tooltips", value=True).classes("text-slate-300")
+
+        def set_tooltips(on):
+            if on:
+                ui.query("body").classes(remove="no-tips")
+            else:
+                ui.query("body").classes(add="no-tips")
+        tips_cb.on_value_change(lambda e: set_tooltips(bool(e.value)))
         port_sel = ui.select(options=["fake"] + ports(), value=args.port or ("fake" if args.fake else None),
                              label="port").classes("w-44").props("dense outlined")
         conn_btn = ui.button("connect", icon="usb").props("unelevated")
@@ -1829,7 +1844,8 @@ def main_gui(args):
             "version": SETTINGS_VERSION,
             "board": ui_state["board"],
             "view": {"dac_source": int(ui_state["dac_custom"] if ui_state["mode"] == "test"
-                                        else ui_state["dac"])},
+                                        else ui_state["dac"]),
+                     "tooltips": bool(tips_cb.value)},
             "acquisition": {
                 "mode": input_mode_sel.value or "test",
                 "ksps": int(rate_in.value or 8000),
@@ -1856,6 +1872,8 @@ def main_gui(args):
             ui_state["board"] = cfg["board"]
         ui_state["dac"] = int(cfg.get("view", {}).get("dac_source", 0))
         ui_state["dac_custom"] = ui_state["dac"]
+        tips_cb.value = bool(cfg.get("view", {}).get("tooltips", True))
+        set_tooltips(bool(tips_cb.value))
         acq = cfg.get("acquisition", {})
         ui_state["mode"] = "custom"               # so that on_mode_change() below starts clean
         # the mode first: setting it can run on_mode_change() at once, which
