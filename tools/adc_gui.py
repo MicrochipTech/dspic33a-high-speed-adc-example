@@ -93,7 +93,7 @@ SETTINGS_VERSION = 2
 SETTINGS_DEFAULTS = {
     "version": SETTINGS_VERSION,
     "board": "EV74H48A",
-    "view": {"dac_source": 0, "tooltips": True},
+    "view": {"dac_source": 0, "tooltips": True, "vref": 3.3},
     "acquisition": {
         "mode": "test",           # "test" (RA8/DAC2 triangle, core 5 pin 3) or "custom"
         "ksps": 8000,
@@ -1713,7 +1713,28 @@ def main_gui(args):
                         .style("font-size: 14px; max-width: 24rem;")
             with ui.card().classes("tile w-full rounded-xl p-2"):
                 ui.label("time signal").classes("card-title px-2 pt-1")
+                with ui.row().classes("w-full items-center gap-3 px-2"):
+                    vref_in = ui.number("reference voltage, V", value=3.3, min=0.1, max=5.5, step=0.05,
+                                        format="%.3f").props("dense outlined").style("width: 12rem")
+                    ui.label("ADC full scale (4096 counts) = this voltage; the right axis and the "
+                             "tooltip show volts from it").classes("text-xs text-slate-400")
                 time_chart = chart("", "sample", "ADC counts", 0, 4096, ACCENT, second_x_name="time")
+                # The right-hand axis in volts, on the same grid as the counts:
+                # both span 0..full scale, so their ticks describe the same heights.
+                time_chart.options["yAxis"] = [time_chart.options["yAxis"], {
+                    "type": "value", "min": 0, "max": 3.3, "position": "right",
+                    "axisLine": {"lineStyle": {"color": "#374151"}},
+                    "axisLabel": {"color": DIM, "formatter": "{value} V"},
+                    "splitLine": {"show": False}}]
+                # room for the volt labels on the right, the time axis name
+                # pinned to the top right end of its own (top) axis
+                time_chart.options["grid"]["right"] = 72
+                time_chart.options["xAxis"][1]["nameLocation"] = "end"
+                time_chart.options["xAxis"][1]["nameGap"] = 8
+                # with two y axes ECharts pulls an axis line "onZero" to the
+                # other axis' zero - the top time axis (and its name) would
+                # sit at the bottom, on top of "sample"
+                time_chart.options["xAxis"][1]["axisLine"]["onZero"] = False
             with ui.card().classes("tile w-full rounded-xl p-2"):
                 ui.label("spectrum · Hann window").classes("card-title px-2 pt-1")
                 fft_chart = chart("", "kHz", "dBFS", -100, 0, ACCENT2)
@@ -1951,7 +1972,8 @@ def main_gui(args):
             "board": ui_state["board"],
             "view": {"dac_source": int(ui_state["dac_custom"] if ui_state["mode"] == "test"
                                         else ui_state["dac"]),
-                     "tooltips": bool(tips_cb.value)},
+                     "tooltips": bool(tips_cb.value),
+                     "vref": float(vref_in.value or 3.3)},
             "acquisition": {
                 "mode": input_mode_sel.value or "test",
                 "ksps": int(rate_in.value or 8000),
@@ -1979,6 +2001,7 @@ def main_gui(args):
         ui_state["dac"] = int(cfg.get("view", {}).get("dac_source", 0))
         ui_state["dac_custom"] = ui_state["dac"]
         tips_cb.value = bool(cfg.get("view", {}).get("tooltips", True))
+        vref_in.value = float(cfg.get("view", {}).get("vref", 3.3))
         set_tooltips(bool(tips_cb.value))
         acq = cfg.get("acquisition", {})
         ui_state["mode"] = "custom"               # so that on_mode_change() below starts clean
@@ -2160,6 +2183,26 @@ def main_gui(args):
     core_sel.on_value_change(lambda e: refresh_channel())
     input_in.on_value_change(lambda e: refresh_channel())
     refresh_channel()
+
+    # The time chart's tooltip: time on top, "counts  (dot)  volts" in the
+    # middle, the sample number below. Built as a JS function (NiceGUI turns
+    # a ':'-prefixed key into one) with the current time step and reference
+    # voltage baked in; rebuilt whenever either changes.
+    time_axis = {"per_sample": 1e6 / 8e6, "unit": "µs"}
+
+    def update_time_tooltip():
+        vref = float(vref_in.value or 3.3)
+        per, unit = time_axis["per_sample"], time_axis["unit"]
+        time_chart.options["yAxis"][1]["max"] = vref
+        time_chart.options["tooltip"][":formatter"] = (
+            "p => { const s = p[0].data[0], c = p[0].data[1];"
+            f" return (s * {per!r}).toFixed(3) + ' {unit}<br/>'"
+            " + '<b>' + c + '</b>&nbsp; ' + p[0].marker + ' '"
+            f" + (c * {vref!r} / 4096).toFixed(3) + ' V<br/>'"
+            " + '<span style=\"color:#94a3b8\">sample ' + s + '</span>'; }")
+        time_chart.update()
+    vref_in.on_value_change(lambda e: update_time_tooltip())
+    update_time_tooltip()
 
     def update_dac_freq_label():
         """The triangle's period from low/high/slpdat, for every DAC card."""
@@ -2377,7 +2420,9 @@ def main_gui(args):
             time_chart.options["xAxis"][0]["max"] = n_samp
             time_chart.options["xAxis"][1]["max"] = duration_s * t_scale
             time_chart.options["xAxis"][1]["name"] = t_name
-            time_chart.update()
+            time_axis["per_sample"] = t_scale / fs if fs > 0 else 0.0
+            time_axis["unit"] = t_name.split("(")[-1].rstrip(")")
+            update_time_tooltip()                 # also does time_chart.update()
             fft_chart.options["series"][0]["data"] = [[float(fx) / 1e3, float(d)] for fx, d in zip(f, db)]
             fft_chart.options["xAxis"][0]["max"] = float(f[-1]) / 1e3 if len(f) else 1
             fft_chart.update()

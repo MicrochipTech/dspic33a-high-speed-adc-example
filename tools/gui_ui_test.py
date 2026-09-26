@@ -188,6 +188,33 @@ try:
         check("header checkbox 'tooltips' off hides every tooltip", hidden)
         page.get_by_role("checkbox", name=re.compile(r"tooltips", re.I)).click()
 
+        # ---- time chart: tooltip "time / counts (dot) volts / sample", vref ----
+        tchart = page.locator(".tile", has=page.locator(".card-title", has_text="time signal")) \
+                     .locator(".nicegui-echart").first
+        TT_RE = re.compile(r"^([\d.]+) \S+\n(\d+)\D+([\d.]+) V\nsample (\d+)$")
+
+        def chart_tooltip():
+            bx = tchart.bounding_box()
+            page.mouse.move(bx["x"] + bx["width"] * 0.55, bx["y"] + bx["height"] * 0.5)
+            time.sleep(1.2)
+            tt = page.evaluate("() => [...document.querySelectorAll('div')].filter(d => d.style && "
+                               "d.style.zIndex === '9999999' && d.innerText).map(d => d.innerText)")
+            return tt[0] if tt else ""
+        tt = chart_tooltip()
+        m = TT_RE.match(tt)
+        ok_tt = bool(m) and abs(float(m.group(3)) - int(m.group(2)) * 3.3 / 4096) < 0.002
+        check("time tooltip: time / counts, dot, volts / sample (at 3.3 V)", ok_tt,
+              tt.replace("\n", " | "))
+        vref = page.get_by_label(re.compile(r"^reference voltage", re.I))
+        vref.fill("2.5")
+        vref.press("Tab")
+        time.sleep(0.8)
+        tt = chart_tooltip()
+        m = TT_RE.match(tt)
+        ok_tt = bool(m) and abs(float(m.group(3)) - int(m.group(2)) * 2.5 / 4096) < 0.002
+        check("reference voltage 2.5 V: the tooltip's volts follow", ok_tt, tt.replace("\n", " | "))
+        page.mouse.move(5, 5)
+
         # ---- tiles fold and unfold on a click on their title ----
         title = page.locator(".tile .card-title", has_text="spectrum")
         # what sits under the title: the tile's second child (the chart)
