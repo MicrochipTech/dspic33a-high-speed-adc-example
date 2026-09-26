@@ -36,6 +36,7 @@
     }
   },
   "fake": {
+    "source": "sine",
     "signal_khz": 100.0,
     "amplitude": 1500.0,
     "noise": 6.0,

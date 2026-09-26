@@ -114,7 +114,7 @@ SETTINGS_DEFAULTS = {
         "1": {"on": False, "low": 0x100, "high": 0xF00, "slpdat": 8},
         "2": {"on": False, "low": 0x100, "high": 0xF00, "slpdat": 8},
     },
-    "fake": {"signal_khz": 100.0, "amplitude": 1500.0,
+    "fake": {"source": "sine", "signal_khz": 100.0, "amplitude": 1500.0,
              "noise": 6.0, "harmonic2": 150.0, "harmonic3": 0.0},
 }
 
@@ -1001,6 +1001,7 @@ class FakeTarget:
                  on_log=None, board: str = "EV74H48A"):
         self.on_log = on_log  # optional callable(str): the console transcript
         self.board = board if board in self.FAKE_BOARD_NAMES else "EV74H48A"
+        self.fake_source = "sine"                  # see FAKE_SOURCES
         self.port = "fake"
         # Both DACs, as dac.c has them - only ever touched by the 'dac'
         # command, never by 'stream on' itself (the test form's own
@@ -1080,18 +1081,18 @@ class FakeTarget:
         v += self.rng.normal(0, self.noise_std, n)
         return np.clip(np.round(v), 0, 4095).astype(int)
 
-    # Where each DAC's output reaches an ADC input with no wire: DACOUT1 =
-    # RA1 = AD5AN1, DACOUT2 = RA8 = AD5AN3 (board.h, both boards).
-    DAC_ON_INPUT = {(5, 1): 1, (5, 3): 2}
+    # What the stand-in plays on a custom input, chosen on the "fake target
+    # signal" tile: "sine" (its parameters there) or a DAC's triangle from
+    # that DAC's tile ("dac1", "dac2").
+    FAKE_SOURCES = ("sine", "dac1", "dac2")
 
     def _custom_input_samples(self, n: int) -> np.ndarray:
-        """What a custom input reads: on a DAC pin, that DAC - its triangle
-        from the DAC tile's low/high/SLPDAT when it is on, a pin at the
-        bottom of the range with a little noise when it is off; on any other
-        pin the configured sine (the generator on the wire)."""
-        unit = self.DAC_ON_INPUT.get((self.chain_core, self.chain_pinsel))
-        if unit is None:
+        """What a custom input reads: the configured sine, or a DAC's
+        triangle from its tile's low/high/SLPDAT - near 0 with a little
+        noise while that DAC is off, as a DAC pin reads then."""
+        if self.fake_source not in ("dac1", "dac2"):
             return self._custom_wave_samples(n)
+        unit = 1 if self.fake_source == "dac1" else 2
         d = self.dac[unit]
         if not d["on"]:
             v = 20 + self.rng.normal(0, self.noise_std, n)
@@ -1393,8 +1394,9 @@ def selftest() -> int:
     print(f"grab with a lost sample: caught in {caught} of 8 windows, false alarms in "
           f"{false_alarms} of 8 clean ones ->", "PASS" if ok_fault else "FAIL")
 
-    # ---- a custom input on the DAC2 pin sees the DAC tile's settings ----
+    # ---- the fake's "DAC2 triangle" source follows the DAC2 tile ----
     ok, _ = t.cmd("stream on 8000 5 3 0")
+    t.fake_source = "dac2"
     t.cmd("dac 2 on 256 1000 39")
     okd, sd, _m = t.grab()
     hi_on = int(np.max(sd)) if okd else 0
@@ -1404,9 +1406,10 @@ def selftest() -> int:
     t.cmd("dac 2 off")
     okd3, sd3, _m = t.grab()
     hi_off = int(np.max(sd3)) if okd3 else 9999
+    t.fake_source = "sine"
     ok_dac = abs(hi_on - 1000) < 60 and abs(hi_on2 - 3000) < 60 and hi_off < 120
     ok_all &= ok_dac
-    print(f"custom input core 5 / AN3 follows DAC2: high 1000 -> max {hi_on}, high 3000 -> "
+    print(f"fake source 'DAC2 triangle' follows the DAC2 tile: high 1000 -> max {hi_on}, high 3000 -> "
           f"max {hi_on2}, off -> max {hi_off}:", "PASS" if ok_dac else "FAIL")
 
     # ---- the custom form: 'stream on <ksps> <core> <pinsel> [<samc>]' ----
@@ -1678,11 +1681,26 @@ def main_gui(args):
 
             with ui.card().classes("tile w-full rounded-xl p-4 gap-2"):
                 ui.label("fake target signal · custom input only").classes("card-title")
-                sig_in = ui.number("frequency, kHz", value=100.0, min=0.1, max=20000.0, step=10).props("dense outlined")
-                amp_in = ui.number("amplitude, counts (pk)", value=1500.0, min=0.0, max=2000.0, step=50).props("dense outlined")
-                noise_in = ui.number("noise, counts (std dev, sets SNR)", value=6.0, min=0.0, max=500.0, step=1).props("dense outlined")
-                harm2_in = ui.number("2nd harmonic, counts (pk)", value=150.0, min=0.0, max=1000.0, step=10).props("dense outlined")
-                harm3_in = ui.number("3rd harmonic, counts (pk)", value=0.0, min=0.0, max=1000.0, step=10).props("dense outlined")
+                fake_src_sel = ui.select({"sine": "sine generator (parameters below)",
+                                          "dac2": "DAC2 triangle (DAC2 tile)",
+                                          "dac1": "DAC1 triangle (DAC1 tile)"},
+                                         value="sine", label="signal").props("dense outlined")
+                with ui.column().classes("w-full gap-2") as sine_box:
+                    sig_in = ui.number("frequency, kHz", value=100.0, min=0.1, max=20000.0, step=10).props("dense outlined")
+                    amp_in = ui.number("amplitude, counts (pk)", value=1500.0, min=0.0, max=2000.0, step=50).props("dense outlined")
+                    noise_in = ui.number("noise, counts (std dev, sets SNR)", value=6.0, min=0.0, max=500.0, step=1).props("dense outlined")
+                    harm2_in = ui.number("2nd harmonic, counts (pk)", value=150.0, min=0.0, max=1000.0, step=10).props("dense outlined")
+                    harm3_in = ui.number("3rd harmonic, counts (pk)", value=0.0, min=0.0, max=1000.0, step=10).props("dense outlined")
+                fake_dac_lbl = ui.label().classes("text-xs text-slate-400")
+
+                def on_fake_source(e=None):
+                    src = fake_src_sel.value or "sine"
+                    sine_box.set_visibility(src == "sine")
+                    fake_dac_lbl.text = ("" if src == "sine" else
+                                         f"the {src.upper()} tile's low / high / SLPDAT and on/off, "
+                                         f"as that DAC's pin reads them (off: near 0)")
+                fake_src_sel.on_value_change(on_fake_source)
+                on_fake_source()
 
             # One card per DAC. Both units are the same hardware with
             # different registers (dac.c), and each has its own output pin:
@@ -2031,7 +2049,8 @@ def main_gui(args):
             "dac": {str(u): {"on": bool(c["on"].value), "low": int(c["low"].value or 0),
                              "high": int(c["high"].value or 0), "slpdat": int(c["slp"].value or 0)}
                     for u, c in dac_ui.items()},
-            "fake": {"signal_khz": float(sig_in.value or 0.0),
+            "fake": {"source": fake_src_sel.value or "sine",
+                     "signal_khz": float(sig_in.value or 0.0),
                      "amplitude": float(amp_in.value or 0.0), "noise": float(noise_in.value or 0.0),
                      "harmonic2": float(harm2_in.value or 0.0),
                      "harmonic3": float(harm3_in.value or 0.0)},
@@ -2071,6 +2090,8 @@ def main_gui(args):
             c["high"].value = int(d.get("high", 0xF00))
             c["slp"].value = int(d.get("slpdat", 8))
         fake = cfg.get("fake", {})
+        fake_src_sel.value = fake.get("source", "sine") if fake.get("source") in ("sine", "dac1", "dac2") \
+            else "sine"
         sig_in.value = float(fake.get("signal_khz", 100.0))
         amp_in.value = float(fake.get("amplitude", 1500.0))
         noise_in.value = float(fake.get("noise", 6.0))
@@ -2437,6 +2458,7 @@ def main_gui(args):
 
     def sync_fake_signal(t):
         if isinstance(t, FakeTarget):
+            t.fake_source = fake_src_sel.value or "sine"
             t.signal_khz = float(sig_in.value or 100.0)
             t.amplitude = float(amp_in.value or 0.0)
             t.noise_std = float(noise_in.value or 0.0)

@@ -236,6 +236,19 @@ try:
               before and folded and unfolded,
               f"visible before {before}, hidden when folded {folded}, visible again {unfolded}")
 
+        # ---- fake target signal: sine or a DAC triangle ----
+        freq = page.get_by_label(re.compile(r"^frequency, kHz", re.I))
+        vis_sine = freq.is_visible()
+        page.get_by_label(re.compile(r"^signal$", re.I)).click()
+        page.get_by_text("DAC2 triangle (DAC2 tile)", exact=True).click()
+        time.sleep(0.5)
+        hid_dac = not freq.is_visible()
+        page.get_by_label(re.compile(r"^signal$", re.I)).click()
+        page.get_by_text("sine generator (parameters below)", exact=True).click()
+        time.sleep(0.5)
+        check("fake signal: sine parameters shown for 'sine', hidden for 'DAC2 triangle'",
+              vis_sine and hid_dac and freq.is_visible())
+
         # ---- settings: fold a tile, keep vref 2.5 V, save to the test's file ----
         page.locator(".tile .card-title", has_text="buffer").click()
         time.sleep(0.5)
