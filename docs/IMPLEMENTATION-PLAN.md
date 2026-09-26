@@ -138,7 +138,7 @@ One scenario per entry point, recorded from the current code and committed as
 
 ### P0.7 Simulator smoke build **[SMOKE]**
 
-- `toolsuild.bat smoke`: the simulator build with `-DSIM_SMOKE=1`. In `main.c`, the
+- `tools\build.bat smoke`: the simulator build with `-DSIM_SMOKE=1`. In `main.c`, the
   simulator path skips the ping-pong stream and instead feeds a fixed command script
   to the parser (`help`, `version`, `status`, and later `route list`), then stops with a
   final marker line `[smoke] DONE`.
@@ -299,7 +299,7 @@ All in `src/lib/`, compiled in all three builds, called from nowhere.
   implementation maps to `console_puts/kv/kv_hex` and `fail()`.
 - **Done:** builds; nothing uses it yet.
 
-### P4.2 to P4.6: one driver per task
+### P4.2 to P4.7: one driver per task
 
 | Task | Driver | Replaces |
 |---|---|---|
@@ -473,7 +473,7 @@ One test per rule, each with one case that triggers the rule and one that just p
 ### P11.5 `route list`
 
 - A new console command. It prints the active route and the resource table (which DMA
-  channel, SCCP and DAC is in use). It takes one parser slot (then 24 + help = 25 of
+  channel, SCCP and DAC is in use). It takes one parser slot (then 27 + help = 28 of
   32).
 - **Verify:** host test of the output function via the visitor; **[SMOKE]** the command
   in the simulator.
