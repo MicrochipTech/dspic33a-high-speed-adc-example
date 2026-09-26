@@ -239,6 +239,11 @@ try:
         # ---- settings: fold a tile, keep vref 2.5 V, save to the test's file ----
         page.locator(".tile .card-title", has_text="buffer").click()
         time.sleep(0.5)
+        try:
+            kept = json.load(open(SETTINGS_TMP, encoding="utf-8")).get("view", {}).get("collapsed", [])
+        except (OSError, ValueError):
+            kept = []
+        check("a fold is written to the settings file at once, without 'save'", "buffer" in kept, str(kept))
         page.get_by_role("button", name=re.compile(r"^\W*save$", re.I)).click()
         time.sleep(1.0)
         try:

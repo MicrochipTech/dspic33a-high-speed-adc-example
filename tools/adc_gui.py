@@ -170,6 +170,20 @@ def settings_write(path, data):
     return f"saved {os.path.basename(path)}"
 
 
+def settings_write_key(path, section, key, value):
+    """Write ONE value into the settings file and leave everything else in
+    it as it is: the file as it stands (or the standard, the first time),
+    that key changed, written back. For the folded tiles, which are kept at
+    every fold, while every other value still waits for "save"."""
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        data, _msg = settings_standard()
+    data.setdefault(section, {})[key] = value
+    return settings_write(path, data)
+
+
 BOARD_DEFAULT = "EV74H48A"
 BOARD_OPTIONS = {key: b["title"] for key, b in BOARDS.items()}
 
@@ -2072,6 +2086,8 @@ def main_gui(args):
     def on_tile_fold(e):
         title, folded = e.args.get("title", ""), bool(e.args.get("folded"))
         (ui_state["collapsed"].add if folded else ui_state["collapsed"].discard)(title)
+        # kept at once, without "save" - only this one key is written
+        settings_write_key(state["settings_path"], "view", "collapsed", sorted(ui_state["collapsed"]))
     ui.on("tile_fold", on_tile_fold)
 
     def collapsed_js():
