@@ -19,7 +19,9 @@ nicegui/pyserial/numpy); only the browser driver needs the `playwright`
 package. Exit code is 0 on PASS, 1 on FAIL. A full-page screenshot is
 written to the path printed at the end.
 """
+import json
 import os
+import tempfile
 import re
 import subprocess
 import sys
@@ -37,6 +39,9 @@ def free_port():
 
 
 PORT = free_port()
+# The test's own settings file, so that "save" in it never touches the
+# user's tools/adc_gui_settings.json.
+SETTINGS_TMP = os.path.join(tempfile.mkdtemp(prefix="adc_gui_test_"), "settings.json")
 
 
 def server_errors(out):
@@ -53,7 +58,7 @@ SCRATCH = r"C:\Users\M91221\AppData\Local\Temp\claude\c--work-Claas-ADC\333dbcfd
 SCREENSHOT = SCRATCH + r"\gui_after.png"
 GUI_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "adc_gui.py")
 
-gui = subprocess.Popen(["python", GUI_SCRIPT, "--fake",
+gui = subprocess.Popen(["python", GUI_SCRIPT, "--fake", "--settings", SETTINGS_TMP,
                         "--no-browser", "--http-port", str(PORT)],
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 results = []
@@ -177,7 +182,7 @@ try:
         tip = page.locator(".q-tooltip").first
         vis = tip.is_visible()
         size = tip.evaluate("e => getComputedStyle(e).fontSize") if vis else "-"
-        check("tooltip shows on hover, at 15px", vis and size == "15px", size)
+        check("tooltip shows on hover, at 18px", vis and size == "18px", size)
         page.mouse.move(5, 5)
         time.sleep(0.8)
         page.get_by_role("checkbox", name=re.compile(r"tooltips", re.I)).click()
@@ -230,6 +235,21 @@ try:
         check("a tile folds on a click on its title and unfolds again",
               before and folded and unfolded,
               f"visible before {before}, hidden when folded {folded}, visible again {unfolded}")
+
+        # ---- settings: fold a tile, keep vref 2.5 V, save to the test's file ----
+        page.locator(".tile .card-title", has_text="buffer").click()
+        time.sleep(0.5)
+        page.get_by_role("button", name=re.compile(r"^\W*save$", re.I)).click()
+        time.sleep(1.0)
+        try:
+            saved = json.load(open(SETTINGS_TMP, encoding="utf-8"))
+        except (OSError, ValueError):
+            saved = {}
+        check("save writes view.collapsed, view.vref and connection.port",
+              "buffer" in saved.get("view", {}).get("collapsed", []) and
+              abs(saved.get("view", {}).get("vref", 0) - 2.5) < 1e-6 and
+              "port" in saved.get("connection", {}),
+              json.dumps(saved.get("view", {}))[:120])
 
         page.screenshot(path=SCREENSHOT, full_page=True)
         b.close()
@@ -304,6 +324,40 @@ finally:
         out = ""
     errs = server_errors(out)
     check("Nano: no server-side exceptions", not errs, "; ".join(errs[:5]))
+
+# ---- a new start reads the saved file; "standard" puts the standard back ----
+PORT3 = free_port()
+gui3 = subprocess.Popen(["python", GUI_SCRIPT, "--fake", "--settings", SETTINGS_TMP,
+                         "--no-browser", "--http-port", str(PORT3)],
+                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+try:
+    time.sleep(10)
+    with sync_playwright() as p:
+        b = p.chromium.launch(channel="chrome", headless=True)
+        page = b.new_page(viewport={"width": 1600, "height": 3400})
+        page.goto(f"http://127.0.0.1:{PORT3}/")
+        time.sleep(5)
+        buf_tile = page.locator(".tile", has=page.locator(".card-title", has_text="buffer")).first
+        vref = page.get_by_label(re.compile(r"^reference voltage", re.I))
+        folded = "collapsed" in (buf_tile.get_attribute("class") or "")
+        v = vref.input_value()
+        check("restart: the saved file is read (buffer tile folded, vref 2.5)",
+              folded and v.replace(",", ".").startswith("2.5"), f"folded {folded}, vref {v}")
+        page.get_by_role("button", name=re.compile(r"^\W*standard$", re.I)).click()
+        time.sleep(1.5)
+        folded = "collapsed" in (buf_tile.get_attribute("class") or "")
+        v = vref.input_value()
+        check("'standard' puts the standard back (tile open, vref 3.3)",
+              (not folded) and v.replace(",", ".").startswith("3.3"), f"folded {folded}, vref {v}")
+        b.close()
+finally:
+    gui3.terminate()
+    try:
+        out = gui3.communicate(timeout=10)[0]
+    except Exception:
+        out = ""
+    errs = server_errors(out)
+    check("settings restart: no server-side exceptions", not errs, "; ".join(errs[:5]))
 
 print("UI TEST", "PASS" if all(results) else "FAIL")
 print("screenshot:", SCREENSHOT)

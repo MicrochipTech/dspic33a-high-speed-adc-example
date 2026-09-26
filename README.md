@@ -942,6 +942,30 @@ simulator run takes about 2.5 minutes for the 100 halves.
 
 ### The GUI: capture, plot, FFT (`tools/adc_gui.py`)
 
+**Settings.** Every value the page can set is in a JSON file. At every start the GUI
+reads **`tools/adc_gui_defaults.json`** - the standard, tracked in git, every key with
+its default - and then **`tools/adc_gui_settings.json`** on top of it, the user's own
+state (git-ignored; "save" writes it, a key it lacks keeps the standard's value).
+**standard** in the settings tile puts every value back to the standard file; "save
+as" / "load as" name another file; `--settings <file>` starts with one.
+
+| Key | What it sets |
+|---|---|
+| `board` | board profile: `EV74H48A` or `EV17P63A` (switched on connect to what the firmware reports) |
+| `connection.port` | COM port preselected at start (empty: none) |
+| `view.dac_source` | signal source shown on the pinout tiles for a custom input: 0 none, 1 DAC1, 2 DAC2 |
+| `view.tooltips` | tooltips on (`true`) or off - the header checkbox |
+| `view.vref` | reference voltage in V: 4096 ADC counts = this voltage, the time chart's right axis and tooltip |
+| `view.collapsed` | titles of the tiles that are folded |
+| `acquisition.mode` | `test` (DAC2 loopback: core 5, AN3 = RA8, the firmware's triangle) or `custom` |
+| `acquisition.ksps` | sample rate in kSPS; the board uses the nearest 160 MHz / N |
+| `acquisition.core`, `.pinsel`, `.samc` | the custom input: ADC core 1..5, PINSEL 0..15, sample time 0..31 |
+| `acquisition.interval_ms` | pause between two grabs in LIVE |
+| `buffer.size` | total ping-pong buffer (`buf`), even, 16..8192 |
+| `dac.1`, `dac.2` | `on`, `low`, `high`, `slpdat` of each DAC's triangle (DAC tiles) |
+| `fake.*` | the stand-in's sine for a custom input in `--fake`: `signal_khz`, `amplitude`, `noise`, `harmonic2`, `harmonic3` |
+| `version` | settings format (3) |
+
 A browser front end for the console, for looking at what the triggered chain
 delivers. The back-to-back burst mode (`pll`/`snap`/`dump`/`blk`, the old sweep tile)
 is retired from this tool as of 25.09.2026 - the owner's decision: the triggered chain

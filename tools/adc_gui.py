@@ -87,13 +87,22 @@ from eval_chain import synth as chain_synth  # noqa: E402
 # built-in defaults below are the fallback for a missing file and for
 # any key a file does not carry, so an old or hand-edited file still loads.
 # ---------------------------------------------------------------------------
+# Two files. adc_gui_defaults.json is the STANDARD: tracked in git, every
+# key with its default, read first at every start. adc_gui_settings.json is
+# the user's own state: git-ignored, written by "save", read on top of the
+# standard (a key it lacks keeps the standard's value). The dict below is
+# the same content as the standard file - the fallback if that file is
+# missing, and what --selftest compares it against.
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              "adc_gui_settings.json")
-SETTINGS_VERSION = 2
+DEFAULTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "adc_gui_defaults.json")
+SETTINGS_VERSION = 3
 SETTINGS_DEFAULTS = {
     "version": SETTINGS_VERSION,
     "board": "EV74H48A",
-    "view": {"dac_source": 0, "tooltips": True, "vref": 3.3},
+    "connection": {"port": ""},
+    "view": {"dac_source": 0, "tooltips": True, "vref": 3.3, "collapsed": []},
     "acquisition": {
         "mode": "test",           # "test" (RA8/DAC2 triangle, core 5 pin 3) or "custom"
         "ksps": 8000,
@@ -124,17 +133,31 @@ def settings_merge(base, over):
     return out
 
 
+def settings_standard():
+    """The standard settings: adc_gui_defaults.json, or the built-in copy of
+    it if that file is missing or broken. (settings, message)."""
+    try:
+        with open(DEFAULTS_FILE, "r", encoding="utf-8") as fh:
+            return settings_merge(SETTINGS_DEFAULTS, json.load(fh)), \
+                f"standard: {os.path.basename(DEFAULTS_FILE)}"
+    except (OSError, ValueError) as exc:
+        return json.loads(json.dumps(SETTINGS_DEFAULTS)), \
+            f"standard: built-in ({os.path.basename(DEFAULTS_FILE)}: {exc})"
+
+
 def settings_read(path):
-    """(settings, message). A missing file is not an error: it is the
-    first start, and the defaults are the answer."""
+    """(settings, message): the standard, then `path` on top of it. A
+    missing `path` is not an error - it is the first start, and the
+    standard is the answer."""
+    std, std_msg = settings_standard()
     try:
         with open(path, "r", encoding="utf-8") as fh:
             got = json.load(fh)
     except FileNotFoundError:
-        return dict(SETTINGS_DEFAULTS), f"{os.path.basename(path)} not there yet, using defaults"
+        return std, f"{std_msg}; {os.path.basename(path)} not there yet"
     except (OSError, ValueError) as exc:
-        return dict(SETTINGS_DEFAULTS), f"{os.path.basename(path)}: {exc} - using defaults"
-    return settings_merge(SETTINGS_DEFAULTS, got), f"loaded {os.path.basename(path)}"
+        return std, f"{std_msg}; {os.path.basename(path)}: {exc}"
+    return settings_merge(std, got), f"{std_msg} + {os.path.basename(path)}"
 
 
 def settings_write(path, data):
@@ -1433,6 +1456,17 @@ def selftest() -> int:
 
     ok_all &= crc16_ccitt_false(b"123456789") == 0x29B1
 
+    # The standard file and the built-in copy of it must say the same.
+    try:
+        with open(DEFAULTS_FILE, "r", encoding="utf-8") as fh:
+            std_file = json.load(fh)
+        ok_std = std_file == json.loads(json.dumps(SETTINGS_DEFAULTS))
+    except (OSError, ValueError):
+        ok_std = False
+    ok_all &= ok_std
+    print(f"standard settings file {os.path.basename(DEFAULTS_FILE)} == built-in defaults:",
+          "PASS" if ok_std else "FAIL")
+
     # Board detection from the 'version' reply, both profiles, as the
     # firmware prints it and as the fake does.
     ok_nano = detect_board(FakeTarget(board="EV17P63A").cmd("version")[1]) == "EV17P63A"
@@ -1468,7 +1502,7 @@ def detect_board(lines):
 
 
 def main_gui(args):
-    from nicegui import ui, run
+    from nicegui import app, ui, run
 
     # One command at a time on the serial port: the live loop runs its
     # commands in worker threads, and without this they could interleave
@@ -1499,8 +1533,8 @@ def main_gui(args):
       .mono { font-family: ui-monospace, Consolas, monospace; }
       /* Tooltips readable, and switchable off from the header ("tooltips").
          !important because some tooltips carry an inline font-size. */
-      .q-tooltip { font-size: 15px !important; line-height: 1.45 !important;
-                   max-width: 34rem !important; padding: 8px 12px !important; }
+      .q-tooltip { font-size: 18px !important; line-height: 1.45 !important;
+                   max-width: 38rem !important; padding: 10px 14px !important; }
       body.no-tips .q-tooltip { display: none !important; }
       /* Collapsible tiles: a click on a tile's title folds everything below
          the title (its first child) away; the arrow says which state. */
@@ -1516,32 +1550,27 @@ def main_gui(args):
       .q-chip.text-grey-8 { color: #cbd5e1 !important; }
     </style>
     <script>
-      // Fold / unfold a tile on a click on its title, remember it per title
-      // in this browser (a convenience only: a blocked localStorage just
-      // means every tile opens unfolded).
+      // Fold / unfold a tile on a click on its title. The state is the
+      // GUI's (settings file, view.collapsed): each fold is reported to
+      // Python, and Python calls adcApplyCollapsed() after a settings load.
       (function () {
-        const KEY = "adc_gui_collapsed";
-        function load() { try { return JSON.parse(localStorage.getItem(KEY) || "{}"); } catch (e) { return {}; } }
-        function save(m) { try { localStorage.setItem(KEY, JSON.stringify(m)); } catch (e) {} }
         function titleOf(tile) { const t = tile.querySelector(".card-title"); return t ? t.textContent.trim() : ""; }
+        window.adcApplyCollapsed = function (titles) {
+          const want = new Set(titles);
+          document.querySelectorAll(".tile").forEach(function (tile) {
+            tile.classList.toggle("collapsed", want.has(titleOf(tile)));
+          });
+          setTimeout(function () { window.dispatchEvent(new Event("resize")); }, 50);
+        };
         document.addEventListener("click", function (ev) {
           const title = ev.target.closest(".card-title");
           if (!title) return;
           const tile = title.closest(".tile");
           if (!tile) return;
           const folded = tile.classList.toggle("collapsed");
-          const m = load(); m[titleOf(tile)] = folded; save(m);
+          if (typeof emitEvent === "function") emitEvent("tile_fold", { title: titleOf(tile), folded: folded });
           if (!folded) setTimeout(function () { window.dispatchEvent(new Event("resize")); }, 50);
         });
-        function restore() {
-          const m = load();
-          document.querySelectorAll(".tile").forEach(function (tile) {
-            if (m[titleOf(tile)]) tile.classList.add("collapsed");
-          });
-        }
-        if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", function () { setTimeout(restore, 300); });
-        else setTimeout(restore, 300);
-        setTimeout(restore, 1500);
       })();
     </script>""")
 
@@ -1566,7 +1595,7 @@ def main_gui(args):
                       "textStyle": {"color": "#e5e7eb", "fontSize": 14, "fontWeight": "normal"}},
             "grid": {"left": 64, "right": 24, "top": grid_top, "bottom": 44},
             "tooltip": {"trigger": "axis", "backgroundColor": "#1f2937", "borderColor": "#374151",
-                        "textStyle": {"color": "#e5e7eb"}},
+                        "textStyle": {"color": "#e5e7eb", "fontSize": 16}},
             "xAxis": x_axes,
             "yAxis": {"type": "value", "name": y_name, "min": y_min, "max": y_max,
                       "nameTextStyle": {"color": DIM}, "axisLine": {"lineStyle": {"color": "#374151"}},
@@ -1610,6 +1639,7 @@ def main_gui(args):
                     save_btn = ui.button("save", icon="save").props("unelevated dense").classes("flex-grow")
                     save_as_btn = ui.button("save as", icon="save_as").props("outline dense").classes("flex-grow")
                     load_as_btn = ui.button("load as", icon="folder_open").props("outline dense").classes("flex-grow")
+                    std_btn = ui.button("standard", icon="restart_alt").props("outline dense").classes("flex-grow")
                 settings_msg_lbl = ui.label().classes("text-xs text-slate-400 mono")
 
             with ui.card().classes("tile w-full rounded-xl p-4 gap-2"):
@@ -1803,7 +1833,7 @@ def main_gui(args):
             # from the fields, which show the loopback while the test input
             # is chosen; dac_custom: the signal source shown for it.
             ui_state = {"board": BOARD_DEFAULT, "sync": False, "dac": 0, "mode": "test",
-                        "custom": None, "dac_custom": 0}
+                        "custom": None, "dac_custom": 0, "collapsed": set()}
 
             def selection_row(tag):
                 """kit / core / channel, one row, for a tile header."""
@@ -1970,10 +2000,12 @@ def main_gui(args):
         return {
             "version": SETTINGS_VERSION,
             "board": ui_state["board"],
+            "connection": {"port": port_sel.value or ""},
             "view": {"dac_source": int(ui_state["dac_custom"] if ui_state["mode"] == "test"
                                         else ui_state["dac"]),
                      "tooltips": bool(tips_cb.value),
-                     "vref": float(vref_in.value or 3.3)},
+                     "vref": float(vref_in.value or 3.3),
+                     "collapsed": sorted(ui_state["collapsed"])},
             "acquisition": {
                 "mode": input_mode_sel.value or "test",
                 "ksps": int(rate_in.value or 8000),
@@ -2002,6 +2034,11 @@ def main_gui(args):
         ui_state["dac_custom"] = ui_state["dac"]
         tips_cb.value = bool(cfg.get("view", {}).get("tooltips", True))
         vref_in.value = float(cfg.get("view", {}).get("vref", 3.3))
+        ui_state["collapsed"] = set(cfg.get("view", {}).get("collapsed", []))
+        apply_collapsed()
+        port = cfg.get("connection", {}).get("port", "")
+        if port and not args.port and not args.fake and port in (port_sel.options or []):
+            port_sel.value = port
         set_tooltips(bool(tips_cb.value))
         acq = cfg.get("acquisition", {})
         ui_state["mode"] = "custom"               # so that on_mode_change() below starts clean
@@ -2028,6 +2065,29 @@ def main_gui(args):
         update_dac_freq_label()
         update_rate_hint()
         on_mode_change()
+
+    # Folded tiles: the page's click handler reports each fold (event
+    # "tile_fold", title and state); the set lives here and in the settings
+    # file, and apply_collapsed() puts it back onto the page.
+    def on_tile_fold(e):
+        title, folded = e.args.get("title", ""), bool(e.args.get("folded"))
+        (ui_state["collapsed"].add if folded else ui_state["collapsed"].discard)(title)
+    ui.on("tile_fold", on_tile_fold)
+
+    def collapsed_js():
+        return ("window.adcApplyCollapsed && window.adcApplyCollapsed(" +
+                json.dumps(sorted(ui_state["collapsed"])) + ")")
+
+    def apply_collapsed():
+        """Onto every page that is connected now. At start-up none is -
+        app.on_connect below then puts the state onto each page that opens.
+        (A run_javascript without a connected page leaves an un-awaited
+        response behind, a RuntimeWarning.)"""
+        for client in list(app.clients()):
+            if client.has_socket_connection:
+                client.run_javascript(collapsed_js())
+
+    app.on_connect(lambda client: client.run_javascript(collapsed_js()))
 
     def show_settings_path():
         settings_path_lbl.text = state["settings_path"]
@@ -2061,6 +2121,14 @@ def main_gui(args):
     save_btn.on_click(lambda e: do_save())
     save_as_btn.on_click(lambda e: ask_path("save settings as", do_save, "save"))
     load_as_btn.on_click(lambda e: ask_path("load settings from", do_load, "load"))
+
+    def do_standard():
+        """Every value back to adc_gui_defaults.json - the file path stays,
+        so a following "save" makes the standard the user's own state."""
+        cfg, msg = settings_standard()
+        settings_apply(cfg)
+        settings_msg_lbl.text = msg + " applied - 'save' keeps it"
+    std_btn.on_click(lambda e: do_standard())
 
     # ---- the input mode: test (the DAC loopback, fixed) or custom ----
     def custom_input():

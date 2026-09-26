@@ -1,0 +1,45 @@
+{
+  "version": 3,
+  "board": "EV74H48A",
+  "connection": {
+    "port": ""
+  },
+  "view": {
+    "dac_source": 0,
+    "tooltips": true,
+    "vref": 3.3,
+    "collapsed": []
+  },
+  "acquisition": {
+    "mode": "test",
+    "ksps": 8000,
+    "core": 3,
+    "pinsel": 5,
+    "samc": 0,
+    "interval_ms": 500
+  },
+  "buffer": {
+    "size": 2048
+  },
+  "dac": {
+    "1": {
+      "on": false,
+      "low": 256,
+      "high": 3840,
+      "slpdat": 8
+    },
+    "2": {
+      "on": false,
+      "low": 256,
+      "high": 3840,
+      "slpdat": 8
+    }
+  },
+  "fake": {
+    "signal_khz": 100.0,
+    "amplitude": 1500.0,
+    "noise": 6.0,
+    "harmonic2": 150.0,
+    "harmonic3": 0.0
+  }
+}
