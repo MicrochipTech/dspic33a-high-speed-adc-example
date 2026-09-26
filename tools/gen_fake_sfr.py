@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """gen_fake_sfr.py - host-side stand-in for <xc.h>, generated from the DFP.
 
-PROTOTYPE from the P0.3 spike (docs/IMPLEMENTATION-PLAN.md). P0.4 turns it
-into the real thing; see tests/trace/README.md for the decision behind it.
+Started as a P0.3 spike prototype; P0.4 (docs/IMPLEMENTATION-PLAN.md) made
+it the real generator behind tools/trace.bat. Decision of 26.09.2026
+(tests/trace/README.md): approach (a), snapshot diff in plain C - so only
+the DEFAULT output (--style symbols, no --cxx) is used by the harness. The
+--cxx output (C++ proxies, approach b) and --style macros are kept only
+because they show, concretely, why those two were rejected; nothing in
+tests/trace/ builds them.
 
 Inputs (both from the device pack, nothing typed by hand):
   - the device header  .../xc16/support/dsPIC33A/h/p<MCU>.h
@@ -40,8 +45,8 @@ Output (into --out DIR):
                a struct of Field<idx,pos,len> per bit-field typedef, positions
                from the pack's _POSITION/_LENGTH macros.
 
-Usage:
-  python tools/gen_fake_sfr.py --mcu 33AK512MPS512 --out build/trace_spike/gen [--cxx]
+Usage (tools/trace.bat runs exactly this, every time it runs):
+  python tools/gen_fake_sfr.py --mcu 33AK512MPS512 --out build/trace/gen
 """
 import argparse
 import os
