@@ -29,7 +29,7 @@
       "slpdat": 8
     },
     "2": {
-      "on": false,
+      "on": "auto",
       "low": 256,
       "high": 3840,
       "slpdat": 8

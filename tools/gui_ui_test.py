@@ -209,14 +209,25 @@ try:
               abs(m_auto - 2000) < 60, f"max {m_auto}")
         dac2.get_by_label(re.compile(r"^dac2$", re.I)).click()
         page.get_by_role("option", name="off", exact=True).click()
-        c0 = cyc.inner_text()
-        dac2.get_by_role("button", name=re.compile(r"apply dac2", re.I)).click()
-        wait_changed(page, cyc, c0, timeout=15.0)
-        time.sleep(1.0)
+        time.sleep(3.0)                   # the card sends it by itself, then one grab
         m_off = time_max()
-        check("test input: DAC2 'on' + apply (high 1500) reaches the time chart, 'off' gives the "
-              "firmware's triangle back", abs(m_on - 1500) < 60 and m_off > 3000,
-              f"max with DAC2 card {m_on}, after 'off' {m_off}")
+        live.click()
+        rate_field.fill("4000")
+        rate_field.press("Tab")
+        time.sleep(4.0)
+        m_off_rate = time_max()
+        stop_btn.first.click()
+        time.sleep(1.0)
+        rate_field.fill("8000")
+        rate_field.press("Tab")
+        dac2.get_by_label(re.compile(r"^dac2$", re.I)).click()
+        page.get_by_role("option", name=re.compile(r"^auto"), exact=False).click()
+        time.sleep(3.0)
+        m_auto = time_max()
+        check("test input: DAC2 'on' (high 1500) reaches the time chart, 'off' is a quiet channel "
+              "(also after a rate change), 'auto' the firmware's triangle",
+              abs(m_on - 1500) < 60 and m_off < 100 and m_off_rate < 100 and m_auto > 3000,
+              f"max on {m_on}, off {m_off}, off after rate change {m_off_rate}, auto {m_auto}")
 
         # ---- tooltips: readable size, and the header checkbox hides them ----
         rate_field.hover()

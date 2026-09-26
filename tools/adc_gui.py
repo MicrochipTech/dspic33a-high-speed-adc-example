@@ -112,7 +112,9 @@ SETTINGS_DEFAULTS = {
     "buffer": {"size": 2048},
     "dac": {
         "1": {"on": False, "low": 0x100, "high": 0xF00, "slpdat": 8},
-        "2": {"on": False, "low": 0x100, "high": 0xF00, "slpdat": 8},
+        # DAC2 "on" is true, false or "auto": the firmware's own test
+        # triangle, chosen per rate, on the test input
+        "2": {"on": "auto", "low": 0x100, "high": 0xF00, "slpdat": 8},
     },
     "fake": {"source": "dac2", "signal_khz": 100.0, "amplitude": 1500.0,
              "noise": 6.0, "harmonic2": 150.0, "harmonic3": 0.0},
@@ -1756,7 +1758,9 @@ def main_gui(args):
             for _unit, _pin_name in ((1, "RA1"), (2, "RA8")):
                 with ui.card().classes("tile w-full rounded-xl p-4 gap-2"):
                     ui.label(f"dac{_unit} · triangle ({_pin_name})").classes("card-title")
-                    _on = ui.select({True: "on", False: "off"}, value=False,
+                    _on = ui.select(({"auto": "auto · the firmware's test triangle"} if _unit == 2 else {})
+                                    | {True: "on", False: "off"},
+                                    value="auto" if _unit == 2 else False,
                                     label=f"dac{_unit}").props("dense outlined")
                     with ui.row().classes("w-full gap-2"):
                         _low = ui.number("low (0..4095)", value=0x100, min=0, max=4095, step=16,
@@ -1773,13 +1777,18 @@ def main_gui(args):
                     # DAC2 switched on here replaces it right after, and again
                     # after every 'stream on' (rate change).
                     _note = ui.label(
-                        "test input: 'on' + apply puts this triangle on RA8 in place of the "
-                        "firmware's own, and keeps it there across rate changes; 'off' + apply "
-                        "gives the firmware's triangle back" if _unit == 2 else
+                        "test input: 'auto' = the firmware's own triangle, its slope chosen per "
+                        "rate; 'on' = this triangle on RA8; 'off' = DAC2 off, the channel quiet - "
+                        "kept across rate changes" if _unit == 2 else
                         "test input reads DAC2 (RA8) - DAC1 on RA1 acts on a custom input "
                         "(core 5 / AN1)").classes("text-xs text-amber-400")
                     dac_ui[_unit] = {"on": _on, "low": _low, "high": _high, "slp": _slp,
                                      "freq": _freq, "btn": _btn, "msg": _msg, "note": _note}
+
+            def dac_mode(unit):
+                """'on', 'off' or 'auto' (DAC2 only: the firmware's test triangle)."""
+                v = dac_ui[unit]["on"].value
+                return "auto" if v == "auto" else ("on" if v is True else "off")
 
             with ui.card().classes("tile w-full rounded-xl p-4 gap-2"):
                 ui.label("buffer").classes("card-title")
@@ -2046,7 +2055,9 @@ def main_gui(args):
     for _u, _c in sorted(dac_ui.items()):
         _pin = "RA1" if _u == 1 else "RA8"
         TIPS += [
-            (_c["on"], f"Switch DAC{_u} on or off. It drives pin {_pin} with a triangle in "
+            (_c["on"], ("auto: with the test input, the firmware's own triangle, its slope "
+                        "chosen per rate. " if _u == 2 else "") +
+                       f"Switch DAC{_u} on or off. It drives pin {_pin} with a triangle in "
                        "hardware, no CPU involved, and that pin is also an ADC input of core 5 - "
                        "so the ADC can read it back with no wire. Applied automatically whenever "
                        "the chain runs with a custom input, or directly with this button. "
@@ -2097,7 +2108,8 @@ def main_gui(args):
                 "interval_ms": int(interval_in.value or 500),
             },
             "buffer": {"size": int(buf_in.value or 2048)},
-            "dac": {str(u): {"on": bool(c["on"].value), "low": int(c["low"].value or 0),
+            "dac": {str(u): {"on": dac_mode(u) if dac_mode(u) == "auto" else dac_mode(u) == "on",
+                             "low": int(c["low"].value or 0),
                              "high": int(c["high"].value or 0), "slpdat": int(c["slp"].value or 0)}
                     for u, c in dac_ui.items()},
             "fake": {"source": fake_src_sel.value or "dac2",
@@ -2136,7 +2148,8 @@ def main_gui(args):
         buf_in.value = int(cfg.get("buffer", {}).get("size", 2048))
         for unit, c in dac_ui.items():
             d = cfg.get("dac", {}).get(str(unit), {})
-            c["on"].value = bool(d.get("on", False))
+            on = d.get("on", "auto" if unit == 2 else False)
+            c["on"].value = "auto" if (on == "auto" and unit == 2) else bool(on is True)
             c["low"].value = int(d.get("low", 0x100))
             c["high"].value = int(d.get("high", 0xF00))
             c["slp"].value = int(d.get("slpdat", 8))
@@ -2285,9 +2298,9 @@ def main_gui(args):
             for sel in chan_ctrls:
                 sel.set_options(opts, value=pinsel)
             unit = int(ui_state["dac"])
-            dac_on = bool(dac_ui[unit]["on"].value) if unit in dac_ui else False
-            if ui_state["mode"] == "test":
-                unit, dac_on = LOOPBACK["dac"], True   # 'stream on <ksps>' starts DAC2 itself
+            dac_on = dac_mode(unit) == "on" if unit in dac_ui else False
+            if ui_state["mode"] == "test":         # 'stream on <ksps>' starts DAC2 itself
+                unit, dac_on = LOOPBACK["dac"], dac_mode(LOOPBACK["dac"]) != "off"
             for sel in dac_ctrls:
                 sel.value = unit
             info = channel_pin_info(board_key, core, pinsel)
@@ -2467,7 +2480,7 @@ def main_gui(args):
         if not t:
             c["msg"].text = "not connected"
             return False
-        if not c["on"].value:
+        if dac_mode(unit) != "on":            # 'auto' outside the test input = off
             cmd = f"dac {unit} off"
         else:
             low, high = int(c["low"].value or 0), int(c["high"].value or 0)
@@ -2475,22 +2488,22 @@ def main_gui(args):
             cmd = f"dac {unit} on {low} {high} {slp}"
         async with port_lock:
             ok, lines = await run.io_bound(t.cmd, cmd)
-        if ok and unit == 2 and c["on"].value and (state["acq_active"] or {}).get("mode") == "test":
-            state["test_dac2"] = (low, high, slp)
+        if ok and unit == 2 and (state["acq_active"] or {}).get("mode") == "test":
+            state["test_dac2"] = (low, high, slp) if dac_mode(2) == "on" else "off"
         c["msg"].text = "   ".join(lines) if lines else (f"dac{unit} applied" if ok else f"dac{unit} refused")
         return ok
 
     async def apply_dac(unit):
-        """The card's apply button. With the test input, DAC2 'off' does
-        not switch RA8 off (that would take the test signal away): the
-        stream is restarted instead, and 'stream on' brings the firmware's
-        own triangle back. Without LIVE, one grab shows the result."""
+        """The card's apply button. With the test input, DAC2 'on' and
+        'off' are sent (and resent after every 'stream on'); 'auto'
+        restarts the stream, and 'stream on' brings the firmware's own
+        triangle back. Without LIVE, one grab shows the result."""
         c = dac_ui[unit]
         if not state["target"]:
             c["msg"].text = "not connected"
             return
         if unit == 2 and (input_mode_sel.value or "test") == "test":
-            if c["on"].value:
+            if dac_mode(2) != "auto":
                 running = state["acq_active"] == current_acq_cfg()
                 if not await ensure_streaming():   # a new 'stream on' sends DAC2 itself
                     return
@@ -2533,7 +2546,7 @@ def main_gui(args):
         custom (non-test) input needs, since 'stream on <ksps> <core>
         <pinsel> <samc>' leaves the DAC alone on purpose (chaintest.c)."""
         for u in sorted(dac_ui):
-            if dac_ui[u]["on"].value:
+            if dac_mode(u) == "on":
                 await send_dac(u)
 
     async def apply_buf():
@@ -2605,7 +2618,7 @@ def main_gui(args):
         state["test_dac2"] = None        # 'stream on' set its own triangle
         if cfg["mode"] == "custom":
             await apply_active_dacs()
-        elif dac_ui[2]["on"].value:      # test input, DAC2 on in its card
+        elif dac_mode(2) != "auto":      # test input, DAC2 'on' or 'off' in its card
             await send_dac(2)
         return True
 
@@ -2646,6 +2659,8 @@ def main_gui(args):
                            else "fake: DAC1 card's triangle")
             elif cfg_now.get("mode") == "custom":
                 src_txt = f"core {cfg_now.get('core')} / AN{cfg_now.get('pinsel')}"
+            elif state["test_dac2"] == "off":
+                src_txt = "RA8: DAC2 off"
             elif state["test_dac2"]:
                 lo_, hi_, sl_ = state["test_dac2"]
                 src_txt = f"RA8: DAC2 card's triangle {lo_}..{hi_}, SLPDAT {sl_}"
@@ -2694,7 +2709,7 @@ def main_gui(args):
                     chip.props("color=grey-8")
 
             fake_no_tri = isinstance(t, FakeTarget) and t.fake_source in ("sine", "dac1")
-            if meta["slpdat"] > 0 and not fake_no_tri:
+            if meta["slpdat"] > 0 and not fake_no_tri and state["test_dac2"] != "off":
                 triangle_card.set_visibility(True)
                 r = chain_tri_eval([int(v) for v in samples])
                 verdict = chain_grid_ok(r)
@@ -2710,7 +2725,7 @@ def main_gui(args):
                 triangle_chips["up"].text = f"up {r['n_up']} · {r['l_up']:.2f} smp"
                 triangle_chips["down"].text = f"down {r['n_dn']} · {r['l_dn']:.2f} smp"
                 triangle_chips["slip"].text = f"slip {r['slip']:.2f} (k={r['slip_k']}, {r['slip_n']} spans)"
-                if state["test_dac2"]:
+                if isinstance(state["test_dac2"], tuple):
                     lo_, hi_, sl_ = state["test_dac2"]
                     model = ((hi_ - lo_) * 32.0 * meta["ksps"] * 1e3 / (sl_ * meta["dac_hz"])
                              if meta["dac_hz"] > 0 else 0.0)

@@ -962,7 +962,7 @@ as" / "load as" name another file; `--settings <file>` starts with one.
 | `acquisition.core`, `.pinsel`, `.samc` | the custom input: ADC core 1..5, PINSEL 0..15, sample time 0..31 |
 | `acquisition.interval_ms` | pause between two grabs in LIVE |
 | `buffer.size` | total ping-pong buffer (`buf`), even, 16..8192 |
-| `dac.1`, `dac.2` | `on`, `low`, `high`, `slpdat` of each DAC's triangle (DAC tiles). A change goes to the board by itself 0.8 s after the last one. With the test input, DAC2 `on` replaces the firmware's own test triangle on RA8 after every `stream on`; `off` leaves the firmware's |
+| `dac.1`, `dac.2` | `on`, `low`, `high`, `slpdat` of each DAC's triangle (DAC tiles). A change goes to the board by itself 0.8 s after the last one. DAC2's `on` can also be `"auto"` (standard): with the test input, `auto` is the firmware's own triangle (slope chosen per rate), `true` the card's triangle on RA8, `false` DAC2 off - a quiet channel; the card's state is resent after every `stream on` |
 | `fake.source` | what the stand-in plays in `--fake`, on either input: `dac2` (the test input: what RA8 carries; standard), `sine` or `dac1`. Switching the input picks `dac2` (test) or `sine` (custom); it can be changed after |
 | `fake.*` | the sine's parameters: `signal_khz`, `amplitude`, `noise`, `harmonic2`, `harmonic3` |
 | `version` | settings format (3) |
