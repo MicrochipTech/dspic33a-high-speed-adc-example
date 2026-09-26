@@ -667,7 +667,7 @@ def board_svg(board_key, core, pinsel, dac_unit=0, dac_on=False):
 # clock_dac_hz() returns ADC_CLK_HZ outright) -- unlike CLKGEN6, so no
 # separate GUI control is needed for it.
 # ---------------------------------------------------------------------------
-DAC_CLK_HZ = 320e6
+DAC_CLK_HZ = 400e6   # CLKGEN7 on the PLL1 VCO divider (clock.c, 25.09.2026; was 320e6, below the DAC's spec)
 
 
 def dac_period_ns_of(low: int, high: int, slp: int) -> float:
@@ -1043,6 +1043,36 @@ class FakeTarget:
         v += self.rng.normal(0, self.noise_std, n)
         return np.clip(np.round(v), 0, 4095).astype(int)
 
+    # Where each DAC's output reaches an ADC input with no wire: DACOUT1 =
+    # RA1 = AD5AN1, DACOUT2 = RA8 = AD5AN3 (board.h, both boards).
+    DAC_ON_INPUT = {(5, 1): 1, (5, 3): 2}
+
+    def _custom_input_samples(self, n: int) -> np.ndarray:
+        """What a custom input reads: on a DAC pin, that DAC - its triangle
+        from the DAC tile's low/high/SLPDAT when it is on, a pin at the
+        bottom of the range with a little noise when it is off; on any other
+        pin the configured sine (the generator on the wire)."""
+        unit = self.DAC_ON_INPUT.get((self.chain_core, self.chain_pinsel))
+        if unit is None:
+            return self._custom_wave_samples(n)
+        d = self.dac[unit]
+        if not d["on"]:
+            v = 20 + self.rng.normal(0, self.noise_std, n)
+            return np.clip(np.round(v), 0, 4095).astype(int)
+        low, high, slp = d["low"], d["high"], max(1, d["slp"])
+        fs = self.chain_ksps * 1e3
+        # one slope = (high - low) * 32 / (SLPDAT * F_DAC), Equation 18-4
+        slope_s = (high - low) * 32.0 / (slp * DAC_CLK_HZ)
+        slope_n = max(slope_s * fs, 1.0)
+        if self.t0 is None:
+            self.t0 = time.time()
+        start = ((time.time() - self.t0) * fs) % (2 * slope_n)
+        ph = np.mod(start + np.arange(n), 2 * slope_n)
+        v = np.where(ph < slope_n, low + (high - low) * ph / slope_n,
+                     high - (high - low) * (ph - slope_n) / slope_n)
+        v = v + self.rng.normal(0, self.noise_std, n)
+        return np.clip(np.round(v), 0, 4095).astype(int)
+
     def _board_limit_counters(self):
         """A simplified model of the board's own limits (the last hardware
         run, HARDWARE-LOG.md): mild overruns from about 10 MSPS, missed
@@ -1193,7 +1223,7 @@ class FakeTarget:
                             drop=drop, dup=dup, seed=self.chain_grabs)
         else:
             slp = 0
-            v = self._custom_wave_samples(n)
+            v = self._custom_input_samples(n)
         if self.grab_fault == "overrun":
             ov = max(ov, 3)
         if self.grab_fault == "missed":
@@ -1305,15 +1335,42 @@ def selftest() -> int:
     # A lost/repeated sample must fail the SAME grid check the firmware's
     # own tri_eval() uses - the fake target injects exactly what
     # chaintest.c's host test of the evaluator injects.
-    t.grab_fault = "drop"
-    ok3, samples3, meta3 = t.grab()
-    r3 = chain_tri_eval([int(v) for v in samples3])
-    ok_fault = ok3 and not chain_grid_ok(r3)
-    ok_all &= ok_fault
-    print(f"grab (lost sample injected): slip {r3['slip']:.3f} -> "
-          f"{'FAIL (correctly caught)' if not chain_grid_ok(r3) else 'PASS (missed it!)'}",
-          "PASS" if ok_fault else "FAIL")
+    # One window holds only about eight slopes, and a fault in the first or
+    # last one cannot be enclosed by four turning points (see tri_eval), so
+    # a single grab is caught or missed depending on where the fault lands.
+    # Judged over eight grabs at different phases: most faulty windows must
+    # fail, and no clean one may (the host test of the evaluator: no false
+    # alarm, 96-100 % found in 2048-sample windows).
+    caught = 0
+    for _ in range(8):
+        t.grab_fault = "drop"
+        ok3, samples3, meta3 = t.grab()
+        caught += ok3 and not chain_grid_ok(chain_tri_eval([int(v) for v in samples3]))
     t.grab_fault = None
+    false_alarms = 0
+    for _ in range(8):
+        ok3, samples3, meta3 = t.grab()
+        false_alarms += ok3 and not chain_grid_ok(chain_tri_eval([int(v) for v in samples3]))
+    ok_fault = caught >= 5 and false_alarms == 0
+    ok_all &= ok_fault
+    print(f"grab with a lost sample: caught in {caught} of 8 windows, false alarms in "
+          f"{false_alarms} of 8 clean ones ->", "PASS" if ok_fault else "FAIL")
+
+    # ---- a custom input on the DAC2 pin sees the DAC tile's settings ----
+    ok, _ = t.cmd("stream on 8000 5 3 0")
+    t.cmd("dac 2 on 256 1000 39")
+    okd, sd, _m = t.grab()
+    hi_on = int(np.max(sd)) if okd else 0
+    t.cmd("dac 2 on 256 3000 39")
+    okd2, sd2, _m = t.grab()
+    hi_on2 = int(np.max(sd2)) if okd2 else 0
+    t.cmd("dac 2 off")
+    okd3, sd3, _m = t.grab()
+    hi_off = int(np.max(sd3)) if okd3 else 9999
+    ok_dac = abs(hi_on - 1000) < 60 and abs(hi_on2 - 3000) < 60 and hi_off < 120
+    ok_all &= ok_dac
+    print(f"custom input core 5 / AN3 follows DAC2: high 1000 -> max {hi_on}, high 3000 -> "
+          f"max {hi_on2}, off -> max {hi_off}:", "PASS" if ok_dac else "FAIL")
 
     # ---- the custom form: 'stream on <ksps> <core> <pinsel> [<samc>]' ----
     ok, lines = t.cmd("stream on 5000 3 5 0")
@@ -1445,7 +1502,48 @@ def main_gui(args):
       .q-tooltip { font-size: 15px !important; line-height: 1.45 !important;
                    max-width: 34rem !important; padding: 8px 12px !important; }
       body.no-tips .q-tooltip { display: none !important; }
-    </style>""")
+      /* Collapsible tiles: a click on a tile's title folds everything below
+         the title (its first child) away; the arrow says which state. */
+      .tile .card-title { cursor: pointer; user-select: none; }
+      .tile .card-title::before { content: "▾ "; color: #64748b; }
+      .tile.collapsed .card-title::before { content: "▸ "; }
+      .tile.collapsed > :not(:first-child) { display: none !important; }
+      /* Chips readable: 14 px, and the neutral ones (color grey-8 - a value
+         without a verdict) light instead of dark grey on the dark cards.
+         Chips with a verdict keep their colour: positive / negative. */
+      .q-chip { font-size: 14px !important; }
+      .q-chip--dense { height: auto !important; padding: 3px 10px !important; }
+      .q-chip.text-grey-8 { color: #cbd5e1 !important; }
+    </style>
+    <script>
+      // Fold / unfold a tile on a click on its title, remember it per title
+      // in this browser (a convenience only: a blocked localStorage just
+      // means every tile opens unfolded).
+      (function () {
+        const KEY = "adc_gui_collapsed";
+        function load() { try { return JSON.parse(localStorage.getItem(KEY) || "{}"); } catch (e) { return {}; } }
+        function save(m) { try { localStorage.setItem(KEY, JSON.stringify(m)); } catch (e) {} }
+        function titleOf(tile) { const t = tile.querySelector(".card-title"); return t ? t.textContent.trim() : ""; }
+        document.addEventListener("click", function (ev) {
+          const title = ev.target.closest(".card-title");
+          if (!title) return;
+          const tile = title.closest(".tile");
+          if (!tile) return;
+          const folded = tile.classList.toggle("collapsed");
+          const m = load(); m[titleOf(tile)] = folded; save(m);
+          if (!folded) setTimeout(function () { window.dispatchEvent(new Event("resize")); }, 50);
+        });
+        function restore() {
+          const m = load();
+          document.querySelectorAll(".tile").forEach(function (tile) {
+            if (m[titleOf(tile)]) tile.classList.add("collapsed");
+          });
+        }
+        if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", function () { setTimeout(restore, 300); });
+        else setTimeout(restore, 300);
+        setTimeout(restore, 1500);
+      })();
+    </script>""")
 
     def chart(title, x_name, y_name, y_min, y_max, colour, second_x_name=None):
         """`second_x_name` adds a top x-axis on the same grid (samples and
@@ -1505,7 +1603,7 @@ def main_gui(args):
     with ui.row().classes("w-full p-4 gap-4 items-start no-wrap"):
         # ---- left: settings ----
         with ui.column().classes("gap-4").style("width: 22rem; min-width: 22rem"):
-            with ui.card().classes("w-full rounded-xl p-4 gap-2"):
+            with ui.card().classes("tile w-full rounded-xl p-4 gap-2"):
                 ui.label("settings file").classes("card-title")
                 settings_path_lbl = ui.label().classes("text-xs text-slate-400 mono break-all")
                 with ui.row().classes("w-full gap-2"):
@@ -1514,7 +1612,7 @@ def main_gui(args):
                     load_as_btn = ui.button("load as", icon="folder_open").props("outline dense").classes("flex-grow")
                 settings_msg_lbl = ui.label().classes("text-xs text-slate-400 mono")
 
-            with ui.card().classes("w-full rounded-xl p-4 gap-2"):
+            with ui.card().classes("tile w-full rounded-xl p-4 gap-2"):
                 ui.label("acquisition · triggered chain").classes("card-title")
                 rate_in = ui.number("rate, kSPS (1..40000)", value=8000, min=1, max=40000,
                                     step=100, format="%d").props("dense outlined")
@@ -1534,7 +1632,7 @@ def main_gui(args):
                     single_btn = ui.button("single", icon="camera").props("unelevated").classes("flex-grow")
                     live_btn = ui.button("live", icon="play_arrow").props("unelevated").classes("flex-grow")
 
-            with ui.card().classes("w-full rounded-xl p-4 gap-2"):
+            with ui.card().classes("tile w-full rounded-xl p-4 gap-2"):
                 ui.label("fake target signal · custom input only").classes("card-title")
                 sig_in = ui.number("frequency, kHz", value=100.0, min=0.1, max=20000.0, step=10).props("dense outlined")
                 amp_in = ui.number("amplitude, counts (pk)", value=1500.0, min=0.0, max=2000.0, step=50).props("dense outlined")
@@ -1551,7 +1649,7 @@ def main_gui(args):
             # (non-test) input.
             dac_ui = {}
             for _unit, _pin_name in ((1, "RA1"), (2, "RA8")):
-                with ui.card().classes("w-full rounded-xl p-4 gap-2"):
+                with ui.card().classes("tile w-full rounded-xl p-4 gap-2"):
                     ui.label(f"dac{_unit} · triangle ({_pin_name})").classes("card-title")
                     _on = ui.select({True: "on", False: "off"}, value=False,
                                     label=f"dac{_unit}").props("dense outlined")
@@ -1565,10 +1663,16 @@ def main_gui(args):
                     _freq = ui.label().classes("text-cyan-300 mono")
                     _btn = ui.button(f"apply dac{_unit}", icon="graphic_eq").props("unelevated").classes("w-full")
                     _msg = ui.label().classes("text-xs text-slate-400 mono")
+                    # Shown while the test input is chosen: 'stream on <ksps>'
+                    # starts DAC2's triangle itself (chaintest.c triangle_for()),
+                    # so what is set here only acts on a custom input.
+                    _note = ui.label("test input chosen: the firmware runs DAC2's triangle itself - "
+                                     "these settings act on a custom input (e.g. core 5 / AN3 = RA8 "
+                                     "for DAC2, core 5 / AN1 = RA1 for DAC1)").classes("text-xs text-amber-400")
                     dac_ui[_unit] = {"on": _on, "low": _low, "high": _high, "slp": _slp,
-                                     "freq": _freq, "btn": _btn, "msg": _msg}
+                                     "freq": _freq, "btn": _btn, "msg": _msg, "note": _note}
 
-            with ui.card().classes("w-full rounded-xl p-4 gap-2"):
+            with ui.card().classes("tile w-full rounded-xl p-4 gap-2"):
                 ui.label("buffer").classes("card-title")
                 with ui.row().classes("w-full gap-2 items-end"):
                     buf_in = ui.number("buffer size, total ('buf')", value=2048, min=16, max=8192, step=16,
@@ -1607,11 +1711,13 @@ def main_gui(args):
                     ui.tooltip("Buffer halves completed and DMA transfers since the previous grab "
                                "(chain_stream_grab_begin()'s per-cycle counters).")\
                         .style("font-size: 14px; max-width: 24rem;")
-            with ui.card().classes("w-full rounded-xl p-2"):
-                time_chart = chart("time signal", "sample", "ADC counts", 0, 4096, ACCENT, second_x_name="time")
-            with ui.card().classes("w-full rounded-xl p-2"):
-                fft_chart = chart("spectrum · Hann window", "kHz", "dBFS", -100, 0, ACCENT2)
-            with ui.card().classes("w-full rounded-xl p-3"):
+            with ui.card().classes("tile w-full rounded-xl p-2"):
+                ui.label("time signal").classes("card-title px-2 pt-1")
+                time_chart = chart("", "sample", "ADC counts", 0, 4096, ACCENT, second_x_name="time")
+            with ui.card().classes("tile w-full rounded-xl p-2"):
+                ui.label("spectrum · Hann window").classes("card-title px-2 pt-1")
+                fft_chart = chart("", "kHz", "dBFS", -100, 0, ACCENT2)
+            with ui.card().classes("tile w-full rounded-xl p-3"):
                 ui.label("signal evaluation").classes("card-title")
                 EVAL_TOOLTIPS = {
                     "fundamental": "Frequency of the strongest spectral line (DC excluded) -- the detected signal frequency.",
@@ -1633,7 +1739,7 @@ def main_gui(args):
                         eval_chips[k] = chip
 
             # ---- the triangle verdict: only meaningful for the test input ----
-            with ui.card().classes("w-full rounded-xl p-3 gap-2") as triangle_card:
+            with ui.card().classes("tile w-full rounded-xl p-3 gap-2") as triangle_card:
                 with ui.row().classes("w-full items-center gap-3 flex-wrap"):
                     ui.label("triangle verdict · test input only").classes("card-title")
                     triangle_verdict_chip = ui.chip("no grab yet", color="grey-8").props("dense outline")
@@ -1695,7 +1801,7 @@ def main_gui(args):
                 dac_ctrls.append(dac)
                 return lbl
 
-            with ui.card().classes("w-full rounded-xl p-3 gap-2"):
+            with ui.card().classes("tile w-full rounded-xl p-3 gap-2"):
                 with ui.row().classes("w-full items-center gap-3 flex-wrap"):
                     ui.label("chip · pinout").classes("card-title")
                     chip_pin_lbl = selection_row("chip")
@@ -1706,7 +1812,7 @@ def main_gui(args):
                          "TQFP-128 and Table 5 for the Nano's 64-pin part.").classes("text-xs text-slate-400")
 
             # ---- the board: where that pin comes out on the kit ----------
-            with ui.card().classes("w-full rounded-xl p-3 gap-2"):
+            with ui.card().classes("tile w-full rounded-xl p-3 gap-2"):
                 with ui.row().classes("w-full items-center gap-3 flex-wrap"):
                     ui.label("board · where to wire it").classes("card-title")
                     board_pin_lbl = selection_row("board")
@@ -1714,7 +1820,7 @@ def main_gui(args):
                 board_note_lbl = ui.label().classes("text-xs text-slate-400")
 
     # ---- console: the CLI traffic with the target (real or fake) ----
-    with ui.card().classes("w-full rounded-xl p-3 mx-4 mb-4"):
+    with ui.card().classes("tile w-full rounded-xl p-3 mx-4 mb-4"):
         ui.label("console").classes("card-title")
         console_log = ui.log(max_lines=1000).classes("w-full h-40").style(
             "background: #0b1220; color: #a7f3d0; font-family: ui-monospace, Consolas, monospace; "
@@ -1959,6 +2065,8 @@ def main_gui(args):
         ui_state["mode"] = "test" if is_test else "custom"
         for el in [core_sel, input_in, samc_in] + core_ctrls + chan_ctrls + dac_ctrls:
             el.set_enabled(not is_test)
+        for _c in dac_ui.values():
+            _c["note"].set_visibility(is_test)
         refresh_channel()
     input_mode_sel.on_value_change(on_mode_change)
 

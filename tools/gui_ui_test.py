@@ -61,7 +61,8 @@ results = []
 
 def check(name, ok, detail=""):
     results.append(ok)
-    print(("PASS " if ok else "FAIL ") + name + ("  - " + detail if detail else ""))
+    line = ("PASS " if ok else "FAIL ") + name + ("  - " + detail if detail else "")
+    print(line.encode("ascii", "replace").decode())   # the Windows console is cp1252
 
 
 def wait_text(page, locator, pattern, timeout=20.0):
@@ -186,6 +187,22 @@ try:
         hidden = all(not t.is_visible() for t in page.locator(".q-tooltip").all())
         check("header checkbox 'tooltips' off hides every tooltip", hidden)
         page.get_by_role("checkbox", name=re.compile(r"tooltips", re.I)).click()
+
+        # ---- tiles fold and unfold on a click on their title ----
+        title = page.locator(".tile .card-title", has_text="spectrum")
+        # what sits under the title: the tile's second child (the chart)
+        canvas = page.locator(".tile", has=page.locator(".card-title", has_text="spectrum"))                      .locator(":scope > :nth-child(2)").first
+        before = canvas.is_visible()
+        title.click()
+        time.sleep(0.5)
+        folded = not canvas.is_visible()
+        arrow = title.evaluate("e => getComputedStyle(e, '::before').content")
+        title.click()
+        time.sleep(0.8)
+        unfolded = canvas.is_visible()
+        check("a tile folds on a click on its title and unfolds again",
+              before and folded and unfolded,
+              f"visible before {before}, hidden when folded {folded}, visible again {unfolded}")
 
         page.screenshot(path=SCREENSHOT, full_page=True)
         b.close()
