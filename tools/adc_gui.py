@@ -1023,6 +1023,10 @@ class FakeTarget:
         self.chain_ksps = 0
         self.chain_core, self.chain_pinsel, self.chain_samc = 5, 3, 0
         self.chain_test = True                     # DAC2 triangle (True) or the configured input (False)
+        # A 'dac 2 ...' while a test-input stream runs reprograms the very
+        # DAC the firmware's triangle_for() had set up: from then on RA8
+        # carries that, until the next 'stream on' sets its own again.
+        self.chain_dac2_user = False
         self.chain_ready_half = 0                  # alternates like ready_half in capture.c
         self.chain_grabs = 0
         self.grab_fault = None                     # None, "drop", "dup", "overrun", "missed"
@@ -1092,7 +1096,11 @@ class FakeTarget:
         noise while that DAC is off, as a DAC pin reads then."""
         if self.fake_source not in ("dac1", "dac2"):
             return self._custom_wave_samples(n)
-        unit = 1 if self.fake_source == "dac1" else 2
+        return self._dac_samples(1 if self.fake_source == "dac1" else 2, n)
+
+    def _dac_samples(self, unit: int, n: int) -> np.ndarray:
+        """What DACOUTn's pin reads: the triangle from low/high/SLPDAT,
+        near 0 with a little noise while the DAC is off."""
         d = self.dac[unit]
         if not d["on"]:
             v = 20 + self.rng.normal(0, self.noise_std, n)
@@ -1147,6 +1155,8 @@ class FakeTarget:
                 d = self.dac[unit]
                 if args[1].startswith("off"):
                     d["on"] = False
+                    if unit == 2 and self.chain_on and self.chain_test:
+                        self.chain_dac2_user = True
                     return True, [f"dac: {unit}", "off"]
                 if not args[1].startswith("on"):
                     return False, usage
@@ -1156,6 +1166,8 @@ class FakeTarget:
                 if not (0 <= low <= 4095) or not (0 <= high <= 4095) or high <= low or not (1 <= slp <= 255):
                     return False, usage
                 d.update(on=True, low=low, high=high, slp=slp)
+                if unit == 2 and self.chain_on and self.chain_test:
+                    self.chain_dac2_user = True
                 return True, [f"dac: {unit}", "RA1" if unit == 1 else "RA8",
                               f"low: {low}", f"high: {high}", f"slpdat: {slp}",
                               f"period ns: {round(dac_period_ns_of(low, high, slp))}"]
@@ -1196,12 +1208,14 @@ class FakeTarget:
                     self.chain_ksps = self._actual_ksps(ksps)
                     self.chain_core, self.chain_pinsel, self.chain_samc = core, pinsel, samc
                     self.chain_test = test
+                    self.chain_dac2_user = False       # triangle_for() owns DAC2 again
                     self.chain_ready_half = 0
                     self.chain_grabs = 0
                     return True, [f"stream: on - {self.chain_ksps} ksps"
                                   + ("" if test else f"  core {core} pinsel {pinsel} samc {samc}")]
                 if args and args[0] == "off":
                     self.chain_on = False
+                    self.chain_dac2_user = False
                     self.chain_core, self.chain_pinsel, self.chain_samc, self.chain_test = 5, 3, 0, True
                     return True, ["stream: off, boot configuration restored"]
                 if args and args[0] == "grab":
@@ -1253,12 +1267,17 @@ class FakeTarget:
             # not a claim about which PLL output the real chain's CLKGEN7
             # runs from (the frame carries the real board's actual
             # clock_dac_hz() there).
-            slope_samples = max(1.0, chain_model_slope_samples(slp, DAC_CLK_HZ, self.chain_ksps))
-            drop = n // 2 if self.grab_fault == "drop" else None
-            dup = n // 2 if self.grab_fault == "dup" else None
-            v = chain_synth(n, slope_samples,
-                            phase=float(self.chain_grabs * 7 % int(2 * slope_samples) or 1),
-                            drop=drop, dup=dup, seed=self.chain_grabs)
+            if self.chain_dac2_user:
+                # the frame still reports triangle_for()'s slp, as
+                # s_slpdat does on the board - only RA8 changed
+                v = self._dac_samples(2, n)
+            else:
+                slope_samples = max(1.0, chain_model_slope_samples(slp, DAC_CLK_HZ, self.chain_ksps))
+                drop = n // 2 if self.grab_fault == "drop" else None
+                dup = n // 2 if self.grab_fault == "dup" else None
+                v = chain_synth(n, slope_samples,
+                                phase=float(self.chain_grabs * 7 % int(2 * slope_samples) or 1),
+                                drop=drop, dup=dup, seed=self.chain_grabs)
         else:
             slp = 0
             v = self._custom_input_samples(n)
@@ -1393,6 +1412,20 @@ def selftest() -> int:
     ok_all &= ok_fault
     print(f"grab with a lost sample: caught in {caught} of 8 windows, false alarms in "
           f"{false_alarms} of 8 clean ones ->", "PASS" if ok_fault else "FAIL")
+
+    # ---- test input: 'dac 2 on' replaces the firmware's triangle on RA8
+    # ---- until the next 'stream on' ----
+    t.cmd("stream on 8000")
+    t.cmd("dac 2 on 256 1500 8")
+    okt, st, mt = t.grab()
+    hi_user = int(np.max(st)) if okt else 0
+    t.cmd("stream on 8000")
+    okt2, st2, _m = t.grab()
+    hi_fw = int(np.max(st2)) if okt2 else 0
+    ok_tdac = abs(hi_user - 1500) < 60 and mt.get("slpdat", 0) > 0 and hi_fw > 3000
+    ok_all &= ok_tdac
+    print(f"test input: 'dac 2 on 256 1500 8' -> max {hi_user} (slp in frame {mt.get('slpdat')}), "
+          f"next 'stream on' -> firmware triangle, max {hi_fw}:", "PASS" if ok_tdac else "FAIL")
 
     # ---- the fake's "DAC2 triangle" source follows the DAC2 tile ----
     ok, _ = t.cmd("stream on 8000 5 3 0")
@@ -1529,7 +1562,7 @@ def main_gui(args):
     # knows to send 'stream on' again.
     port_lock = asyncio.Lock()
     state = dict(target=None, live=False, busy=False, cycles=0, grabs=0,
-                 acq_active=None, live_t0=None, buf_size=2048,
+                 acq_active=None, test_dac2=None, live_t0=None, buf_size=2048,
                  settings_path=args.settings)
 
     def ports():
@@ -1726,11 +1759,15 @@ def main_gui(args):
                     _btn = ui.button(f"apply dac{_unit}", icon="graphic_eq").props("unelevated").classes("w-full")
                     _msg = ui.label().classes("text-xs text-slate-400 mono")
                     # Shown while the test input is chosen: 'stream on <ksps>'
-                    # starts DAC2's triangle itself (chaintest.c triangle_for()),
-                    # so what is set here only acts on a custom input.
-                    _note = ui.label("test input chosen: the firmware runs DAC2's triangle itself - "
-                                     "these settings act on a custom input (e.g. core 5 / AN3 = RA8 "
-                                     "for DAC2, core 5 / AN1 = RA1 for DAC1)").classes("text-xs text-amber-400")
+                    # starts DAC2's own triangle (chaintest.c triangle_for());
+                    # DAC2 switched on here replaces it right after, and again
+                    # after every 'stream on' (rate change).
+                    _note = ui.label(
+                        "test input: 'on' + apply puts this triangle on RA8 in place of the "
+                        "firmware's own, and keeps it there across rate changes; 'off' + apply "
+                        "gives the firmware's triangle back" if _unit == 2 else
+                        "test input reads DAC2 (RA8) - DAC1 on RA1 acts on a custom input "
+                        "(core 5 / AN1)").classes("text-xs text-amber-400")
                     dac_ui[_unit] = {"on": _on, "low": _low, "high": _high, "slp": _slp,
                                      "freq": _freq, "btn": _btn, "msg": _msg, "note": _note}
 
@@ -2402,21 +2439,56 @@ def main_gui(args):
             state["target"] = None
     conn_btn.on_click(do_connect)
 
-    async def apply_dac(unit):
-        """cli.c: dac <1|2> <on|off> [low] [high] [slpdat]"""
+    async def send_dac(unit):
+        """cli.c: dac <1|2> <on|off> [low] [high] [slpdat] - the card's
+        values to the board, under the port lock (LIVE may be grabbing).
+        A DAC2 sent while the test input streams replaces the firmware's
+        triangle on RA8; state["test_dac2"] keeps what was sent, so the
+        triangle card's slope model uses it instead of the frame's slp
+        (which still reports triangle_for()'s choice)."""
         c = dac_ui[unit]
         t = state["target"]
         if not t:
             c["msg"].text = "not connected"
-            return
+            return False
         if not c["on"].value:
-            ok, lines = await run.io_bound(t.cmd, f"dac {unit} off")
+            cmd = f"dac {unit} off"
         else:
             low, high = int(c["low"].value or 0), int(c["high"].value or 0)
             slp = int(c["slp"].value or 0)
-            ok, lines = await run.io_bound(t.cmd, f"dac {unit} on {low} {high} {slp}")
+            cmd = f"dac {unit} on {low} {high} {slp}"
+        async with port_lock:
+            ok, lines = await run.io_bound(t.cmd, cmd)
+        if ok and unit == 2 and c["on"].value and (state["acq_active"] or {}).get("mode") == "test":
+            state["test_dac2"] = (low, high, slp)
         c["msg"].text = "   ".join(lines) if lines else (f"dac{unit} applied" if ok else f"dac{unit} refused")
+        return ok
+
+    async def apply_dac(unit):
+        """The card's apply button. With the test input, DAC2 'off' does
+        not switch RA8 off (that would take the test signal away): the
+        stream is restarted instead, and 'stream on' brings the firmware's
+        own triangle back. Without LIVE, one grab shows the result."""
+        c = dac_ui[unit]
+        if not state["target"]:
+            c["msg"].text = "not connected"
+            return
+        if unit == 2 and (input_mode_sel.value or "test") == "test":
+            if c["on"].value:
+                running = state["acq_active"] == current_acq_cfg()
+                if not await ensure_streaming():   # a new 'stream on' sends DAC2 itself
+                    return
+                if running:
+                    await send_dac(2)
+            else:
+                state["test_dac2"] = None
+                state["acq_active"] = None          # next cycle: 'stream on' again
+                c["msg"].text = "dac2: the firmware's own test triangle again (stream restarted)"
+        else:
+            await send_dac(unit)
         refresh_channel()
+        if not state["live"]:
+            await do_single()
     for _u in sorted(dac_ui):
         dac_ui[_u]["btn"].on_click(lambda e, u=_u: apply_dac(u))
 
@@ -2426,7 +2498,7 @@ def main_gui(args):
         <pinsel> <samc>' leaves the DAC alone on purpose (chaintest.c)."""
         for u in sorted(dac_ui):
             if dac_ui[u]["on"].value:
-                await apply_dac(u)
+                await send_dac(u)
 
     async def apply_buf():
         t = state["target"]
@@ -2494,8 +2566,11 @@ def main_gui(args):
         state["acq_active"] = cfg
         state["grabs"] = 0
         state["live_t0"] = None          # set at the first grab, see one_cycle()
+        state["test_dac2"] = None        # 'stream on' set its own triangle
         if cfg["mode"] == "custom":
             await apply_active_dacs()
+        elif dac_ui[2]["on"].value:      # test input, DAC2 on in its card
+            await send_dac(2)
         return True
 
     async def one_cycle():
@@ -2579,7 +2654,12 @@ def main_gui(args):
                 triangle_chips["up"].text = f"up {r['n_up']} · {r['l_up']:.2f} smp"
                 triangle_chips["down"].text = f"down {r['n_dn']} · {r['l_dn']:.2f} smp"
                 triangle_chips["slip"].text = f"slip {r['slip']:.2f} (k={r['slip_k']}, {r['slip_n']} spans)"
-                model = chain_model_slope_samples(meta["slpdat"], meta["dac_hz"], meta["ksps"])
+                if state["test_dac2"]:
+                    lo_, hi_, sl_ = state["test_dac2"]
+                    model = ((hi_ - lo_) * 32.0 * meta["ksps"] * 1e3 / (sl_ * meta["dac_hz"])
+                             if meta["dac_hz"] > 0 else 0.0)
+                else:
+                    model = chain_model_slope_samples(meta["slpdat"], meta["dac_hz"], meta["ksps"])
                 mean_len = (r["l_up"] + r["l_dn"]) / 2.0 if (r["n_up"] or r["n_dn"]) else 0.0
                 triangle_chips["model"].text = (f"slope/model {mean_len / model:.3f}"
                                                 if model > 0 and mean_len > 0 else "slope/model –")

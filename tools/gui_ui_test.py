@@ -176,6 +176,41 @@ try:
         ok, txt = wait_changed(page, cyc, c0, timeout=15.0)
         check("SINGLE grabs once when not live", ok, txt[:100])
 
+        # ---- test input: DAC2 card 'on' + apply puts its triangle on RA8 ----
+        tchart_el = page.locator(".tile", has=page.locator(".card-title", has_text="time signal")) \
+                        .locator(".nicegui-echart").first
+
+        def time_max():
+            return tchart_el.evaluate(
+                "e => { const c = (window.echarts && echarts.getInstanceByDom(e)) || "
+                "getElement(e.id.replace(/^c/, '')).chart; "
+                "const d = c.getOption().series[0].data || []; "
+                "return d.length ? Math.max(...d.map(p => p[1])) : -1; }")
+        page.get_by_label(re.compile(r"^input$", re.I)).click()
+        page.get_by_text("RA8 / DAC2 test triangle (core 5, pin 3)", exact=True).click()
+        time.sleep(0.5)
+        dac2 = page.locator(".tile", has=page.locator(".card-title", has_text="dac2 · triangle"))
+        dac2.get_by_label(re.compile(r"^dac2$", re.I)).click()
+        page.get_by_role("option", name="on", exact=True).click()
+        hi = dac2.get_by_label(re.compile(r"^high", re.I))
+        hi.fill("1500")
+        hi.press("Tab")
+        c0 = cyc.inner_text()
+        dac2.get_by_role("button", name=re.compile(r"apply dac2", re.I)).click()
+        wait_changed(page, cyc, c0, timeout=15.0)
+        time.sleep(1.0)
+        m_on = time_max()
+        dac2.get_by_label(re.compile(r"^dac2$", re.I)).click()
+        page.get_by_role("option", name="off", exact=True).click()
+        c0 = cyc.inner_text()
+        dac2.get_by_role("button", name=re.compile(r"apply dac2", re.I)).click()
+        wait_changed(page, cyc, c0, timeout=15.0)
+        time.sleep(1.0)
+        m_off = time_max()
+        check("test input: DAC2 'on' + apply (high 1500) reaches the time chart, 'off' gives the "
+              "firmware's triangle back", abs(m_on - 1500) < 60 and m_off > 3000,
+              f"max with DAC2 card {m_on}, after 'off' {m_off}")
+
         # ---- tooltips: readable size, and the header checkbox hides them ----
         rate_field.hover()
         time.sleep(1.5)

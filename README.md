@@ -962,7 +962,7 @@ as" / "load as" name another file; `--settings <file>` starts with one.
 | `acquisition.core`, `.pinsel`, `.samc` | the custom input: ADC core 1..5, PINSEL 0..15, sample time 0..31 |
 | `acquisition.interval_ms` | pause between two grabs in LIVE |
 | `buffer.size` | total ping-pong buffer (`buf`), even, 16..8192 |
-| `dac.1`, `dac.2` | `on`, `low`, `high`, `slpdat` of each DAC's triangle (DAC tiles) |
+| `dac.1`, `dac.2` | `on`, `low`, `high`, `slpdat` of each DAC's triangle (DAC tiles). With the test input, DAC2 `on` replaces the firmware's own test triangle on RA8 after every `stream on`; `off` leaves the firmware's |
 | `fake.source` | what the stand-in plays on a custom input in `--fake`: `sine`, `dac2` or `dac1` (that DAC tile's triangle) |
 | `fake.*` | the sine's parameters: `signal_khz`, `amplitude`, `noise`, `harmonic2`, `harmonic3` |
 | `version` | settings format (3) |
