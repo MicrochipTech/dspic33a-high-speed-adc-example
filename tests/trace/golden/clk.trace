@@ -1,0 +1,15 @@
+# scenario clk
+# layout check: 0 fields differ from the pack's masks
+W AD3CON       0x80000000 -> 0x80008000
+W CLK6DIV      0x00000000 -> 0x00028000
+# capture_set_clkdiv(500) -> 0
+# capture_set_clkdiv(500)
+W PLL1DIV      0x00000000 -> 0x00004024
+# clock_adc_set_rate(4000, &got) -> rc=0 got=4000
+# clock_adc_set_rate(4000)
+W PLL1DIV      0x00004024 -> 0x0000481B
+# clock_adc_set_rate(8000, &got) -> rc=0 got=8000
+# clock_adc_set_rate(8000)
+W PLL1DIV      0x0000481B -> 0x00005011
+# clock_adc_set_rate(40000, &got) -> rc=0 got=40000
+# clock_adc_set_rate(40000)

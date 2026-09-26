@@ -1,0 +1,11 @@
+# scenario timebase
+# layout check: 0 fields differ from the pack's masks
+# timebase_init()
+W T1CON        0x00000000 -> 0x00008010
+W PR1          0x00000000 -> 0xFFFFFFFF
+# timebase_init() again - already running, no writes expected
+# timebase_check()
+D __delay32(20000000)
+# -> 1250000 ticks
+# timebase_ticks() twice
+# -> difference 0

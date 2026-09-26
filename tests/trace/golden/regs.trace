@@ -1,0 +1,78 @@
+# scenario regs
+# layout check: 0 fields differ from the pack's masks
+# before regs_dump()
+C [regs] clock
+C OSCCTRL: 0x00000000
+C PLL1CON: 0x00000000
+C PLL1DIV: 0x00000000
+C PLL2CON: 0x00000000
+C PLL2DIV: 0x00000000
+C CLK1CON: 0x00000000
+C CLK1DIV: 0x00000000
+C CLK6CON: 0x00000000
+C CLK6DIV: 0x00000000
+C CLK7CON: 0x00000000
+C CLK7DIV: 0x00000000
+C VCO1DIV: 0x00000000
+C CLK13CON: 0x00000000
+C CLK13DIV: 0x00000000
+C IEC0: 0x00000000
+C IFS0: 0x00000000
+C [regs] adc
+C core: 3
+C ADxCON: 0x00000000
+C ADxSTAT: 0x00000000
+C ADxCH0CON1: 0x00000000
+C ADxCH0CNT: 0x00000000
+C ADxCH0RES: 0x00000000
+C ADxCH0DATA: 0x00000000
+C ch0 irq: 201
+C cal bits (ACALEN|CALREQ|CALRATE): 0x00000000
+C IECx (this core's word): 0x00000000
+C IFSx (this core's word): 0x00000000
+C CH0 IRQ mask in it: 0x00000200
+C [regs] dma
+C DMACON: 0x00000000
+C DMALOW: 0x00000000
+C DMAHIGH: 0x00000000
+C DMA0CH: 0x00000000
+C DMA0SEL: 0x00000000
+C DMA0STAT: 0x00000000
+C DMA0SRC: 0x00000000
+C DMA0DST: 0x00000000
+C DMA0CNT: 0x00000000
+C IEC2: 0x00000000
+C IFS2: 0x00000000
+C IPC9: 0x00000000
+C [regs] counters
+C blocks_done: 0
+C dma_overrun: 0
+C late_service: 0
+C proc_missed: 0
+C dma_addr_err: 0
+C dma_bus_err: 0
+C selftest_mean: 0
+C buf: &dma_buffer+0x0
+C half_len: 1024
+C buf_end (in use): &dma_buffer+0x1000
+C guard0: 0x00000000
+C guard1: 0x00000000
+C guard15: 0x00000000
+C [regs] dac
+C DACCTRL1: 0x00000000
+C DAC1CON: 0x00000000
+C DAC1DAT: 0x00000000
+C DAC1SLPCON: 0x00000000
+C DAC1SLPDAT: 0x00000000
+C DAC2CON: 0x00000000
+C DAC2DAT: 0x00000000
+C DAC2SLPCON: 0x00000000
+C DAC2SLPDAT: 0x00000000
+C UREFCON: 0x00000000
+C DAC clock Hz (read back): 0
+C [regs] uart (stub: cli.c not linked, no UART registers here)
+C [regs] cpu
+C INTCON1: 0x00000000
+C PCTRAP: 0x00000000
+C fail_code: 0
+# after regs_dump()

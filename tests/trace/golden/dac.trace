@@ -1,0 +1,19 @@
+# scenario dac
+# layout check: 0 fields differ from the pack's masks
+W PLL1DIV      0x00000000 -> 0x0100C829
+W VCO1DIV      0x00000000 -> 0x00020000
+# preset: PLL1DIV/VCO1DIV as clock_init() leaves them at boot
+# clock_dac_select(CLOCK_DAC_PLL1_VCO)
+W DACCTRL1     0x00000000 -> 0x00008000
+W DAC2CON      0x00000000 -> 0x0000810D
+W DAC2DAT      0x00000000 -> 0x0F0000FF
+W DAC2SLPCON   0x00000000 -> 0x84000000
+W DAC2SLPDAT   0x00000000 -> 0x00000012
+W CLK7CON      0x80000000 -> 0x80029700
+# dac2_triangle_start(0xFF, 0xF00, 18) -> 1
+# after dac2_triangle_start()
+W DACCTRL1     0x00008000 -> 0x00000000
+W DAC2CON      0x0000810D -> 0x0000000D
+W DAC2SLPCON   0x84000000 -> 0x00000000
+W CLK7CON      0x80029700 -> 0x80021700
+# after dac2_off()

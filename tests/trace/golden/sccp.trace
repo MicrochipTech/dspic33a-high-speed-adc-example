@@ -1,0 +1,26 @@
+# scenario sccp
+# layout check: 0 fields differ from the pack's masks
+W CCP1CON1     0x00000000 -> 0x00008020
+W CCP1CON2     0x00000000 -> 0x00100000
+W CCP1PR       0x00000000 -> 0x00000063
+W CCP1RB       0x00000000 -> 0x00000032
+# sccp1_start(PERIPHERAL, TIMER, SPECIAL) -> 1
+# T_PER: peripheral clock, timer mode, special event trigger
+W CLK13CON     0x80000000 -> 0x80029500
+W CLK13DIV     0x00000000 -> 0x00010000
+# clock_trig_on() (CLKGEN13)
+W CCP1CON1     0x00008020 -> 0x00008120
+# sccp1_start(GEN13, TIMER, SPECIAL) -> 1
+# T_G13 (= TRG2): CLKGEN13, timer mode, special event trigger
+W CCP1CON1     0x00008120 -> 0x00008021
+# sccp1_start(PERIPHERAL, OC, SPECIAL) -> 1
+# OC_PER: peripheral clock, output compare, special event trigger
+W CCP1CON1     0x00008021 -> 0x00008121
+# sccp1_start(GEN13, OC, SPECIAL) -> 1
+# OC_G13: CLKGEN13, output compare, special event trigger
+W CCP1CON1     0x00008121 -> 0x00008020
+W CCP1CON2     0x00100000 -> 0x00080000
+# sccp1_start(PERIPHERAL, TIMER, ROLLOVER) -> 1
+# OLD: peripheral clock, timer mode, rollover (runs 5-7's failing combination)
+W CCP1CON1     0x00008020 -> 0x00000020
+# sccp1_stop()

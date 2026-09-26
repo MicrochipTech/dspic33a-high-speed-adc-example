@@ -1,0 +1,14 @@
+# scenario fail
+# layout check: 0 fields differ from the pack's masks
+# before _CLKFInterrupt()
+D capture_halt()
+C <force_up>
+C 
+[CLKF] clock fail: the FSCM switched the CPU to the backup FRC
+C [CLKF] OSCCTRL: 0x00000000
+C [CLKF] PLL2CON: 0x00000000
+C [CLKF] CLK1CON: 0x00000000
+C [CLKF] reached boot stage: 0
+F fail(10)
+# fail() longjmp'd back, as expected
+# after _CLKFInterrupt()
