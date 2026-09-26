@@ -26,9 +26,18 @@ reproduces today's `chain all`.
 4. **Host tests green** (from P0 on): `tools\hosttest.bat`.
 5. **No behaviour change on the console.** Any task that touches output says how that
    was checked.
-6. **The simulator acceptance run (~7 min) only runs when the user asks.** The tasks
-   that need it are marked **[SIM]**. They are collected so that one run covers
-   several tasks.
+6. **The simulator is used at two levels.**
+   - **[SMOKE]**: the smoke build (P0.7) boots, prints the banner, runs `help` and a few
+     commands, and checks for traps. It is meant to take under a minute and runs after
+     every task that touches the boot or console path. It may run without asking, as
+     long as the P0.7 measurement confirms that it stays short.
+   - **[SIM]**: the full acceptance run (~7 min, ping-pong stream) **only runs when the
+     user asks**. It is collected at P9 and P12.
+   The simulator compiles with the real xc-dsc, device header and linker script. It
+   catches what the host cannot: dsPIC-only traps (misaligned access, stack overflow,
+   address errors) and RAM layout. It models no PLL, ADC or DMA, and any pending
+   interrupt aborts the run. It says nothing about driver register behaviour; the
+   register trace does.
 7. After any change to the file list: update `tools/build.bat`, `tools/Makefile`,
    `nbproject/configurations.xml` (file list only; never `languageToolchainVersion`, and
    never `git checkout` the whole file), and delete `adc_dma_40msps.X/build` and `dist`.
@@ -49,7 +58,7 @@ later task relies on.
 - Build all three variants and record the memory usage (flash, RAM) of each in
   `tests/baseline.md`.
 - Record `help` output and the boot banner from a simulator run that already exists in
-  `docs/logs/`, if any; otherwise mark it as "to capture at the first [SIM] run".
+  `docs/logs/`, if any; otherwise capture them with the first [SMOKE] run (P0.7).
 - **Done:** baseline file committed.
 
 ### P0.2 Host test harness
@@ -127,6 +136,38 @@ One scenario per entry point, recorded from the current code and committed as
 
 ---
 
+### P0.7 Simulator smoke build **[SMOKE]**
+
+- `toolsuild.bat smoke`: the simulator build with `-DSIM_SMOKE=1`. In `main.c`, the
+  simulator path skips the ping-pong stream and instead feeds a fixed command script
+  to the parser (`help`, `version`, `status`, and later `route list`), then stops with a
+  final marker line `[smoke] DONE`.
+- `tools/sim_trap.py --smoke`: runs it, fails on any trap, a missing `[smoke] DONE` or
+  a timeout, and saves the console output as `build/smoke.log`.
+- `tests/smoke/expected.log`: today's output, committed. Later tasks diff against it;
+  lines that change on purpose (a new command in `help`) are updated in the same commit.
+- **Measure** the wall-clock time. If it is over a minute, find out why (the `__delay32`
+  scaling, UART speed) before relying on it. If it cannot be made short, [SMOKE] also
+  runs only on request.
+- **Done:** the smoke run passes on today's code, its duration is recorded in
+  `tests/baseline.md`, and a deliberate trap (a misaligned 32-bit read behind a
+  `SIM_SMOKE_FAULT` switch) is reported as a failure.
+
+### P0.8 Cross-check: host fake header against the simulator
+
+The register trace is only as good as the generated fake `xc.h`. This task checks it
+once against the real toolchain:
+
+- After boot in the simulator, read the SFRs that the `boot` trace writes, through MDB
+  (`sim_trap.py --dump-sfr <list>`).
+- Compare them with the end state of the host `boot` trace.
+- First find out whether the simulator stores SFR writes at all for peripherals it does
+  not model. The P0.3 spike checks this on one register. If it does not, this task
+  reduces to comparing addresses and bit positions of the fake header against the
+  ATDF, done by `gen_fake_sfr.py` itself.
+- **Done:** every register in the `boot` trace agrees in address and final value, or
+  the reduced check passes and the limitation is written into `tests/trace/README.md`.
+
 ## P1: Directory structure (moves only)
 
 ### P1.1 Move files into `src/` subfolders
@@ -148,7 +189,7 @@ folder.
 - Update `build.bat`, `tools/Makefile`, `configurations.xml` (logical folders mirror
   `src/`), `tools/version.bat` if it writes into the root, and the P0 harness paths.
 - **Verify:** `fncmp.py` reports no function difference for all three builds; the
-  traces are unchanged; `tools\_test_mplabx.bat` builds.
+  traces are unchanged; `tools\_test_mplabx.bat` builds; **[SMOKE]** passes.
 - **Done:** all of the above, plus the paths in `CLAUDE.md` and `README.md` updated.
 
 ---
@@ -238,6 +279,18 @@ All in `src/lib/`, compiled in all three builds, called from nowhere.
 
 ---
 
+### P3.8 Cycle count per block (simulator, optional)
+
+- A smoke-build variant that calls `process_buffer`, `goertzel_f_block` and
+  `goertzel_i_block` on one 512-sample block, with the simulator stopwatch reading
+  before and after each (MDB `stopwatch`, driven from `sim_trap.py`).
+- First check whether the simulator counts FPU instructions with realistic cycle
+  counts: time a loop of known float operations and compare with the instruction set
+  reference. If it does not, drop this task. The float/fixed decision is then measured
+  on the board in N+4.
+- **Done:** cycles per block for the three functions in `tests/baseline.md`, marked
+  "simulator, not silicon".
+
 ## P4: Port layer (V2)
 
 ### P4.1 `src/port/log.h`, `src/port/panic.h`, `src/app/port_impl.c`
@@ -283,8 +336,8 @@ All in `src/lib/`, compiled in all three builds, called from nowhere.
 
 - `console_*` keep their names and meaning, implemented over `uart_*`.
 - **Verify:** `grep -E "U2|RPCON|RPOR|RPINR|IPC" src/cli/` finds nothing; traces
-  unchanged. **[SIM]** the console works (the banner and one command in the simulator
-  run).
+  unchanged. **[SMOKE]** the console works: the smoke log is identical to
+  `tests/smoke/expected.log`.
 
 ---
 
@@ -292,7 +345,7 @@ All in `src/lib/`, compiled in all three builds, called from nowhere.
 
 | Task | Content | Verify |
 |---|---|---|
-| **P6.1** | per-module command registration: `bench_register()`, `chain_register()`, `link_register()` etc.; `cli_init()` calls them in the old order | `help` lists the same commands in the same order (host test of the registration table, or **[SIM]**) |
+| **P6.1** | per-module command registration: `bench_register()`, `chain_register()`, `link_register()` etc.; `cli_init()` calls them in the old order | `help` lists the same commands in the same order (**[SMOKE]**: the `help` block of the smoke log is unchanged) |
 | **P6.2** | `src/tests/bench.c`: `test_*`, `matrix_*`, `sweep_*` out of `cli.c` | traces `variants`, `b2b` unchanged; builds |
 | **P6.3** | `src/lib/frame.c`: header line, payload in chunks, CRC line; writes through `size_t (*write)(const uint8_t *, size_t)` | host test: frame built by `frame.c` is parsed by `parse_grab_frame()` from `adc_gui.py` without error, with the same CRC |
 | **P6.4** | `src/link/gui_link.c`: `blk` and `stream grab` over `frame.c` | host test from P6.3 with the real header fields; GUI self-test (`adc_gui.py`, `FakeTarget`) |
@@ -311,7 +364,7 @@ After P6, `cli.c` contains only the basic commands and the formatting.
   dividers). `board.h` selects one of them and keeps only the name macros.
 - Drivers get their part of the config in `*_init()`. `grep board.h src/drivers/` finds
   nothing.
-- **Verify:** `boot` and `nano` traces unchanged.
+- **Verify:** `boot` and `nano` traces unchanged; **[SMOKE]** passes.
 
 ---
 
@@ -354,7 +407,7 @@ Pattern for every driver:
 | Task | Content | Verify |
 |---|---|---|
 | **P9.1** | `src/app/pingpong.c`: `pingpong_t` (buffer, half length, guard words, counters `missed`, `late`, `overrun`), `pingpong_on_half()`, `pingpong_service()`. No driver include. The buffer is passed in | host test: sequence of half events with gaps → the right `missed`/`late` |
-| **P9.2** | simulator hooks out of `pingpong.c`: `sim_dma.c` checks the half itself | build sim; **[SIM]** |
+| **P9.2** | simulator hooks out of `pingpong.c`: `sim_dma.c` checks the half itself | build sim; **[SMOKE]**; the full check follows in P9.5 |
 | **P9.3** | `src/meter/meter.c`: `measure_rate`, `process_bench`, `oneshot_n`, `selftest`, `clkoff_probe` | traces `b2b`, `variants` unchanged |
 | **P9.4** | `src/app/acquisition.c`: variants, rate (`set_pll`, `set_rate`, `set_clkdiv`), and `chain_stream_*` moved out of `chaintest.c` | traces `stream_on`, `stream_on_input` unchanged |
 | **P9.5** | **[SIM] acceptance run**, ask the user first: `sim_trap.py` default and at 256 samples per half, plus the `--fault` case | `[simtest] PASS`, `PASS`, `FAIL` with one mismatch at index 0 |
@@ -422,7 +475,7 @@ One test per rule, each with one case that triggers the rule and one that just p
 - A new console command. It prints the active route and the resource table (which DMA
   channel, SCCP and DAC is in use). It takes one parser slot (then 24 + help = 25 of
   32).
-- **Verify:** host test of the output function via the visitor; **[SIM]** the command
+- **Verify:** host test of the output function via the visitor; **[SMOKE]** the command
   in the simulator.
 
 ---
@@ -460,8 +513,9 @@ P0 ──► P1 ──► P2 ──► P3
 ```
 
 - P3 (the libraries) depends only on P0 and P1 and can run alongside P4 to P7.
-- [SIM] runs are collected: after P5.2 + P6.1 (console), after P9 (acceptance), and at
-  P12.4. That makes three runs of about 7 minutes each, each only on request.
+- **[SMOKE]** runs after P1, P5.2, P6.1, P7, P9.2 and P11.5, and after any other task
+  that touches `main.c`, the console or the memory layout.
+- **[SIM]** (full acceptance, ~7 min, on request only) runs at P9.5 and P12.4.
 - The only real risk of changing timing lies in P8.1 (DMA ISR). It is checked with
   `fncmp` (no indirect call, instruction count recorded), but only a board run can
   confirm it.
