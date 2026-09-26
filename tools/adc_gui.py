@@ -1827,6 +1827,10 @@ def main_gui(args):
                                         format="%.3f").props("dense outlined").style("width: 12rem")
                     ui.label("ADC full scale (4096 counts) = this voltage; the right axis and the "
                              "tooltip show volts from it").classes("text-xs text-slate-400")
+                # What this grab is: the signal source as the GUI set it up,
+                # and the window's own min..max - so a DAC change can be
+                # checked against the numbers, not only by eye.
+                sig_src_lbl = ui.label("source: -").classes("text-sm text-cyan-300 mono px-2")
                 time_chart = chart("", "sample", "ADC counts", 0, 4096, ACCENT, second_x_name="time")
                 # The right-hand axis in volts, on the same grid as the counts:
                 # both span 0..full scale, so their ticks describe the same heights.
@@ -2636,6 +2640,19 @@ def main_gui(args):
             time_axis["per_sample"] = t_scale / fs if fs > 0 else 0.0
             time_axis["unit"] = t_name.split("(")[-1].rstrip(")")
             update_time_tooltip()                 # also does time_chart.update()
+            cfg_now = state["acq_active"] or {}
+            if isinstance(t, FakeTarget) and t.fake_source in ("sine", "dac1"):
+                src_txt = ("fake: sine generator" if t.fake_source == "sine"
+                           else "fake: DAC1 card's triangle")
+            elif cfg_now.get("mode") == "custom":
+                src_txt = f"core {cfg_now.get('core')} / AN{cfg_now.get('pinsel')}"
+            elif state["test_dac2"]:
+                lo_, hi_, sl_ = state["test_dac2"]
+                src_txt = f"RA8: DAC2 card's triangle {lo_}..{hi_}, SLPDAT {sl_}"
+            else:
+                src_txt = f"RA8: the firmware's test triangle, SLPDAT {meta['slpdat']}"
+            sig_src_lbl.text = (f"source: {src_txt}   |   grab {state['cycles']}: "
+                                f"min {int(np.min(samples))}  max {int(np.max(samples))}")
             fft_chart.options["series"][0]["data"] = [[float(fx) / 1e3, float(d)] for fx, d in zip(f, db)]
             fft_chart.options["xAxis"][0]["max"] = float(f[-1]) / 1e3 if len(f) else 1
             fft_chart.update()
