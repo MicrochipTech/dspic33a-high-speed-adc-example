@@ -194,12 +194,19 @@ try:
         page.get_by_role("option", name="on", exact=True).click()
         hi = dac2.get_by_label(re.compile(r"^high", re.I))
         hi.fill("1500")
-        hi.press("Tab")
-        c0 = cyc.inner_text()
+        c0 = cyc.inner_text()     # no Tab: apply straight from the field, as a user does
         dac2.get_by_role("button", name=re.compile(r"apply dac2", re.I)).click()
         wait_changed(page, cyc, c0, timeout=15.0)
         time.sleep(1.0)
         m_on = time_max()
+        live.click()
+        hi.fill("2000")                   # no apply: the card sends it by itself
+        time.sleep(4.0)
+        m_auto = time_max()
+        stop_btn.first.click()
+        time.sleep(1.0)
+        check("DAC2 card: a changed value reaches the time chart without apply (LIVE)",
+              abs(m_auto - 2000) < 60, f"max {m_auto}")
         dac2.get_by_label(re.compile(r"^dac2$", re.I)).click()
         page.get_by_role("option", name="off", exact=True).click()
         c0 = cyc.inner_text()
@@ -273,16 +280,39 @@ try:
 
         # ---- fake target signal: sine or a DAC triangle ----
         freq = page.get_by_label(re.compile(r"^frequency, kHz", re.I))
+        page.get_by_label(re.compile(r"^signal$", re.I)).click()
+        page.get_by_role("option", name="sine generator (parameters below)", exact=True).click()
+        time.sleep(0.5)
         vis_sine = freq.is_visible()
         page.get_by_label(re.compile(r"^signal$", re.I)).click()
-        page.get_by_text("DAC2 triangle (DAC2 tile)", exact=True).click()
+        page.get_by_role("option", name="DAC2 triangle (RA8)", exact=True).click()
         time.sleep(0.5)
         hid_dac = not freq.is_visible()
         page.get_by_label(re.compile(r"^signal$", re.I)).click()
-        page.get_by_text("sine generator (parameters below)", exact=True).click()
+        page.get_by_role("option", name="sine generator (parameters below)", exact=True).click()
         time.sleep(0.5)
         check("fake signal: sine parameters shown for 'sine', hidden for 'DAC2 triangle'",
               vis_sine and hid_dac and freq.is_visible())
+
+        # ---- fake signal 'sine' with the test input: the time chart shows it ----
+        page.get_by_label(re.compile(r"^signal$", re.I)).click()
+        page.get_by_role("option", name="sine generator (parameters below)", exact=True).click()
+        c0 = cyc.inner_text()
+        single.click()
+        wait_changed(page, cyc, c0, timeout=15.0)
+        time.sleep(1.0)
+        m_sine = time_max()
+        tri_vis = page.get_by_text("triangle verdict · test input only").is_visible()
+        page.get_by_label(re.compile(r"^signal$", re.I)).click()
+        page.get_by_role("option", name="DAC2 triangle (RA8)", exact=True).click()
+        c0 = cyc.inner_text()
+        single.click()
+        wait_changed(page, cyc, c0, timeout=15.0)
+        time.sleep(1.0)
+        m_tri = time_max()
+        check("test input: fake 'sine' shows the sine (max ~2048+1500+150), no triangle verdict; "
+              "'DAC2' the triangle again", 3300 <= m_sine <= 3800 and not tri_vis and m_tri > 3700,
+              f"max sine {m_sine}, triangle card shown {tri_vis}, max DAC2 {m_tri}")
 
         # ---- settings: fold a tile, keep vref 2.5 V, save to the test's file ----
         page.locator(".tile .card-title", has_text="buffer").click()

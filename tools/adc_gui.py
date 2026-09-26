@@ -114,7 +114,7 @@ SETTINGS_DEFAULTS = {
         "1": {"on": False, "low": 0x100, "high": 0xF00, "slpdat": 8},
         "2": {"on": False, "low": 0x100, "high": 0xF00, "slpdat": 8},
     },
-    "fake": {"source": "sine", "signal_khz": 100.0, "amplitude": 1500.0,
+    "fake": {"source": "dac2", "signal_khz": 100.0, "amplitude": 1500.0,
              "noise": 6.0, "harmonic2": 150.0, "harmonic3": 0.0},
 }
 
@@ -1001,7 +1001,7 @@ class FakeTarget:
                  on_log=None, board: str = "EV74H48A"):
         self.on_log = on_log  # optional callable(str): the console transcript
         self.board = board if board in self.FAKE_BOARD_NAMES else "EV74H48A"
-        self.fake_source = "sine"                  # see FAKE_SOURCES
+        self.fake_source = None                    # see FAKE_SOURCES; None = what the input reads
         self.port = "fake"
         # Both DACs, as dac.c has them - only ever touched by the 'dac'
         # command, never by 'stream on' itself (the test form's own
@@ -1085,16 +1085,20 @@ class FakeTarget:
         v += self.rng.normal(0, self.noise_std, n)
         return np.clip(np.round(v), 0, 4095).astype(int)
 
-    # What the stand-in plays on a custom input, chosen on the "fake target
-    # signal" tile: "sine" (its parameters there) or a DAC's triangle from
-    # that DAC's tile ("dac1", "dac2").
+    # What the stand-in plays, chosen on the "fake target signal" tile, on
+    # either input: "sine" (its parameters there) or a DAC's triangle
+    # ("dac1", "dac2"). With the test input "dac2" is what RA8 really
+    # carries - the firmware's triangle, or the DAC2 tile's once applied;
+    # "sine" and "dac1" there are a stand-in's liberty (a generator on RA8),
+    # not something the board can do without a wire. None: the input's own
+    # signal (test: DAC2, custom: the sine).
     FAKE_SOURCES = ("sine", "dac1", "dac2")
 
     def _custom_input_samples(self, n: int) -> np.ndarray:
         """What a custom input reads: the configured sine, or a DAC's
         triangle from its tile's low/high/SLPDAT - near 0 with a little
         noise while that DAC is off, as a DAC pin reads then."""
-        if self.fake_source not in ("dac1", "dac2"):
+        if self.fake_source not in ("dac1", "dac2"):     # "sine" or None
             return self._custom_wave_samples(n)
         return self._dac_samples(1 if self.fake_source == "dac1" else 2, n)
 
@@ -1267,7 +1271,11 @@ class FakeTarget:
             # not a claim about which PLL output the real chain's CLKGEN7
             # runs from (the frame carries the real board's actual
             # clock_dac_hz() there).
-            if self.chain_dac2_user:
+            if self.fake_source == "sine":
+                v = self._custom_wave_samples(n)
+            elif self.fake_source == "dac1":
+                v = self._dac_samples(1, n)
+            elif self.chain_dac2_user:
                 # the frame still reports triangle_for()'s slp, as
                 # s_slpdat does on the board - only RA8 changed
                 v = self._dac_samples(2, n)
@@ -1713,11 +1721,11 @@ def main_gui(args):
                     live_btn = ui.button("live", icon="play_arrow").props("unelevated").classes("flex-grow")
 
             with ui.card().classes("tile w-full rounded-xl p-4 gap-2"):
-                ui.label("fake target signal · custom input only").classes("card-title")
+                ui.label("fake target signal").classes("card-title")
                 fake_src_sel = ui.select({"sine": "sine generator (parameters below)",
-                                          "dac2": "DAC2 triangle (DAC2 tile)",
+                                          "dac2": "DAC2 triangle (RA8)",
                                           "dac1": "DAC1 triangle (DAC1 tile)"},
-                                         value="sine", label="signal").props("dense outlined")
+                                         value="dac2", label="signal").props("dense outlined")
                 with ui.column().classes("w-full gap-2") as sine_box:
                     sig_in = ui.number("frequency, kHz", value=100.0, min=0.1, max=20000.0, step=10).props("dense outlined")
                     amp_in = ui.number("amplitude, counts (pk)", value=1500.0, min=0.0, max=2000.0, step=50).props("dense outlined")
@@ -1729,9 +1737,11 @@ def main_gui(args):
                 def on_fake_source(e=None):
                     src = fake_src_sel.value or "sine"
                     sine_box.set_visibility(src == "sine")
-                    fake_dac_lbl.text = ("" if src == "sine" else
-                                         f"the {src.upper()} tile's low / high / SLPDAT and on/off, "
-                                         f"as that DAC's pin reads them (off: near 0)")
+                    fake_dac_lbl.text = (
+                        "" if src == "sine" else
+                        "test input: the firmware's triangle, or the DAC2 tile's once applied; "
+                        "custom input: the DAC2 tile (off: near 0)" if src == "dac2" else
+                        "the DAC1 tile's low / high / SLPDAT and on/off (off: near 0)")
                 fake_src_sel.on_value_change(on_fake_source)
                 on_fake_source()
 
@@ -2086,7 +2096,7 @@ def main_gui(args):
             "dac": {str(u): {"on": bool(c["on"].value), "low": int(c["low"].value or 0),
                              "high": int(c["high"].value or 0), "slpdat": int(c["slp"].value or 0)}
                     for u, c in dac_ui.items()},
-            "fake": {"source": fake_src_sel.value or "sine",
+            "fake": {"source": fake_src_sel.value or "dac2",
                      "signal_khz": float(sig_in.value or 0.0),
                      "amplitude": float(amp_in.value or 0.0), "noise": float(noise_in.value or 0.0),
                      "harmonic2": float(harm2_in.value or 0.0),
@@ -2127,8 +2137,8 @@ def main_gui(args):
             c["high"].value = int(d.get("high", 0xF00))
             c["slp"].value = int(d.get("slpdat", 8))
         fake = cfg.get("fake", {})
-        fake_src_sel.value = fake.get("source", "sine") if fake.get("source") in ("sine", "dac1", "dac2") \
-            else "sine"
+        fake_src_sel.value = fake.get("source", "dac2") if fake.get("source") in ("sine", "dac1", "dac2") \
+            else "dac2"
         sig_in.value = float(fake.get("signal_khz", 100.0))
         amp_in.value = float(fake.get("amplitude", 1500.0))
         noise_in.value = float(fake.get("noise", 6.0))
@@ -2227,6 +2237,8 @@ def main_gui(args):
             if ui_state["custom"] is not None:
                 core_sel.value, input_in.value, samc_in.value = ui_state["custom"]
             ui_state["dac"] = int(ui_state["dac_custom"])
+        if ui_state["mode"] != ("test" if is_test else "custom"):
+            fake_src_sel.value = "dac2" if is_test else "sine"
         ui_state["mode"] = "test" if is_test else "custom"
         for el in [core_sel, input_in, samc_in] + core_ctrls + chan_ctrls + dac_ctrls:
             el.set_enabled(not is_test)
@@ -2492,6 +2504,26 @@ def main_gui(args):
     for _u in sorted(dac_ui):
         dac_ui[_u]["btn"].on_click(lambda e, u=_u: apply_dac(u))
 
+    # A change in a DAC card goes to the board by itself, 0.8 s after the
+    # last one (typing "1000" is four changes, and "1" alone would be
+    # refused as high <= low); the apply button stays for a resend.
+    dac_pending = {}
+
+    def dac_changed(unit):
+        if not state["target"]:
+            return
+        old = dac_pending.get(unit)
+        if old and not old.done():
+            old.cancel()
+
+        async def later():
+            await asyncio.sleep(0.8)
+            await apply_dac(unit)
+        dac_pending[unit] = asyncio.ensure_future(later())
+    for _u in sorted(dac_ui):
+        for _k in ("on", "low", "high", "slp"):
+            dac_ui[_u][_k].on_value_change(lambda e, u=_u: dac_changed(u))
+
     async def apply_active_dacs():
         """Every DAC switched on in its card, sent to the board - what a
         custom (non-test) input needs, since 'stream on <ksps> <core>
@@ -2530,7 +2562,7 @@ def main_gui(args):
 
     def sync_fake_signal(t):
         if isinstance(t, FakeTarget):
-            t.fake_source = fake_src_sel.value or "sine"
+            t.fake_source = fake_src_sel.value or None
             t.signal_khz = float(sig_in.value or 100.0)
             t.amplitude = float(amp_in.value or 0.0)
             t.noise_std = float(noise_in.value or 0.0)
@@ -2644,12 +2676,19 @@ def main_gui(args):
                         chip.text = f"H{k} –"
                     chip.props("color=grey-8")
 
-            if meta["slpdat"] > 0:
+            fake_no_tri = isinstance(t, FakeTarget) and t.fake_source in ("sine", "dac1")
+            if meta["slpdat"] > 0 and not fake_no_tri:
                 triangle_card.set_visibility(True)
                 r = chain_tri_eval([int(v) for v in samples])
                 verdict = chain_grid_ok(r)
-                triangle_verdict_chip.text = "PASS" if verdict else "FAIL"
-                triangle_verdict_chip.props(f'color={"positive" if verdict else "negative"}')
+                if r["slip_n"] == 0 and not r["overflow"]:
+                    # the slip test compares whole slopes; with fewer than
+                    # two in the window there is nothing to compare
+                    triangle_verdict_chip.text = "n/a - too few slopes in the window"
+                    triangle_verdict_chip.props("color=grey-8")
+                else:
+                    triangle_verdict_chip.text = "PASS" if verdict else "FAIL"
+                    triangle_verdict_chip.props(f'color={"positive" if verdict else "negative"}')
                 triangle_chips["turning points"].text = f"turning points {r['tps']}"
                 triangle_chips["up"].text = f"up {r['n_up']} · {r['l_up']:.2f} smp"
                 triangle_chips["down"].text = f"down {r['n_dn']} · {r['l_dn']:.2f} smp"
