@@ -28,7 +28,7 @@ was based on) are kept as the record of why the hybrid existed at all and what p
 | order | only between trace points; `dma0_init()`'s 24 writes came out as 9 lines in *index* order (IEC2 before DMACON) | per access | per access | per access |
 | unchanged-value writes (`DMA0STAT = 0`, `T1CON = 0`) | invisible | invisible | visible | visible |
 | drivers compile unchanged | yes (C) | **no**: 36 register names are also bit-field names (`PC`, `SPLIM`, `FSCL`...) and break as macros; `&X` in `adc.c`'s static table is no constant | `timebase.c`, `clock.c`, `sccp.c`, `dac.c`, `chaintest.c` yes; **`dma.c` no** (3x `(uint32_t)ptr` is an error in C++ on 64 bit), **`adc.c` no** (`ADCBITS()` casts a pointer to the bit type: the proxy is bound to AD3's index, not to the pointer), `capture.c` no (`_Static_assert`) | yes, all 17 files (only `-Wno-pointer-to-int-cast`) |
-| polling loops | **a background "hardware model" thread (below) - no per-access hook needed** | read hook | read hook | read hook |
+| polling loops | **a background "hardware model" thread (P0.4/P0.5), then a page-guarded read hook limited to the polled registers (P0.5b, below) - see "the hybrid, after all"** | read hook | read hook | read hook |
 | accesses through pointers | seen by the diff | not hooked | wrong register | trapped like any other |
 | extra machinery | none beyond a `CRITICAL_SECTION` and one background thread | none | C++ | `VirtualProtect`, a vectored exception handler, single-stepping |
 
@@ -37,6 +37,86 @@ scenario; `timebase_init()` is 2 writes in mode (a) and the real 5 (`T1CON=0, TM
 PR1, TCKPS, ON`) in the guarded-array mode. Under P0.4's plain (a), `timebase_init()`'s
 net writes are **T1CON 0x0 -> 0x8010, PR1 0x0 -> 0xFFFFFFFF**; `TMR1 0x0 -> 0x0` never
 appears (unchanged), which is exactly the accepted consequence above, not a bug.
+
+## P0.5b, 27.09.2026: the hybrid, after all - but only for polling
+
+**The recorded trace format did not change.** Every consequence of the 26.09.2026
+decision above still holds exactly as written: order between two `trace_point()`s is
+still lost, a write that leaves a register's value unchanged is still invisible, there
+is still no `R` line and never was one logged. What changed is *how a driver's poll of a
+self-clearing switch-enable bit or a hardware-set ready bit gets answered* - the row the
+table above calls "polling loops".
+
+P0.4/P0.5 answered it with a background OS thread (the next section, kept below as
+history) that repeatedly forced those bits to their expected state. It worked in the
+limit, but a short enough wait (`DIVSW_WAIT_LIMIT`, 100 000 iterations) could race the
+thread's own start-up on this host - about 1 attempt in 100-200, papered over with
+silent retries at the scenario level (also kept below, as history, since the mechanism
+that made them necessary is gone). The user's decision on 27.09.2026, once that residual
+race would not close under any further tuning of the thread: bring back *part* of the
+P0.3 spike's rejected guarded array - not to log accesses (that stays rejected, and nothing
+below changes the trace format), but to answer a poll deterministically, on the driver's
+own thread, with no second thread to race at all.
+
+The hybrid, as built (`tests/trace/harness/hwmodel.c`, `recorder.c`):
+
+- **Page-guard only the pages that contain a scenario's own polled registers** (plus
+  `TMR1`, if the scenario uses `tmr1_step`) - `VirtualProtect(PAGE_NOACCESS)` on exactly
+  those 4 KiB pages of `sfr_mem[]` (page-aligned, `recorder.c`), not the whole array the
+  spike guarded. Because the real ~2039 SFRs are tightly packed into the first two pages
+  of the (4-page) array, guarding "the page PLL1CON lives on" typically guards a few
+  hundred *other* registers too as a side effect - harmless (see the next point) and not
+  worth avoiding, since the target was never to minimise trapped accesses, only to answer
+  polls.
+- **A read of the *exact* register a rule names applies the rule** - clears the
+  self-clearing bits, sets the hardware-set ready bits, or (for `TMR1`) advances it by
+  the scenario's `tmr1_step` - via a vectored exception handler and single-step, adapted
+  from the spike's `tests/trace/spike/recorder.c` (`git show f1c5ad5`). Unlike the model
+  thread, this is not level-triggered-and-eventually-consistent; it is applied exactly
+  once, synchronously, before the faulting read instruction re-executes - so the very
+  first read of a polled register already sees the answer. **A write, or a read of any
+  *other* register sharing the guarded page, just passes through** (unprotect, let the one
+  instruction run, single-step, re-guard) - no rule applied, nothing logged.
+- **The hook never writes to the trace.** It calls `hw_set_masked()`/`hw_set()`
+  (`recorder.c`) exactly as the old model thread did, which update `sfr_mem[]` and
+  `shadow[]` together - a hardware-driven change, not a driver write, invisible to
+  `trace_flush()`'s diff, same as before. Approach (a)'s snapshot diff is the only thing
+  that ever prints a trace line, unchanged.
+- **`hwmodel_pause()`/`hwmodel_resume()` bracket `trace_flush()`'s own scan.** Found by
+  testing, not by inspection: `trace_flush()` walks all `SFR_COUNT` entries of `sfr_mem[]`
+  to diff them against `shadow[]` - which means it *reads* every polled register itself,
+  and without this, that incidental read fired the rule exactly as a real poll would (the
+  `clock` scenario's trace gained a spurious `W OSCCTRL 0x0 -> 0xC000` between
+  `hwmodel_start()` and the first `trace_point()`, from the diff loop's own read of
+  `OSCCTRL` landing before its read of `shadow[]` had caught up to the mutation it had
+  just triggered). `hwmodel_pause()` un-guards every currently-guarded page for the
+  duration of the scan (single-threaded - nothing else runs while it does), so the diff
+  sees the true state, exactly as if no hook existed; `hwmodel_resume()` re-guards them
+  afterward. A no-op when `hwmodel_start()` was never called, so `recorder.c` calls both
+  unconditionally around every diff.
+- **A reentrancy bug found and fixed the same way**: the handler must
+  `VirtualProtect(PAGE_READWRITE)` the faulting page *before* calling `hw_get()`/
+  `hw_set_masked()` to apply a rule, not after - those functions read and write
+  `sfr_mem[idx]` directly, and applying the rule while the page is still guarded makes
+  that access fault again, re-entering the handler for a fault it has no stack-based way
+  to track (`g_reguard_page` is one global, not a stack) - observed as an infinite
+  re-fault loop at the same instruction, killed only by the runaway watchdog (below).
+
+**Why this closes the race rather than narrowing it further:** there is no second thread
+any more, so there is nothing left for the driver thread to race against. `hwmodel_start()`
+resolves every rule's register (and `TMR1`, if used) to its `sfr_mem[]` index and page
+*before* the driver runs a single instruction, and guards those pages immediately; by the
+time the driver's own code reads one, the answer is already there, deterministically,
+every time. `variants.c`'s "call three times unconditionally" trick and every scenario's
+"retry up to 5x" loop (dac.c, sccp.c, b2b.c, clk.c, stream_on(_input).c) were removed
+entirely (P0.5b) - every entry point is now called exactly once, as `docs/IMPLEMENTATION-
+PLAN.md`'s plan says. Re-recording every golden trace against the new mechanism produced
+**byte-identical output to every P0.5 golden, `variants` included**: the single
+deterministic call now lands exactly where the old retried/tripled call always eventually
+converged to, so there was nothing to explain in a diff - none was needed. Verified: 20
+consecutive runs of the `dac` scenario (the shortest wait) and 5 full `tools\trace.bat`
+check runs, all byte-identical (`tests/trace/README.md`'s own change log / the P0.5b
+commit message has the exact counts).
 
 ## How the harness works (P0.4)
 
@@ -63,130 +143,105 @@ address order (the index already is rank-of-address, from `gen_fake_sfr.py`), so
 scenarios that end up writing the same registers to the same values always list them in
 the same order - the determinism the format needs does not depend on issuing order.
 
-### The hardware model (background thread, `hwmodel.c`)
+### The page-guarded read hook (`hwmodel.c`, P0.5b, 27.09.2026)
 
-Approach (a) has no per-access read hook, so a driver's busy-wait on a self-clearing
-switch-enable bit (`PLLxCON.PLLSWEN`, ...) or a hardware-set ready bit
-(`OSCCTRL.PLLxRDY`, `CLKxCON.CLKRDY`, ...) would spin until `WAIT_WHILE`'s bound
-(`diag.h`, `WAIT_LIMIT` = 2 000 000 iterations on the host build) and `fail()`. The
-model is a second OS thread, started with `hwmodel_start(rules, n, tmr1_step)` before
-the driver call and stopped with `hwmodel_stop()` after it, that repeatedly forces a
-small set of bits to a fixed state:
+Approach (a) has no per-access read hook of its own (the trace format's decision above,
+unchanged), so a driver's busy-wait on a self-clearing switch-enable bit
+(`PLLxCON.PLLSWEN`, ...) or a hardware-set ready bit (`OSCCTRL.PLLxRDY`,
+`CLKxCON.CLKRDY`, ...) needs *something* to answer it or it spins until `WAIT_WHILE`'s
+bound (`diag.h`, `WAIT_LIMIT` = 2 000 000 iterations on the host build, or the shorter
+`DIVSW_WAIT_LIMIT` = 100 000) and `fail()`s. `hwmodel_start(rules, n, tmr1_step)` (called
+before the driver call, `hwmodel_stop()` after it) now installs that answer as a
+page-guarded read hook instead of the background thread P0.4/P0.5 used (history, below):
+it resolves every rule's register (and `TMR1`, if `tmr1_step != 0`) to its `sfr_mem[]`
+index, works out which 4 KiB page(s) of the (page-aligned) array contain them, and
+`VirtualProtect(PAGE_NOACCESS)`s exactly those pages. A Windows vectored exception
+handler answers the resulting access violations:
 
 ```c
-{ "PLL1CON", PLLSWEN|FOUTSWEN|OSWEN|DIVSWEN, 0 },   /* self-clearing: force to 0 */
-{ "OSCCTRL", 0, PLL1RDY|PLL2RDY },                  /* hardware-set: force to 1  */
+{ "PLL1CON", PLLSWEN|FOUTSWEN|OSWEN|DIVSWEN, 0 },   /* self-clearing: cleared on read */
+{ "OSCCTRL", 0, PLL1RDY|PLL2RDY },                  /* hardware-set: set on read      */
 ```
 
-**Why this is deterministic despite being a real, unsynchronised OS thread:** every rule
-is level-triggered and idempotent - applying it before, during or after the driver sets
-the bit it waits on produces the same final state (switch-enable bit back at 0, ready bit
-at 1). There is no ordering between the model thread and the driver thread for a race to
-disagree about; the only thing that varies run to run is how many extra times the
-driver's spin loop re-read the bit before the model's next iteration cleared it, and
-approach (a) cannot see that anyway - it only diffs at trace points, after the call has
-returned. Proven, not just argued: the `timebase` and `clock` scenarios each ran **15**
-times (`clock`, with the model) and **5** times (`clock`, without it; `timebase`, which
-needs no model) with byte-identical stdout every time.
-
-Two bugs found while building this, both worth keeping here so nobody re-discovers them:
-
+- **A read of the exact register a rule names** applies the rule (`hw_set_masked()`) - or,
+  for `TMR1`, advances it by `tmr1_step` (`hw_get()`+`hw_set()`) - *before* the faulting
+  instruction re-executes: `VirtualProtect(PAGE_READWRITE)` the page, apply the rule (now
+  safe - see the reentrancy bug below), set the trap flag, `EXCEPTION_CONTINUE_EXECUTION`
+  so the one instruction runs and immediately single-steps; the `EXCEPTION_SINGLE_STEP`
+  that follows clears the trap flag and re-guards the same page. The very first read
+  already sees the answer - there is no second thread for a "how many times did it have to
+  poll" race to happen in any more.
+- **A write, or a read of any *other* register sharing the guarded page, just passes
+  through** the same unprotect/single-step/re-guard dance with no rule applied and nothing
+  logged - "not ours to touch". Because the ~2039 real SFRs are packed into the first two
+  of `sfr_mem[]`'s four pages (`gen_fake_sfr.py` assigns indices by rank of device
+  address, with no gaps), guarding "the page `PLL1CON` lives on" typically guards a few
+  hundred *other* registers too; harmless, and not worth avoiding.
+- **The hook never writes to the trace.** `hw_set_masked()`/`hw_set()` update `sfr_mem[]`
+  and `shadow[]` together, exactly as they did for the old model thread - a hardware
+  change, not a driver write, invisible to `trace_flush()`'s diff. Approach (a)'s snapshot
+  diff remains the only thing that ever prints a line.
+- **`hwmodel_pause()`/`hwmodel_resume()` bracket `trace_flush()`'s own scan** - found by
+  testing: the diff loop reads every one of `SFR_COUNT` `sfr_mem[]` entries itself, which
+  fired a rule on its own incidental read of a guarded register exactly as a real poll
+  would (`clock`'s trace gained a spurious `W OSCCTRL 0x0 -> 0xC000` between
+  `hwmodel_start()` and the first `trace_point()` before this was found - the diff's read
+  of `OSCCTRL` triggered the mutation, but its read of `shadow[]` for the *same*
+  comparison had already happened, so the comparison saw a stale 0 on one side and the
+  freshly-mutated value on the other). Pausing un-guards every currently-guarded page for
+  the scan (single-threaded - nothing else runs while it does) so the diff sees the true
+  state; resuming re-guards them. A no-op when `hwmodel_start()` was never called.
+- **A reentrancy bug, found the same way**: the page must be unprotected *before* calling
+  `hw_get()`/`hw_set_masked()` to apply a rule, not after - those functions touch
+  `sfr_mem[idx]` directly, and doing so while the page is still guarded faults again,
+  re-entering the handler for an access it has no stack-based way to track (one global
+  `g_reguard_page`, not a stack) - seen as an infinite re-fault loop at the same
+  instruction, killed only by the runaway watchdog (below).
 - **`windows.h` `#define`s `STRICT` to `1`**; the device header has an unrelated
-  same-named bit field (e.g. `FICD`'s `STRICT`). `recorder.c` includes `<windows.h>`
-  before `<xc.h>` (it needs `CRITICAL_SECTION`) and must `#undef STRICT` in between, or
-  the bit-field declaration fails to compile with "expected identifier ... before
-  numeric constant".
-- **A masked hardware-set is required, not a whole-word one.** The first version of
-  `hw_set()` copied the model's *entire* new register word into both `sfr_mem[]` and the
-  diff's shadow copy. That is correct only for a register nothing else ever writes
-  (`TMR1`), and wrong for `PLL1CON`/`CLK1CON`/etc., which also carry driver-written bits
-  (`ON`, `NOSC`, ...) that `trace_flush()` had not diffed yet: the model's next bit-clear
-  silently copied those undiffed bits into shadow too, and the driver's own write (e.g.
-  `PLL1CON = 0x8100`) vanished from the trace entirely - not garbled, just gone, because
-  shadow and the live register agreed by the time anyone looked. Fixed by
-  `hw_set_masked(idx, mask, value)`: only the rule's own bits are copied into shadow;
-  every other bit is left for the ordinary diff to find. `hw_set(idx, v)` is
-  `hw_set_masked(idx, ~0u, v)` - correct only where nothing else ever writes that SFR.
-- **A `CRITICAL_SECTION` serialises `hw_get()`/`hw_set_masked()` with the diff loop.**
-  Both threads touch `sfr_mem[]` and `shadow[]`; without a lock, the diff could read a
-  register mid-update by the model thread. The register count is small (~1500 words) and
-  trace points are infrequent, so the lock is held only briefly.
-- The model thread spins with no `Sleep()` at all (P0.4 called `Sleep(0)` once per
-  iteration; P0.5 removed it - see "a residual race" below) so it does not depend on a
-  scheduler quantum to be re-dispatched; on any machine with more than one logical core
-  it and the driver thread simply run in parallel, which is why the 20 runs above never
-  took a scheduler quantum into account and still came back instantly (see "runtime"
-  below).
+  same-named bit field (e.g. `FICD`'s `STRICT`). Both `recorder.c` and `hwmodel.c`
+  include `<windows.h>` before `<xc.h>` and must `#undef STRICT` in between, or the
+  bit-field declaration fails to compile with "expected identifier ... before numeric
+  constant" - the same fix in both files now, since `hwmodel.c` also needs `sfr_mem`'s
+  extern declaration (from the generated `xc.h`) to compute page addresses.
 
-### The hardware model - a residual race, and how P0.5 lives with it
+**Why this closes the race rather than narrowing it further:** there is no second thread
+any more, so there is nothing left for the driver thread to race against - the pages are
+guarded before the driver runs a single instruction, and the very first read of a polled
+register always sees the answer.
 
-P0.4's two scenarios only ever waited on `clock_init()`'s and `adc_init()`'s bound
-(`WAIT_LIMIT`, 2 000 000 iterations, `diag.h`) and were never observed to fail across the
-15+5 runs the spike/P0.4 recorded. P0.5 adds scenarios that wait on a *shorter* bound
-(`DIVSW_WAIT_LIMIT`, 100 000 iterations, `clock.c`: `clock_dac_on()`, `clock_trig_on()`,
-`clock_adc_set_pll()`/`_set_rate()`/`_set_div()`'s per-step waits) - and that shorter wait
-turned out to race the model thread's own start-up on this development host (14 logical
-cores): a throwaway repro (`dac`'s `clock_dac_on()` call, the shortest wait in the
-firmware) failed 50-95 times per 100 runs with the P0.4 `hwmodel.c` unchanged. The cause,
-found by measuring rather than guessing: `CreateThread()`'s own latency (a brand new
-thread's first scheduling, page faults for its stack, ...) can exceed the entire
-100 000-iteration window, so the model thread had sometimes not executed a single
-instruction by the time the driver's wait gave up.
+### History: the background thread (P0.4/P0.5) and its residual race
 
-`hwmodel.c` now, in order, for every fix that measurably helped and was kept:
+Kept for the record, since the retries it forced are what P0.5b removed. P0.4/P0.5
+answered a poll with a second OS thread, started with `hwmodel_start()` and stopped with
+`hwmodel_stop()`, that repeatedly forced the same bits to the same fixed state in a tight
+loop - level-triggered and idempotent, so applying a rule before, during or after the
+driver checked the bit gave the same final answer, and *which* iteration happened to win
+was invisible to a trace format that only diffs at trace points anyway. It worked for
+`clock_init()`'s and `adc_init()`'s `WAIT_LIMIT`-bound waits (2 000 000 iterations - 15+5
+runs, byte-identical every time), but P0.5's shorter `DIVSW_WAIT_LIMIT`-bound waits
+(100 000 iterations: `clock_dac_on()`, `clock_trig_on()`,
+`clock_adc_set_pll()`/`_set_rate()`/`_set_div()`) could race the thread's own start-up on
+this host (14 logical cores) - a throwaway repro of the shortest wait in the firmware
+(`dac`'s `clock_dac_on()`) failed 50-95 times per 100 with the plain model, because
+`CreateThread()`'s own latency (first scheduling, page faults for its stack) could exceed
+the entire wait window. Three mitigations, each measurably helpful and each kept - an
+event proving the thread had started (50-95/100 down to about 1/100), pinning the model
+and driver threads onto different logical cores, and a heartbeat proving live throughput,
+not just existence - never closed the gap: it stayed at roughly 1 failure per 100-200 runs
+no matter how the warm-up was tightened. What actually made the golden traces reproducible
+was a fourth layer that had nothing to do with `hwmodel.c` at all: every scenario driving
+a `DIVSW_WAIT_LIMIT`-bound function retried it silently (no `trace_point()` between
+attempts) up to 5 times on failure (`dac.c`, `sccp.c`, `b2b.c`, `clk.c`,
+`stream_on(_input).c`), and `variants.c` called `capture_select_variant()` three times
+**unconditionally** per variant (its own preamble discards
+`clock_adc_set_div()`/`clock_adc_set_pll()`'s return codes, so the function's own return
+value could not reliably say whether that preamble had raced - observed once as
+`PLL1CON 0x0 -> 0x10000000`/`CLK6CON 0x80000000 -> 0x80400000` sitting in a trace for a
+call that had returned `true`). `boot`, `nano`, `fail`, `regs` needed none of this - they
+only ever reached the longer, never-observed-to-race `WAIT_LIMIT` waits.
 
-1. **Waits for proof the thread has started** - an auto-reset event the thread sets as
-   its first statement, `hwmodel_start()` blocks on it before returning. Brought the
-   failure rate from 50-95/100 to about 1/100.
-2. **Pins the model thread and the calling thread onto different logical cores**
-   (`GetProcessAffinityMask`/`SetThreadAffinityMask`, restored in `hwmodel_stop()`), so
-   the two never contend for the same core. Best effort: collapses to a no-op on a
-   single-core host.
-3. **Waits for proof of live THROUGHPUT, not just existence** - a heartbeat counter the
-   model bumps every loop iteration; `hwmodel_start()` spins (bounded by wall clock only,
-   `GetTickCount64`, not by a fixed iteration count) until it has advanced by a margin
-   since the ready event fired.
-
-None of the three, alone or together, closed the race on this host: measured repeatedly
-at roughly 1 failure per 100-200 runs even with all three in place (a `Sleep(1)` instead
-of the busy-wait in step 3 made it markedly *worse*, 30-46 failures per 150 - `Sleep(0)`'s
-"yield only to equal-or-higher-priority threads" semantics interacting with the model's
-now-continuous spin is the suspect, not chased further). **What actually makes the
-golden traces reproducible is a fourth layer, at the scenario level, not in `hwmodel.c`
-at all**: every scenario that drives a `DIVSW_WAIT_LIMIT`-bound function retries it
-silently - no `trace_point()`/`trace_note()` between attempts - up to 5 times if it
-returns failure (`dac.c`, `sccp.c`, `b2b.c`, `clk.c`, `variants.c`,
-`stream_on(_input).c`). This is not a hack bolted onto approach (a); it follows directly
-from what approach (a) already throws away: **a golden trace only ever shows the *net*
-state at the next trace point**, so it cannot tell a clean first-attempt success from one
-that needed a retry first - the two are, by construction, indistinguishable in the trace
-format this project chose on 26.09.2026. Five retries at a roughly 1-4% single-attempt
-failure rate (higher for `stream_on(_input)`, which chains three or four such waits in
-one call) bring the chance of a golden trace ever being affected by this race to a
-practically negligible level, without touching how `hwmodel.c` answers any individual
-wait.
-
-`boot`, `nano`, `fail`, `regs` need none of this: they only reach `WAIT_LIMIT`-bound
-waits (`clock_init()`, `adc_init()`), which were never observed to race on this host, and
-are not retried.
-
-**`variants.c` needed a different shape of retry, found the hard way.**
-`capture_select_variant()`'s own preamble (capture.c) discards
-`clock_adc_set_div()`/`clock_adc_set_pll()`'s return codes
-(`(void)clock_adc_set_div(100u); (void)clock_adc_set_pll(5u, 1u);`) before running the
-per-variant switch - so the function's own return value does not reliably say whether
-that preamble's clock switch raced. Observed once, in a five-run check: `variants`
-`FAIL`ed with `PLL1CON 0x0 -> 0x10000000` (FOUTSWEN stuck) and
-`CLK6CON 0x80000000 -> 0x80400000` (DIVSWEN stuck) sitting in the trace, for a call that
-had returned `true` - "retry until it returns true" never triggered, because there was
-nothing to retry against. The fix is not a bigger retry count on the same condition: it
-is calling `capture_select_variant()` three times **unconditionally** per variant,
-keeping only the last call's result - each call redoes the same preamble from scratch, so
-even a call whose *return value* said nothing was wrong still gets another, fully-warmed
-chance to leave the clock in a clean state, and a clean run's trace is unaffected (a
-second identical call is an idempotent no-op diff). Worth remembering for any *other*
-scenario built later on a function with a similarly discarded internal return code: check
-that "retry on failure" can actually see the failure before trusting it.
+P0.5b removed `hwmodel.c`'s thread (and every one of the retries above) outright, once the
+read hook made them unnecessary - see the section above.
 
 ### Runaway guard
 
@@ -239,13 +294,13 @@ at a different device.
 | Scenario | Entry points | Sources | Model rules | Left out / notes |
 |---|---|---|---|---|
 | `boot` | `led_init()`, `console_early_init()` (stub), `clock_init()`, `cli_init()` (stub), `timebase_init()`, `adc_init()`, `capture_init()`, in main.c's own order | clock, timebase, adc, capture, dma, led, sccp | PLL1CON, PLL2CON, OSCCTRL (both RDY), CLK1CON, CLK6CON (`clock_init()`'s waits, same shape as `clock`); AD3CON.ADRDY (`adc_init()`, board default core 3) | `console_early_init()`/`cli_init()` are cli.c-only (decision 1) - stubbed, their UART pin/PPS/baud/command-registration effects are not in the trace. `boot_mark()`, `diag_report_reset()`, `crc16_selfcheck()`, the console banner: not in the plan's entry-point list, left out as boot-order glue |
-| `stream_on` | `chain_stream_on(1000)` (1 MSPS), `chain_stream_off()` | chaintest, capture, adc, dma, clock, sccp, dac, timebase, led | PLL1CON, OSCCTRL(PLL1RDY), CLK6CON, CLK7CON, CLK13CON, AD5CON.ADRDY (CHAIN_CORE), AD3CON.ADRDY (`restore()`'s default core); `tmr1_step=10000` (`wait_ticks()`, the two 25-tick waits) | PLL1DIV/VCO1DIV preset to their `clock_init()` boot values (setup() only rewrites PLL1's POSTDIV1/2; `clock_dac_hz()` needs PLLFBDIV/VCO1DIV already set or the triangle is refused) - `clock_init()` itself is `boot`'s/`clock`'s job. `chain_stream_on(1000)` retried up to 5x (silent) - see "a residual race" |
-| `stream_on_input` | `chain_stream_on_input(1000, core=2, pinsel=7, samc=1, test_signal=false)`, `chain_stream_off()` | same as `stream_on` | PLL1CON, OSCCTRL(PLL1RDY), CLK6CON, CLK13CON, AD2CON.ADRDY (the input asked for), AD3CON.ADRDY (`restore()`); `tmr1_step=10000` | `test_signal=false` (the GUI's real shape for a custom input, CLAUDE.md: "the DAC is then left alone") skips CLKGEN7/the DAC entirely - no CLK7CON rule needed. Same PLL1DIV/VCO1DIV preset and retry as `stream_on` |
-| `b2b` | `capture_set_pll(5, 5)`, `capture_start()`, `capture_stop()` | capture, adc, dma, clock, sccp, timebase, led | PLL1CON, OSCCTRL(PLL1RDY), CLK6CON, AD3CON.ADRDY | `capture_start()` triggers `capture_init()`/`dma0_init()` itself (first call, `dma_armed` starts false) - no separate call needed. No ISR ever fires (decision 2), so this traces the three control calls, not a completed capture. `capture_set_pll()` retried up to 5x (silent) |
-| `variants` | `capture_select_variant()` for all ten `capture_variant_t` values, want_ksps = 100 | capture, adc, dma, clock, sccp, timebase, led | PLL1CON, OSCCTRL(PLL1RDY), CLK6CON, CLK13CON, AD3CON.ADRDY | want_ksps = 100, not a rounder number: the SCCP-clocked variants compute `ticks = hz/1000/want_ksps` and refuse below 2 - at 8000 with no `clock_init()` run first (peripheral clock still the 4 MHz FRC/2), every SCCP variant failed (`ticks` truncated to 0); 100 keeps all ten comfortably above that floor. PLL1DIV preset to its boot value (PLLFBDIV/PLLPRE) for the same reason as `stream_on`. Each call made three times UNCONDITIONALLY (not "until true" like every other scenario) - `capture_select_variant()`'s own preamble discards `clock_adc_set_div()`/`clock_adc_set_pll()`'s return codes, so a racy wait in there can leave a stray bit in PLL1CON/CLK6CON while the function still returns true; see variants.c's own comment and "hardware model - a residual race" |
-| `dac` | the DAC2 triangle exactly as `chain all`'s stage 8 sets it (`triangle_for(8000000u, &slp)` reproduced: slp=18, low=0xFF, high=0xF00), `dac2_off()` | dac, clock, timebase | CLK7CON (`clock_dac_on()`) | `triangle_for()` itself is `static` in chaintest.c, not linkable alone - its arithmetic is reproduced instead (see dac.c's own comment) and called through the public `dac2_triangle_start()`. PLL1DIV/VCO1DIV preset to their `clock_init()` boot values (`clock_dac_hz()` needs them). `dac2_triangle_start()` retried up to 5x (silent) |
-| `sccp` | `sccp1_start()` for every (clock, mode, event) combination the firmware uses: (PERIPHERAL,TIMER,SPECIAL), (GEN13,TIMER,SPECIAL), (PERIPHERAL,OC,SPECIAL), (GEN13,OC,SPECIAL), (PERIPHERAL,TIMER,ROLLOVER) | sccp, clock, timebase | CLK13CON (`clock_trig_on()`) | `CAP_VAR_SCCP_TRG2` uses the same (clk,mode,ev) tuple as `CAP_VAR_SCCP_T_G13` - five distinct tuples cover all six SCCP variants. `clock_trig_on()` retried up to 5x (silent) |
-| `clk` | `capture_set_clkdiv(500)`, `clock_adc_set_rate()` for 4000/8000/40000 ksps | capture, adc, dma, clock, sccp, timebase, led | PLL1CON, OSCCTRL(PLL1RDY), CLK6CON, AD3CON.ADRDY | Not `clock_init()` first - neither function needs a rate already configured, both derive their result purely from the argument. Every call retried up to 5x (silent) |
+| `stream_on` | `chain_stream_on(1000)` (1 MSPS), `chain_stream_off()` | chaintest, capture, adc, dma, clock, sccp, dac, timebase, led | PLL1CON, OSCCTRL(PLL1RDY), CLK6CON, CLK7CON, CLK13CON, AD5CON.ADRDY (CHAIN_CORE), AD3CON.ADRDY (`restore()`'s default core); `tmr1_step=10000` (`wait_ticks()`, the two 25-tick waits) | PLL1DIV/VCO1DIV preset to their `clock_init()` boot values (setup() only rewrites PLL1's POSTDIV1/2; `clock_dac_hz()` needs PLLFBDIV/VCO1DIV already set or the triangle is refused) - `clock_init()` itself is `boot`'s/`clock`'s job. `chain_stream_on(1000)` called exactly once (P0.5b) - the read hook answers its waits deterministically |
+| `stream_on_input` | `chain_stream_on_input(1000, core=2, pinsel=7, samc=1, test_signal=false)`, `chain_stream_off()` | same as `stream_on` | PLL1CON, OSCCTRL(PLL1RDY), CLK6CON, CLK13CON, AD2CON.ADRDY (the input asked for), AD3CON.ADRDY (`restore()`); `tmr1_step=10000` | `test_signal=false` (the GUI's real shape for a custom input, CLAUDE.md: "the DAC is then left alone") skips CLKGEN7/the DAC entirely - no CLK7CON rule needed. Same PLL1DIV/VCO1DIV preset as `stream_on`; `chain_stream_on_input(...)` also called exactly once (P0.5b) |
+| `b2b` | `capture_set_pll(5, 5)`, `capture_start()`, `capture_stop()` | capture, adc, dma, clock, sccp, timebase, led | PLL1CON, OSCCTRL(PLL1RDY), CLK6CON, AD3CON.ADRDY | `capture_start()` triggers `capture_init()`/`dma0_init()` itself (first call, `dma_armed` starts false) - no separate call needed. No ISR ever fires (decision 2), so this traces the three control calls, not a completed capture. `capture_set_pll()` called exactly once (P0.5b) |
+| `variants` | `capture_select_variant()` for all ten `capture_variant_t` values, want_ksps = 100 | capture, adc, dma, clock, sccp, timebase, led | PLL1CON, OSCCTRL(PLL1RDY), CLK6CON, CLK13CON, AD3CON.ADRDY | want_ksps = 100, not a rounder number: the SCCP-clocked variants compute `ticks = hz/1000/want_ksps` and refuse below 2 - at 8000 with no `clock_init()` run first (peripheral clock still the 4 MHz FRC/2), every SCCP variant failed (`ticks` truncated to 0); 100 keeps all ten comfortably above that floor. PLL1DIV preset to its boot value (PLLFBDIV/PLLPRE) for the same reason as `stream_on`. Each call made exactly once (P0.5b - P0.5 called it three times unconditionally against the background thread's residual race, see "History" below; the read hook removed the need) |
+| `dac` | the DAC2 triangle exactly as `chain all`'s stage 8 sets it (`triangle_for(8000000u, &slp)` reproduced: slp=18, low=0xFF, high=0xF00), `dac2_off()` | dac, clock, timebase | CLK7CON (`clock_dac_on()`) | `triangle_for()` itself is `static` in chaintest.c, not linkable alone - its arithmetic is reproduced instead (see dac.c's own comment) and called through the public `dac2_triangle_start()`. PLL1DIV/VCO1DIV preset to their `clock_init()` boot values (`clock_dac_hz()` needs them). `dac2_triangle_start()` called exactly once (P0.5b) |
+| `sccp` | `sccp1_start()` for every (clock, mode, event) combination the firmware uses: (PERIPHERAL,TIMER,SPECIAL), (GEN13,TIMER,SPECIAL), (PERIPHERAL,OC,SPECIAL), (GEN13,OC,SPECIAL), (PERIPHERAL,TIMER,ROLLOVER) | sccp, clock, timebase | CLK13CON (`clock_trig_on()`) | `CAP_VAR_SCCP_TRG2` uses the same (clk,mode,ev) tuple as `CAP_VAR_SCCP_T_G13` - five distinct tuples cover all six SCCP variants. `clock_trig_on()` called exactly once (P0.5b) |
+| `clk` | `capture_set_clkdiv(500)`, `clock_adc_set_rate()` for 4000/8000/40000 ksps | capture, adc, dma, clock, sccp, timebase, led | PLL1CON, OSCCTRL(PLL1RDY), CLK6CON, AD3CON.ADRDY | Not `clock_init()` first - neither function needs a rate already configured, both derive their result purely from the argument. Every call made exactly once (P0.5b) |
 | `fail` | `_CLKFInterrupt()` called directly | clock, timebase | none (`capture_halt()`/`console_force_up()` resolve to stubs, see below) | `capture_halt()` and `console_force_up()`: neither is "linkable" here without pulling in unrelated modules just for one line each (capture.c + adc/dma/sccp/led for `dma0_halt()`; cli.c, categorically excluded, for the other) - both stubbed, per the task's "use the real ones where linkable, stubs otherwise". diag.c is NOT linked: its real `fail()` never returns (blinks forever), which would hang this scenario until the watchdog kills it - `_CLKFInterrupt()`'s `fail(10u)` resolves to the stub (`longjmp` back) instead |
 | `regs` | `regs_dump()`, called from the reset state (every SFR 0) | diag, clock, adc, dma, capture, dac, sccp, timebase, led | none (nothing here waits) | The only scenario that links diag.c - its real `fail_code`/`boot_stage`/`chain_mark`/`fail()` take over from stubs.c's copies (`-DHAVE_DIAG`); nothing here calls `fail()`, so diag.c's real, never-returning one is never exercised, only linked. `console_sync_baud()`/`console_regs_dump()` (cli.c-only, referenced by diag.c's `fail()`/`regs_dump()`) are stubbed. Registers are at their reset assumption throughout - this scenario is about the dump's OWN output format/order, not about reproducing a booted system's values (`boot`/`b2b`/`variants`/`clk`/`stream_on(_input)` do that) |
 | `nano` | `boot`'s exact sequence, `-DBOARD=2` (nano.cflags), the fake header generated from the MPS506's own device pack header (nano.mcu = `33AK512MPS506`) | same as `boot` | same shape as `boot`, but AD1CON.ADRDY (BOARD_EV17P63A's ADC_INSTANCE = 1) | Everything `boot` leaves out, left out here too. The MPS506 and MPS512 share every register `boot`'s entry points touch (CLAUDE.md: "every register and vector core 5 uses is identical on the MPS506, checked against the pack header 25.09.2026") - only which core/pins board.h names differs, which is exactly what the two golden traces, side by side, show |
@@ -261,23 +316,30 @@ caller); AD4CON (nothing selects ADC core 4).
 
 ## Polling loops and how each is satisfied
 
-| Where | Waits on | Bit is | Status (P0.5) |
-|---|---|---|---|
-| clock.c 107, 163 | `CLK1CON.OSWEN` | self-clearing | **answered** (`clock`/`boot`/`nano` scenarios' rules) |
-| clock.c 115/138, 590, 641 | `PLLxCON.PLLSWEN` | self-clearing | **answered** (`clock`/`boot`/`nano`: 115/138; `clk`/`b2b`/`variants`/`dac`/`stream_on(_input)`: 590/641, `clock_adc_set_pll`/`_set_rate`) |
-| clock.c 117/140, 594 | `PLLxCON.FOUTSWEN` | self-clearing | **answered** (as above) |
-| clock.c 119/142 | `PLLxCON.OSWEN` | self-clearing | **answered** |
-| clock.c 130/150 | `PLLxCON.DIVSWEN` | self-clearing | **answered** |
-| clock.c 120/143, 597, 644 | `OSCCTRL.PLLxRDY` | set by hardware (lock) | **answered** |
-| clock.c 175, 350, 398 | `CLK6/7/13CON.OSWEN` | self-clearing | **answered**, all three: CLK6CON (`clock`/`boot`/`clk`/`b2b`/`variants`/`nano`), CLK7CON (`dac`, `clock_dac_on()`), CLK13CON (`sccp`/`variants`/`stream_on(_input)`, `clock_trig_on()`) - the P0.4 open point closed |
-| clock.c 274, 402 | `CLK6/13CON.DIVSWEN` | self-clearing | **answered**: CLK6CON (`clk`'s `capture_set_clkdiv()`, `variants`' `CAP_VAR_CLKDIV`), CLK13CON (`sccp`/`variants`/`stream_on(_input)`) |
-| clock.c 277, 315, 353, 405, 600, 647 | `CLKxCON.CLKRDY` | set by hardware | **answered**: CLK1CON (`clock`/`boot`/`nano`), CLK6CON (all of the above), CLK7CON (`dac`, `stream_on(_input)`), CLK13CON (`sccp`/`variants`/`stream_on(_input)`) |
-| clock.c 493 | `CM4STAT.BUFV` | set by hardware (window done) | **still open**: no P0.5 scenario calls `clock_monitor_hz()` (only `chain all`'s stage 8 does, out of scope - see the scenario table below) |
-| adc.c 131, 287 | `ADxCON.ADRDY` (via `adc_cur` pointer) | set by hardware after `ON` | **answered**: AD1CON (`nano`), AD2CON (`stream_on_input`), AD3CON (`boot`/`clk`/`b2b`/`variants`), AD5CON (`stream_on`) - the P0.4 open point closed for every core a P0.5 scenario actually selects; AD4CON stays open (nothing selects core 4) |
-| cli.c 152, 164, 221, 256, 280 | `U2STAT` bits | hardware | moot: `cli.c` is not linked into any scenario (decision above) |
-| capture.c 1130, 1154; chaintest.c 188; clock.c 519 (sim path only) | `TMR1` via `timebase_ticks()` | counts | **answered**: `stream_on`/`stream_on_input` pass `tmr1_step = 10000` to `hwmodel_start()` (`chain_stream_on(_input)`'s `wait_ticks()`, `capture_chain_stop()`'s/`capture_chain_halt()`'s 25-tick waits) - the P0.4 open point closed; every other scenario still relies only on `__delay32()`'s own TMR1 advance |
-| capture.c 1104; chaintest.c 267, 1072 | RAM flags/counters set by ISRs, with a `TMR1` timeout | software | **out of scope** (decision 2 above) |
-| capture.c 257, 802; cli.c 826, 1282 | `burst_active`, `blocks_done` (RAM, ISR) | software | **out of scope** (decision 2 above) |
+The "Hook rule" column is exactly what each scenario's `rules[]` table
+(`tests/trace/scenarios/*.c`) passes to `hwmodel_start()` - the same `{ reg, clear_mask,
+set_mask }` shape since P0.4, applied by the page-guard read hook (P0.5b) instead of the
+old background thread (see "The page-guarded read hook" above): a read of `reg` clears
+`clear_mask`'s bits and sets `set_mask`'s bits, in `sfr_mem[]` and `shadow[]` together, so
+it never appears as a driver write.
+
+| Where | Waits on | Bit is | Hook rule (P0.5b) | Status |
+|---|---|---|---|---|
+| clock.c 107, 163 | `CLK1CON.OSWEN` | self-clearing | `CLK1CON`: clear `OSWEN,DIVSWEN` | **answered** (`clock`/`boot`/`nano` scenarios' rules) |
+| clock.c 115/138, 590, 641 | `PLLxCON.PLLSWEN` | self-clearing | `PLL1CON`/`PLL2CON`: clear `PLLSWEN,FOUTSWEN,OSWEN,DIVSWEN` | **answered** (`clock`/`boot`/`nano`: 115/138; `clk`/`b2b`/`variants`/`dac`/`stream_on(_input)`: 590/641, `clock_adc_set_pll`/`_set_rate`) |
+| clock.c 117/140, 594 | `PLLxCON.FOUTSWEN` | self-clearing | (same `PLLxCON` rule as above) | **answered** (as above) |
+| clock.c 119/142 | `PLLxCON.OSWEN` | self-clearing | (same `PLLxCON` rule as above) | **answered** |
+| clock.c 130/150 | `PLLxCON.DIVSWEN` | self-clearing | (same `PLLxCON` rule as above) | **answered** |
+| clock.c 120/143, 597, 644 | `OSCCTRL.PLLxRDY` | set by hardware (lock) | `OSCCTRL`: set `PLL1RDY` and/or `PLL2RDY` | **answered** |
+| clock.c 175, 350, 398 | `CLK6/7/13CON.OSWEN` | self-clearing | `CLK6CON`/`CLK7CON`/`CLK13CON`: clear `OSWEN` (`CLK6CON`/`CLK13CON` also clear `DIVSWEN` in the same rule, below) | **answered**, all three: CLK6CON (`clock`/`boot`/`clk`/`b2b`/`variants`/`nano`), CLK7CON (`dac`, `clock_dac_on()`), CLK13CON (`sccp`/`variants`/`stream_on(_input)`, `clock_trig_on()`) - the P0.4 open point closed |
+| clock.c 274, 402 | `CLK6/13CON.DIVSWEN` | self-clearing | `CLK6CON`/`CLK13CON`: clear `DIVSWEN` (one rule per register, combined with `OSWEN` above) | **answered**: CLK6CON (`clk`'s `capture_set_clkdiv()`, `variants`' `CAP_VAR_CLKDIV`), CLK13CON (`sccp`/`variants`/`stream_on(_input)`) |
+| clock.c 277, 315, 353, 405, 600, 647 | `CLKxCON.CLKRDY` | set by hardware | `CLK1CON`/`CLK6CON`/`CLK7CON`/`CLK13CON`: set `CLKRDY` (same rule as the register's `OSWEN`/`DIVSWEN` clear - one `hwmodel_rule_t` per register carries both a `clear_mask` and a `set_mask`) | **answered**: CLK1CON (`clock`/`boot`/`nano`), CLK6CON (all of the above), CLK7CON (`dac`, `stream_on(_input)`), CLK13CON (`sccp`/`variants`/`stream_on(_input)`) |
+| clock.c 493 | `CM4STAT.BUFV` | set by hardware (window done) | none - no scenario guards `CM4STAT` | **still open**: no P0.5 scenario calls `clock_monitor_hz()` (only `chain all`'s stage 8 does, out of scope - see the scenario table below) |
+| adc.c 131, 287 | `ADxCON.ADRDY` (via `adc_cur` pointer) | set by hardware after `ON` | `AD1CON`/`AD2CON`/`AD3CON`/`AD5CON` (whichever core the scenario selects): set `ADRDY` | **answered**: AD1CON (`nano`), AD2CON (`stream_on_input`), AD3CON (`boot`/`clk`/`b2b`/`variants`), AD5CON (`stream_on`) - the P0.4 open point closed for every core a P0.5 scenario actually selects; AD4CON stays open (nothing selects core 4) |
+| cli.c 152, 164, 221, 256, 280 | `U2STAT` bits | hardware | none | moot: `cli.c` is not linked into any scenario (decision above) |
+| capture.c 1130, 1154; chaintest.c 188; clock.c 519 (sim path only) | `TMR1` via `timebase_ticks()` | counts | not a `clear_mask`/`set_mask` rule - `TMR1`'s own index is guarded and every READ of it advances it by the scenario's `tmr1_step` (`hwmodel.c`'s `g_tmr1_idx`/`g_tmr1_step`, applied the same way, via `hw_get()`+`hw_set()`) | **answered**: `stream_on`/`stream_on_input` pass `tmr1_step = 10000` to `hwmodel_start()` (`chain_stream_on(_input)`'s `wait_ticks()`, `capture_chain_stop()`'s/`capture_chain_halt()`'s 25-tick waits) - the P0.4 open point closed; every other scenario still relies only on `__delay32()`'s own TMR1 advance |
+| capture.c 1104; chaintest.c 267, 1072 | RAM flags/counters set by ISRs, with a `TMR1` timeout | software | none | **out of scope** (decision 2 above) |
+| capture.c 257, 802; cli.c 826, 1282 | `burst_active`, `blocks_done` (RAM, ISR) | software | none | **out of scope** (decision 2 above) |
 
 `timebase.c`, `dma.c`, `dac.c`, `sccp.c`, `led.c` have no SFR polling loop.
 `diag.c`'s `for (;;)` blink loops only run after `fail()`, which the host stubs.
@@ -338,8 +400,10 @@ caller); AD4CON (nothing selects ADC core 4).
   between the clock steps it needs ordered.
 - **A write that leaves a register's value unchanged.** `TMR1 = 0` when TMR1 already
   reads 0 is indistinguishable from not writing it at all.
-- **Reads.** There is no read hook and no `R` line at all in this format (decision 3
-  above) - not even for debugging.
+- **Reads.** There is still no `R` line at all in this format (decision 3 above) - not
+  even for debugging. P0.5b's page-guard hook does read `sfr_mem[]` internally to answer
+  a poll deterministically (the previous section), but it never prints anything; a read
+  is exactly as invisible to the recorded trace as it always was.
 - **Timing.** No cycles; delays only as `D` lines; TMR1 is a model, not real time.
 - **Hardware side effects** beyond the model's rules: no clock switches, DMA transfers,
   conversions or interrupts happen unless a rule or the scenario makes them.
@@ -355,12 +419,11 @@ caller); AD4CON (nothing selects ADC core 4).
 - Code under `#ifdef __MPLAB_DEBUGGER_SIMULATOR` (the host takes the hardware path,
   `WAIT_LIMIT` = 2 000 000 not the simulator's 20 000) and the other `BOARD`'s code
   unless built with `-DBOARD=2` against the MPS506 header.
-- It is **Windows/x86-64 specific**: the hardware model thread, its `CRITICAL_SECTION`,
-  the runaway watchdog and the P0.5 race mitigations are all Win32 API (`CreateThread`,
-  `WaitForSingleObject`, `CreateEvent`/`SetEvent`, `GetTickCount64`,
-  `GetProcessAffinityMask`/`SetThreadAffinityMask`). A Linux port would use
-  `pthread_create`, a `pthread_mutex_t`, a `pthread_cond_t` and `sched_setaffinity`; not
-  needed today.
+- It is **Windows/x86-64 specific**: the page-guard read hook (`VirtualProtect`,
+  `AddVectoredExceptionHandler`, the `CONTEXT` trap flag) and the runaway watchdog
+  (`CreateThread`, `WaitForSingleObject`, `CreateEvent`/`SetEvent`) are all Win32 API. A
+  Linux port would use `mprotect`+`sigaction(SIGSEGV)` and a `ucontext_t`'s trap flag, and
+  `pthread_create`/a `timer_t` for the watchdog; not needed today.
 
 ## Simulator (question for P0.8, not touched by P0.4)
 
@@ -385,10 +448,45 @@ simulation because of the UART banner.
 
 ## How to run it
 
-    tools\trace.bat            build + run every scenario, compare against golden traces
+    tools\trace.bat            build (incrementally) + run every scenario, compare
+                                against golden traces
     tools\trace.bat record     (re)write every scenario's golden trace from what it just
                                 produced - use once a task's comment says a trace is
                                 expected to change, review the diff, then commit it
+    tools\trace.bat clean      wipe the object cache and every generated header dir
+                                first, then run the check above from cold - see
+                                "caching and how to force a clean run" below
+
+`tools\trace.bat` is a thin wrapper; the actual work is `tools/trace_build.py` (P0.5b -
+see "problem 2" of the P0.5b task and the script's own docstring). It exists because the
+original all-in-one-invocation-per-scenario `trace.bat` took **~4-5 minutes** for these 13
+scenarios, each of whose executables runs in well under a second: measured, the dominant
+cost was not per-scenario source count (a 1-file scenario and the 9-file
+`stream_on(_input)` compiled+linked in about the same time, ~65-75 s cold) but `gcc`
+itself paying a large fixed cost on every fresh invocation - a second, identical
+invocation right after dropped to ~15 s. `trace_build.py` sidesteps that instead of
+chasing it: it compiles each firmware/harness `.c` file to one `.o` under
+`build\trace\obj\<flavor>\` and reuses that object for every scenario that needs the same
+file compiled the same way (most firmware files are shared by several scenarios - `clock.c`
+alone by seven), only rebuilding an object when its source, the fake header it was built
+against, or any repo-root/`tests/trace/harness` header is newer than the object already
+there; it also compiles and links scenarios in parallel. Measured on this host: **~247 s
+-> ~28 s cold** (`clean`, cache empty), **~247 s -> ~7 s** when nothing changed, **~7 s**
+after touching one firmware `.c` file (only the objects that actually depend on it, and
+therefore the scenarios that link them, get rebuilt - proven with the mutation check
+below, all comfortably inside the "well under 60 s" target).
+
+**Caching and how to force a clean run.** The cache is `build\trace\obj\` (compiled
+objects, one subdirectory per "flavor" - which generated header a scenario uses, crossed
+with its own `NAME.cflags`) plus the generated header directories themselves
+(`build\trace\gen`, `build\trace\gen_<mcu>`). Both are freshness-checked by file mtime
+(source newer than object, or device-pack header/`gen_fake_sfr.py` newer than the
+generated header, forces a rebuild of whatever depends on it) - there should never be a
+reason to distrust it, but `tools\trace.bat clean` (or deleting `build\trace` by hand)
+wipes it and rebuilds from cold if one ever is; `docs/IMPLEMENTATION-PLAN.md`'s P0.5b
+entry and `tests/trace/README.md`'s own "Remaining open points" below are where to note
+it if a stale object is ever actually found (none was, in the runs this task's commit
+records).
 
 A scenario with **no golden file at all** is still built and run (so a broken build or a
 crash is still caught) and reported `NEW`, but only in `record` mode, where that is
@@ -401,33 +499,36 @@ fixed; a scenario added without ever running `record` for it used to count as pa
 with no matching `tests/trace/scenarios/*.c` (a rename or removal left behind a stale
 golden) - reported as a warning, not counted against the PASS/FAIL total.
 
-Two per-scenario override files, read by `trace.bat` itself (not by the scenario's own
+Two per-scenario override files, read by `trace_build.py` (not by the scenario's own
 code):
 
 - `NAME.cflags` - extra compiler flags, one per line, appended to that scenario's build
   only (`nano.cflags`: `-DBOARD=2 -DHAVE_CAPTURE`; every scenario linking capture.c needs
   `-DHAVE_CAPTURE`, `regs` also `-DHAVE_DIAG`, `stream_on(_input)` also `-DHAVE_CHAINTEST`
-  - see "Stubs and compiler features" below for why).
-- `NAME.mcu` - a device name (`nano.mcu`: `33AK512MPS506`). `trace.bat` generates a
+  - see "Stubs and compiler features" below for why). `trace_build.py` caches a firmware/
+  harness object (everything except `stubs.c` and the scenario's own main) under a
+  REDUCED key that drops any `-DHAVE_*` token, since none of those files ever test one -
+  only `stubs.c`'s own `#ifndef` guards do - so e.g. `clock.c` compiles once per header
+  flavor and is shared by every scenario that uses it, regardless of which `HAVE_*`
+  combination that scenario also happens to pass.
+- `NAME.mcu` - a device name (`nano.mcu`: `33AK512MPS506`). `trace_build.py` generates a
   SECOND fake header set for that device, into its own `build\trace\gen_<mcu>` (the
   default `gen` stays 33AK512MPS512 for every other scenario), and links that scenario
   against it instead - `tools/gen_fake_sfr.py` already took `--mcu` since the P0.3 spike;
-  only `trace.bat` needed to learn to use a second one alongside the default.
+  only the build engine needed to learn to use a second one alongside the default, and to
+  regenerate it only when stale (the same freshness check as the default header).
 
-Environment variables, read by the scenarios themselves, not by `trace.bat`:
+Environment variables, read by the scenarios themselves, not by `trace_build.py`:
 
-- `TRACE_HWMODEL=0` - the `clock` scenario skips starting the hardware model, so
-  `clock_init()` runs its first `WAIT_WHILE` into the bound and `fail(1)`s. Used to
-  prove the model matters, not committed as a golden trace (there would be nothing
-  useful to diff against - the fail happens on line 1 of `clock_init()`, before it can
-  do anything the golden trace would want to check).
+- `TRACE_HWMODEL=0` - the `clock` scenario skips starting the model (P0.5b: installing
+  the page-guard hook), so `clock_init()` runs its first `WAIT_WHILE` into the bound and
+  `fail(1)`s. Used to prove the hook matters, not committed as a golden trace (there
+  would be nothing useful to diff against - the fail happens on line 1 of `clock_init()`,
+  before it can do anything the golden trace would want to check).
 - `TRACE_TIMEOUT_MS` - the runaway watchdog's timeout, default 5000.
 
-Every scenario still runs in well under a second by itself; `tools\trace.bat`'s own
-per-invocation cost (regenerating the fake header(s), rebuilding all thirteen scenarios
-from scratch every time - there is no incremental build) is on the order of a minute,
-dominated by the two scenarios that link the most firmware (`stream_on(_input)`, nine
-files each).
+Every scenario still runs in well under a second by itself; see "caching and how to force
+a clean run" above for what `tools\trace.bat`'s own per-invocation cost now is.
 
 ## Remaining open points (P0.5 / P10 / P0.8)
 
@@ -442,12 +543,13 @@ files each).
   sites, TMR1 as a continuous count, `capture.c`'s static `dma_buffer` via
   `trace_region()`) is now answered - see "Golden traces (P0.5)" and the polling-loop
   table.
-- **The hardware model's residual scheduling race** (a `DIVSW_WAIT_LIMIT`-bound wait can
-  still occasionally outrun the model on this host, about 1 per 100-200 attempts) is
-  mitigated, not eliminated - see "a residual race" above. A future host or toolchain
-  might make it worse or better; if `tools\trace.bat` ever reports a `FAIL` that a second
-  run does not reproduce, this is where to look first, and raising the retry count in the
-  affected scenario(s) is the first thing to try before re-opening `hwmodel.c`.
+- ~~The hardware model's residual scheduling race~~ - **closed (P0.5b, 27.09.2026)**: the
+  background thread that raced is gone, replaced by the page-guarded read hook (see "The
+  page-guarded read hook" above and "History" for what it replaced). Every scenario now
+  calls every entry point exactly once; if `tools\trace.bat` ever reports a `FAIL` that a
+  second run does not reproduce, that would be new information (none of the runs behind
+  this task's commit ever saw one, including 20 consecutive `dac` runs and 5 full check
+  runs), and worth its own investigation rather than assumed to be this race again.
 - **Reset values from the ATDF** (`initval`), for scenarios whose code branches on a
   register's state at entry (`clock_init()` reads `CLK1CONbits.COSC`) - still assumed
   all-0, as in the spike.

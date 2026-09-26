@@ -40,10 +40,11 @@ unsigned trace_idx(const char *name);
 void trace_region(const volatile void *p, size_t n, const char *name);
 
 /* Reads/sets an SFR by index without going through the diff - used for
- * a scenario's own setup and by the hardware model (hwmodel.c) to answer
- * a polling loop. Thread-safe with trace_point()/trace_note()'s diff, so
- * the background model thread (hwmodel.c) can call these while the main
- * thread runs the driver under test.
+ * a scenario's own setup and by the page-guard read hook (hwmodel.c) to
+ * answer a polling loop. Single-threaded since P0.5b: the hook is a
+ * vectored exception handler that fires synchronously on the thread that
+ * faulted (there is no separate model thread any more), so no lock is
+ * needed between it and trace_point()/trace_note()'s diff.
  *
  * hw_set_masked() only touches `mask`'s bits of both sfr_mem[] and
  * shadow[] - not the whole word. This matters when the same register

@@ -69,18 +69,12 @@ int main(void)
 
     hwmodel_start(rules, sizeof rules / sizeof rules[0], 10000u);
 
-    /* Retried silently (no trace_point() between attempts) against the
-     * hardware model's residual scheduling race on setup()'s PLL/CLKGEN7/
-     * CLKGEN13 waits - see tests/trace/README.md, "hardware model - a
-     * residual race"; the `dac` scenario's identical retry has the full
-     * rationale. chain_stream_on_input() tears down any partial state
-     * itself (chain_stream_off() first, then restore() on failure), so
-     * calling it again from scratch is safe. */
+    /* Called exactly once (P0.5b, "the hybrid") - the page-guard read hook
+     * answers setup()'s PLL/CLKGEN7/CLKGEN13 waits deterministically; see
+     * the `dac` scenario and tests/trace/README.md. */
     bool ok = false;
     if (setjmp(fail_jmp) == 0) {
-        for (int attempt = 0; (attempt < 5) && !ok; attempt++) {
-            ok = chain_stream_on(1000u);
-        }
+        ok = chain_stream_on(1000u);
         trace_note("# chain_stream_on(1000) -> %d\n", (int)ok);
     } else {
         trace_note("# chain_stream_on(1000) called fail() - see the F line above\n");

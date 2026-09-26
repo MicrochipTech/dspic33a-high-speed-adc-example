@@ -46,38 +46,25 @@ static const hwmodel_rule_t rules[] = {
     { "AD3CON",   0u, _AD3CON_ADRDY_MASK },
 };
 
-/* Called three times, UNCONDITIONALLY - not "until it returns true" like
- * every other scenario's retry (dac.c, sccp.c, b2b.c, clk.c,
- * stream_on(_input).c). capture_select_variant()'s own return value is
- * not a reliable signal of whether its PREAMBLE's clock switch raced: for
- * every variant but CAP_VAR_B2B it calls
- * `(void)clock_adc_set_div(100); (void)clock_adc_set_pll(5u, 1u);` -
- * both return codes explicitly discarded (capture.c) - before the
- * per-variant switch, so a preamble wait that the hardware model's
- * residual scheduling race (tests/trace/README.md, "hardware model - a
- * residual race") answered too late can leave PLL1CON/CLK6CON with a
- * self-clearing bit still set, WHILE the function goes on to return true
- * (the SCCP/RPTCNT/... part after the preamble succeeded on its own).
- * Found exactly this way: `CAP_VAR_SCCP_OC_PER` once returned 1 with
- * `PLL1CON 0x0 -> 0x10000000` (FOUTSWEN stuck) and `CLK6CON 0x80000000
- * -> 0x80400000` (DIVSWEN stuck) sitting in the trace, undetected by a
- * return-value check because there was nothing to retry against - the
- * call had already "succeeded". Calling capture_select_variant() again
- * redoes the SAME preamble from scratch, which either finds the model has
- * since cleared the stale bit (idempotent - no new diff) or gives it a
- * fresh, fully-warmed window to do so; repeated three times the residual
- * per-attempt race chance (tests/trace/README.md) compounds to a
- * practically negligible one. In the ordinary (non-racy) case the second
- * and third calls rewrite every register to the value it already holds,
- * which a snapshot diff shows as no change at all - so this changes
- * nothing about a clean run's trace, only closes the gap this one has. */
+/* Called exactly once (P0.5b, "the hybrid"). P0.5 called this three times
+ * UNCONDITIONALLY per variant, because capture_select_variant()'s own
+ * return value was not a reliable signal of whether its PREAMBLE's clock
+ * switch (`(void)clock_adc_set_div(100); (void)clock_adc_set_pll(5u, 1u);`,
+ * both return codes explicitly discarded, capture.c) had raced the P0.4/
+ * P0.5 background model thread: a wait answered too late could leave
+ * PLL1CON/CLK6CON with a self-clearing bit still set while the function
+ * went on to return true regardless (the SCCP/RPTCNT/... part after the
+ * preamble had succeeded on its own) - found exactly this way once,
+ * `CAP_VAR_SCCP_OC_PER` returning 1 with `PLL1CON 0x0 -> 0x10000000`
+ * (FOUTSWEN stuck) and `CLK6CON 0x80000000 -> 0x80400000` (DIVSWEN stuck)
+ * sitting in the trace. The page-guard read hook removes the race itself
+ * (hwmodel.c, tests/trace/README.md): the preamble's own reads of
+ * PLL1CON/CLK6CON now see the switch already complete, deterministically,
+ * so there is nothing left for a second or third call to clean up. */
 static void try_variant(capture_variant_t v, const char *label)
 {
     if (setjmp(fail_jmp) == 0) {
-        bool ok = false;
-        for (int attempt = 0; attempt < 3; attempt++) {
-            ok = capture_select_variant(v, 100u);
-        }
+        bool ok = capture_select_variant(v, 100u);
         trace_note("# capture_select_variant(%s, 100) -> %d\n", label, (int)ok);
     } else {
         trace_note("# capture_select_variant(%s, 100) called fail() - see the F line above\n", label);

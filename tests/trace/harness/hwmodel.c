@@ -1,168 +1,246 @@
 /*
- * hwmodel.c - P0.4 register-trace harness: the hardware model thread
- * (hwmodel.h). Windows-specific (CreateThread), like the rest of the
- * harness (tests/trace/README.md).
+ * hwmodel.c - P0.5b register-trace harness: the page-guarded read hook
+ * (hwmodel.h). Windows-specific (VirtualProtect, AddVectoredExceptionHandler),
+ * like the rest of the harness (tests/trace/README.md).
+ *
+ * Replaces P0.4/P0.5's background "hardware model" thread. That thread
+ * was correct in the limit (every rule idempotent and level-triggered,
+ * tests/trace/README.md's original hwmodel.c header) but raced a short
+ * enough driver wait on this host about 1 time in 100-200
+ * (DIVSW_WAIT_LIMIT, 100000 iterations) - CreateThread()'s own latency
+ * could outlast the whole wait. P0.5 lived with that by retrying every
+ * affected call up to 5x (or, for variants.c, 3x unconditionally) at the
+ * SCENARIO level. The user's decision of 27.09.2026 ("the hybrid",
+ * tests/trace/README.md) replaces the thread outright: the same rule
+ * table now answers a driver's read of the polled register synchronously,
+ * on the driver's own thread, via a Windows vectored exception handler -
+ * adapted from the P0.3 spike's page-guarded recorder
+ * (tests/trace/spike/recorder.c), but guarding only the page(s) that
+ * contain a scenario's own polled registers (plus TMR1, if used) instead
+ * of the spike's whole sfr_mem[] array, and applying a rule only on a
+ * READ of the exact register it names - a write, or an access to any
+ * other register that happens to share the same guarded page, just
+ * passes through unmodified (single-stepped and re-guarded, nothing
+ * else). Approach (a)'s snapshot diff (recorder.c) is completely
+ * unaffected and remains the recorded trace; this file never prints
+ * anything.
+ *
+ * Why this closes the race rather than narrowing it further: there is no
+ * second thread any more, so there is nothing left for the driver thread
+ * to race against. The instant the driver's code reads a polled
+ * register, the hook's rule has already been applied to it (clear the
+ * self-clearing switch-enable bits, set the hardware-set ready bits,
+ * advance TMR1 by the scenario's step) - the very first read always sees
+ * the answer, deterministically, every time. A `WAIT_WHILE` loop that
+ * used to need an unknown, scheduling-dependent number of iterations
+ * before the model thread got around to clearing the bit now exits after
+ * exactly one.
  */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#include <string.h>
+#undef STRICT   /* windows.h #defines STRICT 1; the device header has a
+                 * same-named bit field (e.g. FICD's STRICT) - same fix
+                 * as recorder.c. */
+#include <xc.h>
+#include "sfr_table.h"
 #include "recorder.h"
 #include "hwmodel.h"
 
 #define HWMODEL_MAX_RULES 16u
+#define HWMODEL_MAX_PAGES 4u    /* sfr_mem[] is exactly 4 pages, aligned  */
 
-static hwmodel_rule_t rules_copy[HWMODEL_MAX_RULES];
-static unsigned       rule_idx[HWMODEL_MAX_RULES];
-static unsigned       n_rules_g;
-static uint32_t       tmr1_step_g;
-static unsigned       tmr1_idx_g;
-static volatile LONG  stop_flag;
-static HANDLE         thread_h;
-static HANDLE         started_event;
-static DWORD_PTR      main_affinity_restore;   /* 0: nothing to restore */
-/* Bumped once per loop iteration, rules or not - hwmodel_start()'s own
- * proof that the model is not merely alive (started_event) but actually
- * completing fresh iterations, right before it hands control back. See
- * the long comment in hwmodel_start() for why this exists. */
-static volatile LONG  heartbeat;
+typedef struct { unsigned idx; uint32_t clear_mask; uint32_t set_mask; } guard_rule_t;
 
-static DWORD WINAPI model_thread(LPVOID unused)
+static guard_rule_t g_rules[HWMODEL_MAX_RULES];
+static unsigned     g_n_rules;
+static unsigned     g_tmr1_idx = ~0u;     /* ~0u: no TMR1 rule armed      */
+static uint32_t     g_tmr1_step;
+
+static uintptr_t    g_pages[HWMODEL_MAX_PAGES];
+static unsigned     g_n_pages;
+static DWORD        g_page_size;
+static PVOID        g_veh;
+static uintptr_t    g_reguard_page;       /* page to re-protect after the
+                                            * single step; 0 = none due   */
+
+static uintptr_t page_of(uintptr_t addr)
 {
-    (void)unused;
-    SetEvent(started_event);
-    while (!stop_flag) {
-        for (unsigned i = 0; i < n_rules_g; i++) {
-            uint32_t mask = rules_copy[i].clear_mask | rules_copy[i].set_mask;
-            if (mask == 0u) { continue; }
-            /* Touch only the bits this rule owns (hw_set_masked) - never
-             * the whole register, or a driver write to some OTHER field
-             * of the same SFR that trace_flush() has not diffed yet would
-             * be silently folded into shadow[] and vanish from the trace
-             * (tests/trace/README.md, hw_set_masked() in recorder.h). */
-            if ((hw_get(rule_idx[i]) & mask) != rules_copy[i].set_mask) {
-                hw_set_masked(rule_idx[i], mask, rules_copy[i].set_mask);
-            }
-        }
-        if (tmr1_step_g != 0u) {
-            hw_set(tmr1_idx_g, hw_get(tmr1_idx_g) + tmr1_step_g);
-        }
-        InterlockedIncrement(&heartbeat);
+    return addr & ~((uintptr_t)g_page_size - 1u);
+}
+
+static const guard_rule_t *rule_for(unsigned idx)
+{
+    for (unsigned i = 0; i < g_n_rules; i++) {
+        if (g_rules[i].idx == idx) { return &g_rules[i]; }
     }
-    return 0;
+    return NULL;
+}
+
+static void add_page(uintptr_t addr)
+{
+    uintptr_t page = page_of(addr);
+    for (unsigned i = 0; i < g_n_pages; i++) {
+        if (g_pages[i] == page) { return; }
+    }
+    if (g_n_pages < HWMODEL_MAX_PAGES) { g_pages[g_n_pages++] = page; }
+}
+
+/*
+ * sfr_hook() - the vectored exception handler.
+ *
+ * EXCEPTION_ACCESS_VIOLATION on one of our guarded pages: if it is a READ
+ * of the exact register a rule names, apply the rule (or, for TMR1,
+ * advance it) to sfr_mem[]/shadow[] together (hw_set_masked()/hw_set(),
+ * recorder.c - so the change is a hardware change, not a driver write,
+ * and never appears in the trace) BEFORE letting the faulting instruction
+ * run - unprotect the page, arm the trap flag, resume. Any other access
+ * on a guarded page (a write, or a read of some other register that
+ * happens to share the page) is passed straight through the same way,
+ * with no rule applied - it is not ours to touch.
+ *
+ * EXCEPTION_SINGLE_STEP right after: the one instruction we let through
+ * has now executed exactly once; re-guard the page and clear the trap
+ * flag. Only one instruction is ever single-stepped at a time in this
+ * harness (nothing here re-enters the handler from within itself), so a
+ * single pending-page variable is enough - no stack of pending faults.
+ */
+static LONG CALLBACK sfr_hook(PEXCEPTION_POINTERS ep)
+{
+    PEXCEPTION_RECORD er = ep->ExceptionRecord;
+
+    if (er->ExceptionCode == EXCEPTION_SINGLE_STEP) {
+        if (g_reguard_page != 0u) {
+            DWORD old;
+            VirtualProtect((void *)g_reguard_page, g_page_size, PAGE_NOACCESS, &old);
+            g_reguard_page = 0u;
+            ep->ContextRecord->EFlags &= ~0x100u;   /* clear TF - or every
+                                                      * instruction from here
+                                                      * on traps, not just
+                                                      * the guarded one */
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    if (er->ExceptionCode != EXCEPTION_ACCESS_VIOLATION) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    uintptr_t addr = (uintptr_t)er->ExceptionInformation[1];
+    uintptr_t page = page_of(addr);
+    unsigned  pi;
+    for (pi = 0; pi < g_n_pages; pi++) {
+        if (g_pages[pi] == page) { break; }
+    }
+    if (pi == g_n_pages) { return EXCEPTION_CONTINUE_SEARCH; }   /* not ours */
+
+    /* Unprotect BEFORE touching sfr_mem[] for the rule below - hw_get()/
+     * hw_set_masked() read and write sfr_mem[idx] directly, and idx's page
+     * is still PAGE_NOACCESS at this point. Applying the rule first (as
+     * an earlier version of this handler did) makes that write itself
+     * fault, re-entering this handler for an access it did not expect
+     * (g_reguard_page is not stack-based) - observed as an infinite
+     * re-fault loop at the same instruction, killed only by the runaway
+     * watchdog. Unprotecting first means the rule's own access is just an
+     * ordinary read/write of now-writable memory. */
+    DWORD old;
+    VirtualProtect((void *)page, g_page_size, PAGE_READWRITE, &old);
+
+    int is_write = (er->ExceptionInformation[0] == 1);
+    uintptr_t base = (uintptr_t)&sfr_mem[0];
+    if (!is_write && (addr >= base) && (addr < base + ((uintptr_t)SFR_COUNT * 4u))) {
+        unsigned idx = (unsigned)((addr - base) / 4u);
+        const guard_rule_t *r = rule_for(idx);
+        if (r != NULL) {
+            hw_set_masked(idx, r->clear_mask | r->set_mask, r->set_mask);
+        } else if (idx == g_tmr1_idx) {
+            hw_set(idx, hw_get(idx) + g_tmr1_step);
+        }
+    }
+
+    g_reguard_page = page;
+    ep->ContextRecord->EFlags |= 0x100u;         /* TF: trap after this insn */
+    return EXCEPTION_CONTINUE_EXECUTION;
 }
 
 void hwmodel_start(const hwmodel_rule_t *rules, unsigned n_rules, uint32_t tmr1_step)
 {
     if (n_rules > HWMODEL_MAX_RULES) { n_rules = HWMODEL_MAX_RULES; }
-    n_rules_g = n_rules;
+    if (g_page_size == 0u) {
+        SYSTEM_INFO si;
+        GetSystemInfo(&si);
+        g_page_size = si.dwPageSize;
+    }
+
+    g_n_rules = n_rules;
+    g_n_pages = 0;
+    g_reguard_page = 0u;
     for (unsigned i = 0; i < n_rules; i++) {
-        rules_copy[i] = rules[i];
-        rule_idx[i] = trace_idx(rules[i].reg);
+        unsigned idx = trace_idx(rules[i].reg);
+        g_rules[i].idx        = idx;
+        g_rules[i].clear_mask = rules[i].clear_mask;
+        g_rules[i].set_mask   = rules[i].set_mask;
+        add_page((uintptr_t)&sfr_mem[idx]);
     }
-    tmr1_step_g = tmr1_step;
-    if (tmr1_step != 0u) { tmr1_idx_g = trace_idx("TMR1"); }
-    stop_flag = 0;
-    /* P0.5: a driver wait bounded to DIVSW_WAIT_LIMIT (100 000 iterations,
-     * clock.c: clock_dac_on(), clock_trig_on(), clock_adc_set_pll/
-     * _set_rate/_set_div's per-step waits) can run its course in well
-     * under the time CreateThread() itself takes to schedule a brand new
-     * thread's first instruction - measured directly (a throwaway repro:
-     * tests/trace/scenarios/dac.c's clock_dac_on() call with the model
-     * started right beforehand), 50-95% of runs saw the model never
-     * intervene at all before the wait gave up, on a 14-logical-core host,
-     * regardless of the model thread's priority (a higher priority made it
-     * WORSE - Sleep(0) only yields to threads of EQUAL OR HIGHER priority,
-     * so a HIGHER-priority model thread stopped yielding to the driver
-     * thread at all). clock_init()'s own WAIT_WHILE loops (WAIT_LIMIT,
-     * 2 000 000 iterations - 20x longer) were not observed to fail the
-     * same way, which is why the P0.4 spike's 15/5 determinism runs
-     * (clock_init() only) never surfaced this: apparently that wait is
-     * long enough to outlast CreateThread()'s own latency, and the shorter
-     * one usually is not.
-     *
-     * Fix: block here until the new thread has actually started running -
-     * proven with an event it sets as its first statement, not assumed -
-     * so CreateThread()'s latency is paid for HERE, before the caller goes
-     * on to make the driver call whose wait this model must answer, not
-     * raced against it. Brought the failure rate from 50-95/100 down to
-     * about 1/100 (see the next comment for the residual and how it is
-     * actually closed - the scenario-level retry, not this fix alone). */
-    heartbeat = 0;
-    started_event = CreateEvent(NULL, FALSE, FALSE, NULL);
-    thread_h = CreateThread(NULL, 0, model_thread, NULL, 0, NULL);
-    /* Pin the model onto its own core, away from whatever core the main
-     * (driver) thread is on, so the two never compete for the same core -
-     * one whole class of scheduling noise (something else briefly using
-     * the model's core) removed outright rather than raced against. Best
-     * effort: if the host has only one logical core, both masks below
-     * collapse to the same bit and this is a no-op, exactly like running
-     * without it. */
-    {
-        DWORD_PTR proc_mask = 0, sys_mask = 0;
-        if (GetProcessAffinityMask(GetCurrentProcess(), &proc_mask, &sys_mask) && (proc_mask != 0)) {
-            DWORD_PTR hi = 1u;
-            for (DWORD_PTR b = proc_mask; b != 0; b &= (b - 1)) { hi = b; }  /* highest set bit */
-            DWORD_PTR lo = proc_mask & (~proc_mask + 1u);                    /* lowest set bit  */
-            SetThreadAffinityMask(thread_h, hi);
-            main_affinity_restore = SetThreadAffinityMask(GetCurrentThread(), lo);
-        }
+
+    g_tmr1_step = tmr1_step;
+    if (tmr1_step != 0u) {
+        g_tmr1_idx = trace_idx("TMR1");
+        add_page((uintptr_t)&sfr_mem[g_tmr1_idx]);
+    } else {
+        g_tmr1_idx = ~0u;
     }
-    WaitForSingleObject(started_event, INFINITE);
-    /* The event only proves the new thread has executed ITS FIRST
-     * STATEMENT - not that it is done with whatever one-time warm-up cost
-     * a brand new thread has (first page faults for its stack, first
-     * scheduling on whichever core it lands on, ...) and settled into
-     * really, repeatedly running its loop. Measured directly
-     * (tests/trace/scenarios/dac.c's clock_dac_on(), the shortest wait in
-     * the firmware - DIVSW_WAIT_LIMIT, 100 000 iterations, on a 14-logical-
-     * core host): the event alone still left about 1% of runs where the
-     * model never intervened in time (0, 2, 1 failures per 100 over three
-     * rounds); a fixed busy-wait here (a few milliseconds, no Sleep/Wait
-     * call - a `Sleep(1)` made failures MUCH worse, 30-46/150, not
-     * explained and not worth chasing) and pinning the model onto its own
-     * core (below) each narrowed it a little but never reliably closed it
-     * (0-2 per 100/200, repeatedly). Waiting for firm PROOF of live
-     * throughput instead - the model's own heartbeat, bumped once per loop
-     * iteration, has advanced by a healthy margin since the ready event
-     * fired - measured the same residual ~1% (1-2 per 100-200). This is
-     * not a fixed guess at "long enough" and it does measurably help
-     * (every variant above it was tried and kept, on the reasoning that
-     * each removes one real, separate source of delay), but it does not
-     * fully close the gap on this host, and further chasing it here has
-     * not been worth it: every call this model answers is retried at the
-     * SCENARIO level instead (silently, no trace_point() between attempts
-     * - see e.g. tests/trace/scenarios/dac.c), which turns this harness's
-     * own residual ~1% single-attempt failure into a practically-zero
-     * chance of a golden trace ever being affected by it (~1%^5 over five
-     * attempts), which is what actually makes "record twice, compare"
-     * reproducible - not a claim that the race below is fully solved.
-     * Bounded by wall clock (GetTickCount64) only so a genuinely broken
-     * model thread cannot hang the process here; a scenario relying on a
-     * model that never became responsive would still be caught by
-     * trace_begin()'s runaway watchdog once it starts waiting on the
-     * driver's own bit. */
-#define HWMODEL_HEARTBEAT_MARGIN   2000L
-#define HWMODEL_WARMUP_BOUND_MS    2000u
-    {
-        const ULONGLONG t0 = GetTickCount64();
-        const LONG start_hb = heartbeat;
-        while (((heartbeat - start_hb) < HWMODEL_HEARTBEAT_MARGIN) &&
-               ((GetTickCount64() - t0) < HWMODEL_WARMUP_BOUND_MS)) { }
+
+    g_veh = AddVectoredExceptionHandler(1, sfr_hook);
+    for (unsigned i = 0; i < g_n_pages; i++) {
+        DWORD old;
+        VirtualProtect((void *)g_pages[i], g_page_size, PAGE_NOACCESS, &old);
     }
 }
 
 void hwmodel_stop(void)
 {
-    if (thread_h != NULL) {
-        InterlockedExchange(&stop_flag, 1);
-        WaitForSingleObject(thread_h, INFINITE);
-        CloseHandle(thread_h);
-        thread_h = NULL;
-        CloseHandle(started_event);
-        started_event = NULL;
-        if (main_affinity_restore != 0) {
-            SetThreadAffinityMask(GetCurrentThread(), main_affinity_restore);
-            main_affinity_restore = 0;
-        }
+    for (unsigned i = 0; i < g_n_pages; i++) {
+        DWORD old;
+        VirtualProtect((void *)g_pages[i], g_page_size, PAGE_READWRITE, &old);
+    }
+    g_n_pages = 0;
+    if (g_veh != NULL) {
+        RemoveVectoredExceptionHandler(g_veh);
+        g_veh = NULL;
+    }
+    g_reguard_page = 0u;
+}
+
+/*
+ * hwmodel_pause()/hwmodel_resume() - bracket recorder.c's own trace_flush()
+ * diff loop, which walks every one of SFR_COUNT sfr_mem[] entries in
+ * address order to compare it against shadow[] (recorder.c). That scan
+ * itself reads whichever polled registers are currently guarded - not a
+ * driver's deliberate poll, just recorder.c's own bookkeeping - and
+ * without this, each such incidental read fired the rule exactly as a
+ * real poll would (found by testing: `clock`'s trace gained a spurious
+ * `W OSCCTRL 0x0 -> 0xC000` between hwmodel_start() and the first
+ * trace_point(), from the diff loop's own read of OSCCTRL racing its own
+ * read of shadow[] against the very mutation it triggered). Pausing
+ * un-guards every page hwmodel_start() guarded for the duration of the
+ * scan (single-threaded - nothing else runs while it does), so
+ * trace_flush() sees the true, unmutated values, exactly like a scenario
+ * that never called hwmodel_start() at all; resuming re-guards the same
+ * pages. A no-op when hwmodel_start() was never called (g_n_pages == 0),
+ * so recorder.c can call these unconditionally around every diff. */
+void hwmodel_pause(void)
+{
+    for (unsigned i = 0; i < g_n_pages; i++) {
+        DWORD old;
+        VirtualProtect((void *)g_pages[i], g_page_size, PAGE_READWRITE, &old);
+    }
+}
+
+void hwmodel_resume(void)
+{
+    for (unsigned i = 0; i < g_n_pages; i++) {
+        DWORD old;
+        VirtualProtect((void *)g_pages[i], g_page_size, PAGE_NOACCESS, &old);
     }
 }

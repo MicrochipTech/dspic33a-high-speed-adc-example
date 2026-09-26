@@ -68,16 +68,11 @@ int main(void)
     trace_point("clock_dac_select(CLOCK_DAC_PLL1_VCO)");
 
     /* The exact triangle chaintest.c's stage8 sets up at 8 MSPS - see the
-     * file header for the arithmetic. Retried silently (no trace_point()
-     * between attempts) against the hardware model's residual scheduling
-     * race on clock_dac_on()'s CLK7CON wait - see tests/trace/README.md,
-     * "hardware model - a residual race": approach (a) only ever diffs
-     * the NET state at the next trace_point(), so a golden trace cannot
-     * tell a clean pass from a retried one. */
-    bool ok = false;
-    for (int attempt = 0; (attempt < 5) && !ok; attempt++) {
-        ok = dac2_triangle_start(0x00FFu, 0x0F00u, 18u);
-    }
+     * file header for the arithmetic. Called exactly once (P0.5b, "the
+     * hybrid"): the page-guard read hook answers clock_dac_on()'s CLK7CON
+     * wait deterministically, on the first read - see hwmodel.c and
+     * tests/trace/README.md. */
+    bool ok = dac2_triangle_start(0x00FFu, 0x0F00u, 18u);
     trace_note("# dac2_triangle_start(0xFF, 0xF00, 18) -> %d\n", (int)ok);
     trace_point("after dac2_triangle_start()");
 

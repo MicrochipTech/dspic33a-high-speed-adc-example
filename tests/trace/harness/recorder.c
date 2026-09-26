@@ -1,7 +1,7 @@
 /*
- * recorder.c - P0.4 register-trace recorder, approach (a): snapshot diff
- * in plain C (tests/trace/README.md, decision of 26.09.2026, evolved
- * from the P0.3 spike's tests/trace/spike/recorder.c).
+ * recorder.c - register-trace recorder, approach (a): snapshot diff in
+ * plain C (tests/trace/README.md, decision of 26.09.2026, evolved from
+ * the P0.3 spike's tests/trace/spike/recorder.c).
  *
  * Trace line format (one event per line), unchanged from the spike:
  *   W NAME old -> new     a write: the net change since the previous
@@ -21,17 +21,17 @@
  * are printed symbolically (&AD5CH0RES(0x000DA4), &buf+0x0), because the
  * host address is neither the target's value nor deterministic.
  *
- * Thread safety: hwmodel.c runs a background thread that calls hw_set()
- * while the main thread runs the driver under test and, from trace_note()
- * (via the stubs) or trace_point(), diffs sfr_mem[] against shadow[]. A
- * single critical section serialises the two: hw_set() updates sfr_mem[]
- * and shadow[] together, atomically with respect to the diff loop, so a
- * hardware-driven change (the model clearing a switch-enable bit, setting
- * a ready bit) can never be seen as a driver write - it always lands in
- * shadow[] in the same operation that changes sfr_mem[]. This is a
- * pragmatic use of a real OS lock, not lock-free trickery: the register
- * count is small (~1500) and trace points are infrequent, so the lock is
- * held only briefly and contends only with hwmodel.c's next iteration.
+ * P0.5b (27.09.2026, tests/trace/README.md, "the hybrid"): polling loops
+ * are now answered by hwmodel.c's page-guarded read hook (a vectored
+ * exception handler on this same thread, armed with VirtualProtect over
+ * just the SFR pages a scenario's rules name), not by a second OS thread.
+ * There is therefore only ever one thread touching sfr_mem[]/shadow[] -
+ * the hook fires synchronously, on the very thread whose read faulted -
+ * so the CRITICAL_SECTION P0.4/P0.5 needed to serialise a background
+ * model thread against trace_flush()'s diff is gone; hw_get()/
+ * hw_set_masked() are plain, unlocked accesses now. sfr_mem[] is
+ * page-aligned (below) so hwmodel.c's VirtualProtect calls land on exact
+ * page boundaries and never guard a byte of any other global.
  */
 #include <stdarg.h>
 #include <stdio.h>
@@ -44,14 +44,16 @@
 #include <xc.h>
 #include "sfr_table.h"
 #include "recorder.h"
+#include "hwmodel.h"
 
 _Static_assert(SFR_COUNT <= SFR_MEM_WORDS, "raise SFR_MEM_WORDS in sfr_host.h");
 
-volatile uint32_t sfr_mem[SFR_MEM_WORDS];
+/* Page-aligned: SFR_MEM_WORDS (4096) * 4 bytes = 16384 bytes = exactly
+ * 4 * 4096-byte pages, so hwmodel.c's VirtualProtect(page-of(&sfr_mem[idx]))
+ * always covers whole pages of sfr_mem[] alone - never a byte of shadow[]
+ * or any other global (tests/trace/README.md, "the hybrid"). */
+volatile uint32_t sfr_mem[SFR_MEM_WORDS] __attribute__((aligned(4096)));
 static uint32_t shadow[SFR_MEM_WORDS];
-
-static CRITICAL_SECTION lock;
-static int lock_ready;
 
 static struct { uintptr_t lo; size_t n; const char *name; } regions[8];
 static unsigned n_regions;
@@ -119,23 +121,23 @@ static void log_write(unsigned i, uint32_t old, uint32_t now)
  * not depend on which order the driver happened to write them in. */
 static void trace_flush(void)
 {
-    EnterCriticalSection(&lock);
+    /* hwmodel_pause(): this scan itself reads every polled register, which
+     * would otherwise fire its rule as if a driver had polled it (see
+     * hwmodel.c's own comment on hwmodel_pause()/hwmodel_resume()). A
+     * no-op when hwmodel_start() was never called. */
+    hwmodel_pause();
     for (unsigned i = 0; i < SFR_COUNT; i++) {
         if (sfr_mem[i] != shadow[i]) {
             log_write(i, shadow[i], sfr_mem[i]);
             shadow[i] = sfr_mem[i];
         }
     }
-    LeaveCriticalSection(&lock);
+    hwmodel_resume();
 }
 
 /* ---- harness API --------------------------------------------------------*/
 void trace_begin(const char *scenario)
 {
-    if (!lock_ready) {
-        InitializeCriticalSection(&lock);
-        lock_ready = 1;
-    }
     setvbuf(stdout, NULL, _IOFBF, 1 << 16);
     memset((void *)sfr_mem, 0, sizeof sfr_mem);   /* reset values: all 0, README */
     memset(shadow, 0, sizeof shadow);
@@ -197,15 +199,11 @@ void trace_region(const volatile void *p, size_t n, const char *name)
 
 uint32_t hw_get(unsigned idx)
 {
-    EnterCriticalSection(&lock);
-    uint32_t v = sfr_mem[idx];
-    LeaveCriticalSection(&lock);
-    return v;
+    return sfr_mem[idx];
 }
 
 void hw_set_masked(unsigned idx, uint32_t mask, uint32_t value)
 {
-    EnterCriticalSection(&lock);
     uint32_t nv = (sfr_mem[idx] & ~mask) | (value & mask);
     sfr_mem[idx] = nv;                 /* hardware change: not a driver write */
     shadow[idx] = (shadow[idx] & ~mask) | (value & mask);  /* ... so only the
@@ -213,7 +211,6 @@ void hw_set_masked(unsigned idx, uint32_t mask, uint32_t value)
                                         * trace_flush(); any other bits stay
                                         * whatever the driver last wrote and
                                         * are still diffed normally */
-    LeaveCriticalSection(&lock);
 }
 
 void hw_set(unsigned idx, uint32_t v)

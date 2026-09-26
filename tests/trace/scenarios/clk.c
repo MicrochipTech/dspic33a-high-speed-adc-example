@@ -40,16 +40,13 @@ int main(void)
     trace_begin("clk");
     hwmodel_start(rules, sizeof rules / sizeof rules[0], 0u);
 
-    /* Every call below is retried silently (no trace_point() between
-     * attempts) against the hardware model's residual scheduling race on
-     * these functions' CLK6CON/PLL1CON/OSCCTRL waits - see
-     * tests/trace/README.md, "hardware model - a residual race"; the
-     * `dac` scenario's identical retry has the full rationale. */
+    /* Every call below runs exactly once (P0.5b, "the hybrid") - the
+     * page-guard read hook answers these functions' CLK6CON/PLL1CON/
+     * OSCCTRL waits deterministically; see the `dac` scenario and
+     * tests/trace/README.md. */
     uint32_t rc = CLKDIV_RANGE;
     if (setjmp(fail_jmp) == 0) {
-        for (int attempt = 0; (attempt < 5) && (rc != CLKDIV_OK); attempt++) {
-            rc = capture_set_clkdiv(500u);        /* 8 MSPS via the CLKGEN6 divider */
-        }
+        rc = capture_set_clkdiv(500u);        /* 8 MSPS via the CLKGEN6 divider */
         trace_note("# capture_set_clkdiv(500) -> %lu\n", (unsigned long)rc);
     } else {
         trace_note("# capture_set_clkdiv(500) called fail() - see the F line above\n");
@@ -59,9 +56,7 @@ int main(void)
     uint32_t got = 0u;
     rc = CLKDIV_RANGE;
     if (setjmp(fail_jmp) == 0) {
-        for (int attempt = 0; (attempt < 5) && (rc != CLKDIV_OK); attempt++) {
-            rc = clock_adc_set_rate(4000u, &got);
-        }
+        rc = clock_adc_set_rate(4000u, &got);
         trace_note("# clock_adc_set_rate(4000, &got) -> rc=%lu got=%lu\n", (unsigned long)rc, (unsigned long)got);
     } else {
         trace_note("# clock_adc_set_rate(4000) called fail() - see the F line above\n");
@@ -70,9 +65,7 @@ int main(void)
 
     rc = CLKDIV_RANGE;
     if (setjmp(fail_jmp) == 0) {
-        for (int attempt = 0; (attempt < 5) && (rc != CLKDIV_OK); attempt++) {
-            rc = clock_adc_set_rate(8000u, &got);
-        }
+        rc = clock_adc_set_rate(8000u, &got);
         trace_note("# clock_adc_set_rate(8000, &got) -> rc=%lu got=%lu\n", (unsigned long)rc, (unsigned long)got);
     } else {
         trace_note("# clock_adc_set_rate(8000) called fail() - see the F line above\n");
@@ -81,9 +74,7 @@ int main(void)
 
     rc = CLKDIV_RANGE;
     if (setjmp(fail_jmp) == 0) {
-        for (int attempt = 0; (attempt < 5) && (rc != CLKDIV_OK); attempt++) {
-            rc = clock_adc_set_rate(40000u, &got);
-        }
+        rc = clock_adc_set_rate(40000u, &got);
         trace_note("# clock_adc_set_rate(40000, &got) -> rc=%lu got=%lu\n", (unsigned long)rc, (unsigned long)got);
     } else {
         trace_note("# clock_adc_set_rate(40000) called fail() - see the F line above\n");

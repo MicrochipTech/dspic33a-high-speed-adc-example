@@ -53,16 +53,10 @@ int main(void)
     trace_note("# sccp1_start(PERIPHERAL, TIMER, SPECIAL) -> %d\n", (int)ok);
     trace_point("T_PER: peripheral clock, timer mode, special event trigger");
 
-    /* Retried silently against the hardware model's residual scheduling
-     * race on CLK13CON's wait - see tests/trace/README.md, "hardware
-     * model - a residual race"; the `dac` scenario's identical retry has
-     * the full rationale. */
-    {
-        bool trig_ok = false;
-        for (int attempt = 0; (attempt < 5) && !trig_ok; attempt++) {
-            trig_ok = clock_trig_on();
-        }
-    }
+    /* Called exactly once (P0.5b, "the hybrid") - the page-guard read hook
+     * answers CLK13CON's wait deterministically; see the `dac` scenario
+     * and tests/trace/README.md. */
+    (void)clock_trig_on();
     trace_point("clock_trig_on() (CLKGEN13)");
     ok = sccp1_start(100u, SCCP_CLK_GEN13, SCCP_MODE_TIMER, SCCP_EVENT_SPECIAL);
     trace_note("# sccp1_start(GEN13, TIMER, SPECIAL) -> %d\n", (int)ok);

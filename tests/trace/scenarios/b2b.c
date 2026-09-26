@@ -41,15 +41,12 @@ int main(void)
     trace_region(capture_buffer(), SAMPLES_PER_BUF_MAX * sizeof(uint16_t), "dma_buffer");
     hwmodel_start(rules, sizeof rules / sizeof rules[0], 0u);
 
-    /* Retried silently against the hardware model's residual scheduling
-     * race on clock_adc_set_pll()'s waits - see tests/trace/README.md,
-     * "hardware model - a residual race"; the `dac` scenario's identical
-     * retry has the full rationale. */
+    /* Called exactly once (P0.5b, "the hybrid") - the page-guard read hook
+     * answers clock_adc_set_pll()'s waits deterministically; see the
+     * `dac` scenario and tests/trace/README.md. */
     uint32_t rc = CLKDIV_RANGE;
     if (setjmp(fail_jmp) == 0) {
-        for (int attempt = 0; (attempt < 5) && (rc != CLKDIV_OK); attempt++) {
-            rc = capture_set_pll(5u, 5u);
-        }
+        rc = capture_set_pll(5u, 5u);
         trace_note("# capture_set_pll(5, 5) -> %lu\n", (unsigned long)rc);
     } else {
         trace_note("# capture_set_pll(5, 5) called fail() - see the F line above\n");

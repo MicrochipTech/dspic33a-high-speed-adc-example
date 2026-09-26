@@ -48,12 +48,11 @@ int main(void)
 
     hwmodel_start(rules, sizeof rules / sizeof rules[0], 10000u);
 
-    /* Retried silently - see stream_on.c's identical comment. */
+    /* Called exactly once (P0.5b, "the hybrid") - see stream_on.c's
+     * identical comment. */
     bool ok = false;
     if (setjmp(fail_jmp) == 0) {
-        for (int attempt = 0; (attempt < 5) && !ok; attempt++) {
-            ok = chain_stream_on_input(1000u, 2u, 7u, 1u, false);
-        }
+        ok = chain_stream_on_input(1000u, 2u, 7u, 1u, false);
         trace_note("# chain_stream_on_input(1000, core=2, pinsel=7, samc=1, test_signal=false) -> %d\n", (int)ok);
     } else {
         trace_note("# chain_stream_on_input(...) called fail() - see the F line above\n");
