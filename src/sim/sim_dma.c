@@ -6,9 +6,21 @@
  * data is to go, and sim_dma_tick() (sim.h) fills the next buffer half
  * the way the DMA would and then hands dma0_event() the same status
  * word the interrupt would have taken from DMA0STAT. Everything
- * downstream - blocks_done, ready_half, last_sample, the input switch at
+ * downstream - the ping-pong bookkeeping (blocks_done, ready_half,
+ * last_sample: pingpong.c since P9.1, 27.09.2026), the input switch at
  * DONE, the burst restart, capture_service(), the self-test, the status
- * lines - runs unchanged, in capture.c.
+ * lines - runs unchanged, in capture.c (and, for the buffer bookkeeping
+ * itself, in pingpong.c, which this file never includes and knows
+ * nothing about: dma0_event() is still the only entry point from here,
+ * exactly as before P9.1).
+ *
+ * The check below (sim_check_half()/SIM_CHECK_HALF()) is this file's OWN
+ * ping-pong-order check, not pingpong.c's: it compares the completed half
+ * against the sine table it generated, which is a simulator-only
+ * concern pingpong.c (host-testable, no sim.h, no __MPLAB_DEBUGGER_
+ * SIMULATOR) does not and should not know about (P9.2). It is called
+ * from capture.c's process_buffer() exactly as it always was; P9.1 did
+ * not touch that call site.
  *
  * Why: the simulator has neither the ADC nor the DMA, and it does not
  * dispatch interrupts in this project either (tools/sim_trap.py, the
