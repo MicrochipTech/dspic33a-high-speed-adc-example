@@ -270,6 +270,32 @@ acceptance run. The smoke path is preprocessor-guarded (`SIM_SMOKE`,
 ELFs function-identical with and without it. No MPLAB X configuration exists for it; the
 command line is the way to build it.
 
+## Remote board access (bench_client, since 27.09.2026)
+
+The EV74H48A at the colleague's desk can be flashed and its console driven from this
+machine, through a relay server (`C:\work\Claas\Relay`, its `README.md` has the full
+account: relay, certificates, the agent's five requests, what was tested). It works only
+while the colleague's `bench_agent` is running; the agent owns the console COM port and
+needs the PKOB4 free (no MPLAB X debug session on it).
+
+```
+python C:\work\Claas\Relay\bench_client.py info                        agent online? UART port, ipecmd
+python C:\work\Claas\Relay\bench_client.py flash build\adc_dma_40msps.hex --after 5
+python C:\work\Claas\Relay\bench_client.py console "version" "status" --timeout 10
+python C:\work\Claas\Relay\bench_client.py console "chain all" --timeout 120 -o build\run.log
+python C:\work\Claas\Relay\bench_client.py read 10
+python C:\work\Claas\Relay\bench_client.py history --bytes 8192
+```
+
+Exit code 3 = the agent is offline; `flash` returns `ipecmd`'s own code (9 = "Programmer
+not found"). After every flash, check the git revision in the banner before trusting a
+result. Every run through it is a board run like any other: it gets its dated entry in
+`docs/HARDWARE-LOG.md`, and "say what has and has not run on silicon" applies unchanged.
+The colleague cannot be seen from here - a flash while he is measuring or debugging
+disturbs him, and a changed set-up (a jumper, a signal generator) is invisible; ask the
+user when in doubt. BR decision 4 ("programming by hand, not `ipecmd`",
+`docs/IMPLEMENTATION-PLAN.md`) predates this and is superseded by it for remote runs.
+
 ## Rules
 
 - Say what has and has not run on silicon. `docs/HARDWARE-LOG.md` is the record; add a
