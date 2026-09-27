@@ -83,12 +83,12 @@ not counted.
 | P12.1-P12.4 Close-out | open | | | P12.4 = [SIM], runs without asking since 27.09.2026 |
 | BR.1 `tools/board_run.py` | in review | `175b20c` (worktree) | Sonnet | phase BR added 27.09.2026 (not counted in the 52); host-side, worktree beside P9/P11; selftest 10/10 |
 | BR.2 `tools/eval_board.py` + `expected.json` | in progress (worktree) | | Sonnet | |
-| BR.3 Python environment | open | | | worktree |
-| BR.4 `make_board_package.py` | open | | | worktree |
+| BR.3 Python environment | in progress (worktree) | | Sonnet | |
+| BR.4 `board_run/` hex files + README, runner finds them | open | | | worktree; replaces the package script (decision 8 changed) |
 | BR.5 Merge of the worktree | open | | | after P11 |
 | BR.6 Firmware additions for the board run | open | | | after P11, before P12; [SMOKE] + `expected.log` |
 | BR.7 Documentation | open | | | with or after BR.6 |
-| BR.8 Package for the first board run | open | | | after P12 |
+| BR.8 B image for the first board run | open | | | after P12 |
 | BR.9 Board run and loop back | open | | | needs the colleague and the EV74H48A |
 
 ### Decisions taken during the work
@@ -110,10 +110,10 @@ not counted.
 | 27.09. | BR decision 2: the run takes place after P12. Reason: B must carry `route list` (P11.5) and the BR.6 status fields, and one board run should cover N+1 as a whole | section BR |
 | 27.09. | BR decision 3 (user): EV74H48A only; the EV17P63A gets its own first run later | section BR |
 | 27.09. | BR decision 4: programming by hand (MPLAB X / IPE), not `ipecmd`. Reason: one dependency fewer at the colleague's; the runner checks the SHA-256 of the file named at the prompt, so a wrong file is caught anyway | section BR |
-| 27.09. | BR decision 5: the package carries a wheelhouse for `requirements-board.txt` (pyserial, numpy, matplotlib; win_amd64, CPython 3.10-3.13) and `gui_setup.bat --offline`. Reason: a few MB against the risk of losing the afternoon to a proxy; the GUI's own requirements stay online | BR.3, BR.4 |
+| 27.09. | BR decision 5: no offline installation; `gui_setup.bat` installs from the internet as today, a proxy through `HTTPS_PROXY`. Reason: follows from decision 8 as changed - a committed wheelhouse would put tens of MB of binaries (numpy, matplotlib) into the repository. (First settled as "package with wheelhouse", withdrawn the same day with decision 8.) | BR.3 |
 | 27.09. | BR decision 6: `tests/board/expected.json`, not YAML. Reason: stdlib only, no PyYAML in the colleague's environment | BR.2 |
 | 27.09. | BR decision 7: budget <= 15 min per run, <= 30 min for A + B, one timeout per block; the runner logs each block's duration, and R4's grab count is the knob if the first run overruns | section BR |
-| 27.09. | BR decision 8 (user): distribution as a package (`make_board_package.py`), not a `git pull` | BR.4 |
+| 27.09. | BR decision 8 (user), changed the same day: no package. The colleague does `git pull`, `tools\gui_setup.bat`, `tools\board_run.bat`, nothing else. The hex files are committed prebuilt in `board_run/` (A now in BR.4, B in BR.8), built from clean worktree checkouts, with `SHA256SUMS.txt` and a README; the runner finds and checks them and records HEAD and a dirty tree | BR.4, BR.8 |
 | 27.09. | BR decision 9: no signal generator assumed. R5 runs on the default custom input without a signal and judges only the data path (CRC, counters, frame shape); SNR/THD are judged only if the colleague answers the prompt with a connected signal. Reason: availability unknown, and the block must not fail for lack of a generator | BR.1, BR.2 |
 | 27.09. | BR: the P3 libraries' cycle count on silicon is not in the first board run. Reason: keep the new firmware in B minimal; P3.8 stays optional | BR.6 |
 | 27.09. | BR pass criterion adopted from `board-run-task.md` section 10, the stack margin fixed at >= 25 % of the stack unused. Reason: the port layer and visitor callbacks added depth that no host tool measures; a quarter leaves room for interrupt nesting not reached in the run | BR.9 |
@@ -697,7 +697,7 @@ the host (timeout, ask for reset, read the boot banner, carry on).
 
 **Scheduling:** BR.1-BR.5 touch only `tools/` and `tests/` and run in a separate worktree
 alongside P9-P11 (like P6.5 beside P5). BR.6 (firmware) runs after P11 and before P12.
-BR.7 (docs) with or after BR.6. BR.8 (package) after P12. BR.9 is the run itself.
+BR.7 (docs) with or after BR.6. BR.8 (the B image) after P12. BR.9 is the run itself.
 
 **Rule for every later firmware change (from BR.1 on):** a change to the reply format of
 `version`, `help`, `status`, `regs`, `chain all`'s `@` lines or the GRAB header updates
@@ -737,8 +737,8 @@ continue with the next block. Budget: <= 15 min per run, <= 30 min for A + B.
   every command sent, host timestamp in ms and direction per line), `A-grab-<n>.bin` /
   `B-grab-<n>.bin` only for failed grabs, `summary.txt`, `session.json` (runner version,
   COM port, PC time, Python/pyserial versions, the two hex file names and SHA-256, the
-  R5 signal answer). The hex files named at the prompts are checked against the
-  package's SHA-256 list.
+  R5 signal answer). The hex files are checked against a SHA-256 list (BR.4 moves this
+  to `board_run/SHA256SUMS.txt`).
 - `--selftest` / `--fake`: the full sequence against a stand-in target (extend
   `adc_gui.py`'s `FakeTarget` or a replay stub for `chain all`/`test all`/`regs`) with a
   timeout in the middle, a reset with a new boot banner, a NAK, and a firmware without
@@ -771,33 +771,39 @@ continue with the next block. Budget: <= 15 min per run, <= 30 min for A + B.
 - `tools/requirements-board.txt`: `pyserial`, `numpy`, `matplotlib` (only for
   `eval_chain.py --png`). No PyYAML (decision 6).
 - `tools/gui_setup.bat` and `tools/gui_setup.sh`: install both requirement files into
-  `tools/.venv`; after the GUI self-test run `board_run.py --selftest` and
+  `tools/.venv` from the internet as today (a proxy through `HTTPS_PROXY`, as the script
+  already says); after the GUI self-test run `board_run.py --selftest` and
   `eval_board.py --selftest`; header comment and closing message name all three tools.
-- Offline: `tools/gui_setup.bat --offline <dir>` installs from a wheelhouse
-  (`pip install --no-index --find-links`), used by the package (BR.4, decision 5).
-- **Verify:** a fresh `.venv` in a temporary copy, both self-tests PASS; `--offline`
-  against a wheelhouse made with `pip download`.
+  No offline installation (decision 8, changed).
+- **Verify:** a fresh `.venv` in a temporary copy, both self-tests PASS.
 
-### BR.4 `tools/make_board_package.py` (worktree)
+### BR.4 `board_run/` - the committed firmware images and the colleague's README (worktree)
 
-- Builds `board-run-<date>.zip`: `A-EV74H48A-<rev>.hex`, `B-EV74H48A-<rev>.hex`, each
-  built by `tools\build.bat` from a clean `git worktree` of its revision (never a working
-  tree with local changes; the script refuses a dirty revision); `SHA256SUMS.txt`; the
-  tools the runner needs (`board_run.py/.bat`, `eval_board.py`, `eval_chain.py`,
-  `protocol.py`, `gui_setup.bat`, both requirement files, `tests/board/expected.json`);
-  a wheelhouse for `requirements-board.txt` (win_amd64, CPython 3.10-3.13);
-  `README-colleague.txt` (`tools/board_package/README-colleague.txt` as its source).
-- `README-colleague.txt`: the steps, what to send back, and the hardware set-up of the
-  EV74H48A (jumpers, the one USB cable on PKOB4, power), checked against the board user
-  guide and how runs 11-19 were set up (HARDWARE-LOG); that R2-R4 need no external
-  wiring (DAC2 -> RA8 -> core 5 / UREF on chip) and that nothing may load RA8; for R5
-  the pin (core, `pinsel`, header pin) and that without a signal R5 tests only the data
-  path.
-- **Verify:** the script run against `b41af3b` and HEAD produces a zip whose hex files
-  are bit-identical to a manual `tools\build.bat` of the same revision in a clean
-  checkout (apart from the build-ID string, if any - say which bytes); the package
-  unpacked into an empty folder, `gui_setup.bat --offline` and `board_run.py --selftest`
-  run from there.
+The colleague's whole procedure is `git pull`, `tools\gui_setup.bat` (once, and after a
+pull that changed a requirements file), `tools\board_run.bat`. No package, no build on
+his side (decision 8, changed 27.09.2026).
+
+- `board_run/` at the repository root, committed (not git-ignored, unlike `build/`):
+  `A-EV74H48A-b41af3b.hex`, `SHA256SUMS.txt`, `README.md`. Each hex file is built by
+  `tools\build.bat` from a clean `git worktree` checkout of its revision (never a working
+  tree with local changes) and committed together with the revision it came from.
+  `README.md` states which revision each file is and that the files are not build output
+  of the current tree. B is added in BR.8, not here.
+- `board_run/README.md`: the three steps, what to send back, and the hardware set-up of
+  the EV74H48A (jumpers, the one USB cable on PKOB4, power), checked against the board
+  user guide and how runs 11-19 were set up (HARDWARE-LOG); that R2-R4 need no external
+  wiring (DAC2 -> RA8 -> core 5 / UREF on chip) and that nothing may load RA8; for R5 the
+  pin (core, `pinsel`, header pin) and that without a signal R5 tests only the data path.
+- `board_run.py`: finds the hex files in `board_run/` itself and names them in its
+  prompts with the full path; checks them against `SHA256SUMS.txt` before the run (a
+  stale or locally modified file stops the run with a clear message); prints the
+  hardware set-up of the README as a checklist before run A ("confirm with ENTER");
+  records `git rev-parse HEAD` and `git status --porcelain` in `session.json` and warns,
+  without stopping, if the tree is dirty. Self-test extended for all four.
+- **Verify:** `A-EV74H48A-b41af3b.hex` bit-identical to a second, independent clean
+  build of `b41af3b` (apart from the build-ID string, if any - say which bytes);
+  `board_run.py --selftest` covers a matching, a modified and a missing hex file and a
+  dirty tree; `hosttest.bat` all PASS.
 
 ### BR.5 Merge of the worktree
 
@@ -825,7 +831,7 @@ continue with the next block. Budget: <= 15 min per run, <= 30 min for A + B.
 ### BR.7 Documentation
 
 - `CLAUDE.md`: module rows for `board_run.py`, `eval_board.py`, `tests/board/expected.json`,
-  `make_board_package.py`; in "Build and verify" a paragraph on the board run, the
+  `board_run/` (the committed hex files); in "Build and verify" a paragraph on the board run, the
   reply-format rule above, and "a board run goes through `board_run.py`".
 - `README.md`: "Running the board test" (pointer to `README-colleague.txt`);
   `docs/CHAIN-TEST-PLAN.md` section 7 replaced by the new procedure;
@@ -833,8 +839,10 @@ continue with the next block. Budget: <= 15 min per run, <= 30 min for A + B.
 
 ### BR.8 Package for the first board run (after P12)
 
-- `make_board_package.py` with A = `b41af3b`, B = the P12 close-out revision; the zip and
-  its `SHA256SUMS.txt` recorded in the HARDWARE-LOG entry of P12.3.
+- `board_run/B-EV74H48A-<rev>.hex` built from a clean `git worktree` of the P12 close-out
+  revision, `SHA256SUMS.txt` and `board_run/README.md` updated, committed; the two
+  SHA-256 recorded in the HARDWARE-LOG entry of P12.3. B is rebuilt and recommitted only
+  when a board run is prepared, never on every commit.
 
 ### BR.9 The board run and the loop back
 
@@ -876,7 +884,7 @@ P0 ──► P1 ──► P2 ──► P3
 - **[SIM]** (full acceptance, ~7 min; without asking since 27.09.2026, one run at a time) runs at P9.5 and P12.4.
 - **BR**: BR.1-BR.4 (tools/ and tests/ only) in a worktree alongside P9-P11; BR.5 merges
   them after P11; BR.6 (firmware, [SMOKE]) after P11 and before P12; BR.7 with or after
-  BR.6; BR.8 after P12; BR.9 is the board run.
+  BR.6; BR.8 (B image) after P12; BR.9 is the board run.
 - The only real risk of changing timing lies in P8.1 (DMA ISR), now in N+2. It is checked with
   `fncmp` (no indirect call, instruction count recorded), but only a board run can
   confirm it.
