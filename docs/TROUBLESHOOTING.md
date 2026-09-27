@@ -438,6 +438,19 @@ next one was done. Both usually mean something else is consuming the CPU:
   keep `CNT` ≤ 65535).
 - Check whether another interrupt is interfering (§1.3).
 
+### 2.6 Board run (`tools\board_run.bat`): port busy, no reply, pip behind a proxy
+
+- **"cannot open COMx: access denied"** — another program has the port open: the GUI
+  (`tools\adc_gui.py`), a terminal program, or MPLAB X's own terminal (a debug session
+  holds the PKOB4). Close it and retry; `--list` shows which ports exist right now.
+- **No reply within a block's timeout** — `board_run.py` logs the timeout, asks you to
+  press RESET, reads the new boot banner and carries on with the next block; nothing is
+  lost except that block's own result, which the report then names as a deviation.
+- **`pip` fails during `tools\gui_setup.bat`** — behind a proxy, set `HTTPS_PROXY` (the
+  script's own message) and run `gui_setup.bat` again; it installs `requirements.txt` and
+  `requirements-board.txt` and then runs all three self-tests (`adc_gui.py`,
+  `board_run.py`, `eval_board.py`) as its own check that the install worked.
+
 ---
 
 ## Part 3 — Working methodically

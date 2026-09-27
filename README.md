@@ -431,7 +431,7 @@ wait for "@END" (under a minute), send the log file back
 ```
 
 (The scripted way to run this, both boards' firmware in one session, with the log
-archived automatically: `board_run/README.md`.)
+archived automatically: see "Running the board test" below.)
 
 If it stops without `@END`, reset the board and send the log including the new
 boot banner: the next boot prints the stage the run was in
@@ -478,6 +478,17 @@ with the CPU processing, per rate - S7 start, stop, restart, rate change - S8
 the old open questions (CLKGEN6 divider and CLKGEN6 off measured at the clock
 itself, back-to-back repeats) - S9 the attempt, 15 s at the best rate and at
 8 MSPS, and the registers the chain ran with.
+
+## Running the board test
+
+`tools\board_run.bat` is the scripted way to run the chain test above: it programs and
+runs the old firmware and the current one against a real board in one session, over the
+same console described above, and writes one archive with everything sent and received.
+The whole procedure is `git pull`, `tools\gui_setup.bat` (once, and again after a pull
+that changed a requirements file), then `tools\board_run.bat COM5` (`COM5` is the
+board's console port; `--list` shows the candidates, `--selftest` checks the tool itself
+without a board). Hardware set-up, what each firmware image is, and what to send back:
+`board_run/README.md`.
 
 ## How it works
 

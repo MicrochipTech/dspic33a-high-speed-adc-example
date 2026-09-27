@@ -251,14 +251,19 @@ after step 11. One commit per step. Each step: both builds (`tools\build.bat`, `
 
 ## 7. For the colleague
 
+Superseded by phase BR (27.09.2026, `docs/IMPLEMENTATION-PLAN.md`): the procedure is now
+the scripted one, over both the old firmware and the current one in a single session:
+
 ```
 git pull
-MPLAB X: configuration EV74H48A_Curiosity_Platform_MPS512, build, program
-Terminal with logging to a file, 115200 8N1 (as before)
-Wait for "[boot] READY", type:   chain all
-Wait for "@END" (at most 1 minute), send the log file.
-If it stops without @END: reset the board, send the log including the new boot banner.
+tools\gui_setup.bat          once, and again after a pull that changed a requirements file
+tools\board_run.bat COM5     COM5 = the board's console port; --list shows the candidates
 ```
+
+`board_run.bat` (`tools/board_run.py`) drives `chain all` as one of its blocks, among the
+others (`regs`, `test all`, the GUI's `stream`/`stream grab` cycle, `route list`), and
+writes one archive - the file to send back. Hardware set-up, the firmware images it
+programs and what to do if a run stops without `@END`: `board_run/README.md`.
 
 ## 8. Risks and what to do about them
 
