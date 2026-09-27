@@ -264,3 +264,66 @@ results, which carry no such sections, are unchanged by the fix. `tools\hosttest
 PASS, `tools\trace.bat` 13/13 PASS. No MPLAB X configuration was added for the smoke
 build: it would need a fourth `<conf>` with its own macro and file exclusion, and the
 command line is what runs it.
+
+# P3.7 The five libs in every build (`lib/iir1`, `goertzel_f`, `goertzel_i`, `detect`, `wavegen`)
+
+Date: 27.09.2026. Before = `6acd0fa` (P4.7, the commit before P3.7), after = P3.7 with
+the five files in `tools\build.bat`, `tools\Makefile`, `tools\setup.py` and all three
+MPLAB X configurations. Nothing calls them yet (N+3 uses `wavegen`, N+4 the others).
+
+## Memory (P0.1 method: the linker map's own summary lines)
+
+Same commands as P0.1 - the exact `build.bat` compiler line per variant with
+`-Wl,-Map=<out>.map` appended, run from `tools\`; the source list is the one
+`build.bat` carries at that revision, so the "before" rows already include everything
+P1 to P4.7 added (`port_impl.c`, `fmt.c`, `stats.c`, `tri_eval.c`).
+
+| Variant | P0.1 `b41af3b` program / data | before P3.7 `6acd0fa` program / data | after P3.7 program / data | P3.7 growth program / data |
+|---|---|---|---|---|
+| hardware  | 0x145c4 (83396) / 0x39e2 (14818) | 0x146c8 (83656) / 0x39e2 (14818) | 0x1523c (86588) / 0x39ea (14826) | +2932 / +8 |
+| simulator | 0xf50c (62732) / 0x25d6 (9686)   | 0x1024c (66124) / 0x31c2 (12738) | 0x10dc0 (69056) / 0x31ca (12746) | +2932 / +8 |
+| nano      | 0x145cc (83404) / 0x39de (14814) | 0x146d0 (83664) / 0x39de (14814) | 0x15244 (86596) / 0x39e6 (14822) | +2932 / +8 |
+
+(bytes; percentages of the linker's regions unchanged at 15-16 % program, 19-22 %
+data.) The linker keeps the unused code, as the plan accepts: the +2932 bytes of
+program memory are the 24 lib functions plus two libm entries, `.libc.expf` (464 bytes)
+and `.libc.scalbnf` (148 bytes), which `wavegen_fill()`'s `expf()` pulls in; `.dinit`
+grows by 20 bytes. The +8 bytes of data are libc's `___errno_val` (4 bytes,
+`libc99-elf.a(__errno_location)`, referenced by `libm-elf.a(expf)`) plus alignment - no
+lib has a static variable of its own. No `gc-sections` was turned on (its own task, per
+the plan).
+
+## libm
+
+No `-lm` is needed on any path, and none was added. `xc-dsc-gcc -dumpspecs` shows the
+default library group `--start-group -lc99-pic30-elf -lm-elf -lc99-elf --end-group`
+(`*lib:` spec), so `libm-elf.a` is searched in every link the driver makes - `build.bat`,
+`tools\Makefile`, `setup.py --verify` and the MPLAB X project (its generated link line
+carries no explicit library either, and the `_test_mplabx.bat` build links all five
+objects and resolves `expf`). Of the six libm names the libs use, only `expf` (and its
+helper `scalbnf`) ends up in the ELF: `cosf`/`sinf` compile to the dsPIC33A FPU's
+`cos.s`/`sin.s` instructions (`_goertzel_f_init` disassembly), `floorf`/`fabsf`/`fminf`
+to inline FPU code - `readelf -s` lists no `_sinf`, `_cosf`, `_floorf`, `_fabsf`,
+`_fminf`.
+
+## fncmp (`--ignore-strings`, before vs after)
+
+- hardware: 383 functions in A, 408 in B; **383 same, 0 differ**, 25 only in B.
+- nano: the same, 383 same, 0 differ, 25 only in B.
+- simulator: 343 same, 0 differ, 25 only in B.
+
+The 25 new functions: `_iir1_init/_reset/_lp/_hp`, `_goertzel_f_init/_reset/_block`,
+`_goertzel_i_init/_reset/_block`, `goertzel_i.c:_q16`, `goertzel_i.c:_mul_q16`,
+`_detect_init/_set_threshold/_reset/_sample/_block/_amplitude/_adapt`,
+`detect.c:_rearm_level`, `_wavegen_fill/_snap_hz`, `wavegen.c:_wavegen_y`, and from libm
+`_expf`, `_scalbnf`. `_DMA0Interrupt`: 42 instructions, 0 indirect calls (hw and nano).
+
+## Verification
+
+`build.bat` hw/sim/nano/smoke `-Wall -Wextra` clean; `trace.bat` 13/13 PASS;
+`hosttest.bat` 10/10 PASS; `sim_trap.py --smoke` `[smoke] PASS` (110 lines match
+`expected.log`; 93 s); `_test_mplabx.bat` builds the Curiosity Platform configuration
+with the five files (the generated `Makefile-*.mk` were stale from before P4.1 - they
+lacked `../src/port` on the include path and the new files - and had to be deleted so
+that the generator ran again; it then rewrote `languageToolchainVersion` to 3.21, which
+was restored by hand; `.X/build` and `dist` deleted afterwards).

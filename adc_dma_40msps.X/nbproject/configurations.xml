@@ -29,6 +29,11 @@
         <itemPath>../src/lib/fmt.h</itemPath>
         <itemPath>../src/lib/stats.h</itemPath>
         <itemPath>../src/lib/tri_eval.h</itemPath>
+        <itemPath>../src/lib/iir1.h</itemPath>
+        <itemPath>../src/lib/goertzel_f.h</itemPath>
+        <itemPath>../src/lib/goertzel_i.h</itemPath>
+        <itemPath>../src/lib/detect.h</itemPath>
+        <itemPath>../src/lib/wavegen.h</itemPath>
       </logicalFolder>
       <logicalFolder name="port" displayName="port" projectFiles="true">
         <itemPath>../src/port/log.h</itemPath>
@@ -81,6 +86,11 @@
         <itemPath>../src/lib/fmt.c</itemPath>
         <itemPath>../src/lib/stats.c</itemPath>
         <itemPath>../src/lib/tri_eval.c</itemPath>
+        <itemPath>../src/lib/iir1.c</itemPath>
+        <itemPath>../src/lib/goertzel_f.c</itemPath>
+        <itemPath>../src/lib/goertzel_i.c</itemPath>
+        <itemPath>../src/lib/detect.c</itemPath>
+        <itemPath>../src/lib/wavegen.c</itemPath>
       </logicalFolder>
       <logicalFolder name="sim" displayName="sim" projectFiles="true">
         <itemPath>../src/sim/sim_dma.c</itemPath>

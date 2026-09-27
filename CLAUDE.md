@@ -38,7 +38,7 @@ the sources still include each other as `"name.h"` without a folder prefix:
 | `src/app/` | `main.c`, `capture.c/.h`, `config_bits.c`, `port_impl.c`, `board.h` (and the generated `version.h`) |
 | `src/cli/` | `cli.c`, `console.h`, `cmd_parser.c/.h` |
 | `src/tests/` | `chaintest.c/.h`, `dactest.c/.h` |
-| `src/lib/` | `crc16.c/.h`, `fmt.c/.h`, `stats.c/.h`, `tri_eval.c/.h` |
+| `src/lib/` | `crc16.c/.h`, `fmt.c/.h`, `stats.c/.h`, `tri_eval.c/.h`, and since P3.7 (27.09.2026) `iir1`, `goertzel_f`, `goertzel_i`, `detect`, `wavegen` (`.c/.h`) - in every build, called from nowhere yet |
 | `src/diag/` | `diag.c/.h` |
 | `src/port/` | `log.h`, `panic.h`, `wait.h` - the port layer (V2), headers only: what a driver may call outside itself; implemented by `src/app/port_impl.c` |
 | `src/sim/` | `sim.h`, `sim_dma.c` |
@@ -57,6 +57,11 @@ the sources still include each other as `"name.h"` without a folder prefix:
 | `fmt.c/.h` | `u32_to_str()`, `u32_to_hex()`, `copy_str()` - the printf-free formatting helpers, moved out of cli.c on 27.09.2026 (P2.1); hardware-free, tested on the host by `tests/host/test_fmt.c` | - |
 | `stats.c/.h` | `half_stats()` (min/max/mean) and `half_mean()` over `const uint16_t *` samples - no `volatile`, no knowledge of the DMA: the callers (cli.c's `completed_half_stats()`, `capture_selftest()`) pass the completed half and cast the volatile away there, with the reason in the comment. Moved out of cli.c/capture.c on 27.09.2026 (P2.2); the mean truncates (`acc / n`), pinned by `tests/host/test_stats.c` | - |
 | `tri_eval.c/.h` | the chain test's triangle evaluator: `fit_line()`, `tri_eval()` (fills a `tri_t`: min/max, turning points, slope lengths, `step`, `zero`/`dbl`, `slip`) and the grid verdict `tri_grid_ok()`, with `TP_MAX`, `STEP_CHECK_LSB`, `GRID_SLIP_MAX`. Moved verbatim out of chaintest.c on 27.09.2026 (P2.3); the sample pointer keeps its `volatile` because the chain test evaluates the DMA buffer in place. No register, no DMA. `tests/host/test_tri_eval.c` repeats the 25.09.2026 host test on synthetic windows (DNL, noise, DAC filter; 2100 clean windows, 0 false alarms; a single lost/repeated sample in the middle half of the window found in 100 % of 4200 windows) and, as `--eval`, evaluates windows from stdin for `tests/host/test_tri_eval_xcheck.py` (P2.4, run by `hosttest.bat` after the C tests), which feeds the same `eval_chain.synth()` windows plus edge cases to both this C code and `tools/eval_chain.py`'s port and requires every integer field and verdict equal and every float field equal to within the float rounding C's `tri_t` applies | - |
+| `iir1.c/.h` | first-order IIR low-/high-pass (`iir1_init/reset/lp/hp`, shift coefficient `k`), one `iir1_t` per filter (P3.2). In every build since P3.7 (27.09.2026), unused until N+4 | - |
+| `goertzel_f.c/.h` | damped Goertzel in float (`goertzel_f_init/reset/block`), one `goertzel_f_t` per channel (P3.3); `cosf`/`sinf` become the FPU's `cos.s`/`sin.s`. Included, unused until N+4 | - |
+| `goertzel_i.c/.h` | the same Goertzel in Q16 fixed point with int64 multiplies (`goertzel_i_init/reset/block`) (P3.4). Included, unused until N+4 | - |
+| `detect.c/.h` | pulse detector with hysteresis and window (`detect_init/set_threshold/reset/sample/block/amplitude/adapt`), one `detect_t` per channel (P3.5). Included, unused until N+4 | - |
+| `wavegen.c/.h` | signal-generator table from the `tab_wave_gen.py` formula (`wavegen_fill()`, `wavegen_snap_hz()`; `expf` from libm, `sinf` the FPU instruction) (P3.6). Included, unused until N+3 | - |
 | `sccp.c/.h` | SCCP1 as a trigger source, with clock source, mode and event as parameters; its timer and compare interrupts as event counters - same registers and vectors on both boards, see `adc.c/.h` above. Its register dump prints through `port/log.h` only (P4.3, 27.09.2026); no `console.h` | port, capture, chaintest |
 | `led.c/.h` | LED0 | - |
 | `timebase.c/.h` | Timer1 as a stopwatch (12.5 MHz) for measuring the delivered rate. It sits on the CPU branch (PLL2) while the ADC is on PLL1, so it cannot flatter the ADC. Not involved in producing the rate. | - |
@@ -141,7 +146,12 @@ line through MPLAB X's own makefile generator. Two pitfalls: the generator rewri
 finds first - restore that one line, never `git checkout` the whole file (that once
 threw away a file-list change); and after any change to the file list delete
 `adc_dma_40msps.X/build` and `dist`, otherwise make links stale objects and a missing
-entry goes unnoticed.
+entry goes unnoticed. A third one, hit on 27.09.2026 (P3.7): `_test_mplabx.bat` runs
+the generator only when `nbproject/Makefile-impl.mk` is missing, so the git-ignored
+`nbproject/Makefile-*.mk` keep an old file list and old include path (they were from
+before P4.1 and failed with `log.h: No such file`) - after a change to the file list or
+the include directories delete those generated makefiles too, so that the generator
+runs again (and then restore `languageToolchainVersion`).
 
 GUI tool: `tools\gui_setup.bat` once, then `tools\adc_gui.bat --fake`; `python
 tools\adc_gui.py --selftest` is its check.
