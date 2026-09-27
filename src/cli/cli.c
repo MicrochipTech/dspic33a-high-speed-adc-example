@@ -82,6 +82,7 @@
 #include "stats.h"
 #include "uart.h"
 #include "gui_link.h"
+#include "routing.h"
 
 /* ------------------------------------------------------------------ *
  * UART transport - uart.c owns every register; this file only decides
@@ -313,6 +314,20 @@ void put_line(const char *s)
     cmd_parser_write("\r\n");
 }
 
+/* put_kv()'s string counterpart, for "route list" (P11.5, 27.09.2026): a
+ * route's src/sink are named by a short, static string (routing.c's
+ * route_src_name()/route_sink_name()), not a number - no local buffer
+ * needed, every argument is already a complete, nul-terminated string.
+ * Static: only cmd_route_fn() below uses it, unlike put_kv()/put_line()
+ * which bench.c and gui_link.c also borrow. */
+static void put_kv_str(const char *key, const char *s)
+{
+    cmd_parser_write(key);
+    cmd_parser_write(": ");
+    cmd_parser_write(s);
+    cmd_parser_write("\r\n");
+}
+
 /* One status line, blocking, for the periodic trace from main(). */
 void console_status_line(void)
 {
@@ -421,6 +436,33 @@ static void cmd_regs_fn(int argc, char **argv)
     regs_dump();
 }
 CMD_DEFINE(regs, "regs", cmd_regs_fn, "regs - clock, ADC, DMA and UART registers");
+
+/* routing.c's route_visit_t callback: turns every field routing_visit()
+ * hands out into the same "key: value" line every other command's reply
+ * already uses (put_kv()/put_line()) - see routing.h's route_vis_fmt_t. */
+static void route_print(const char *name, uint32_t v, const char *s, route_vis_fmt_t fmt)
+{
+    switch (fmt) {
+    case ROUTE_VIS_NUM:  put_kv(name, v);  break;
+    case ROUTE_VIS_STR:  put_kv_str(name, s); break;
+    case ROUTE_VIS_LINE: put_line(name); break;
+    }
+}
+
+/* "route list" - the only sub-command today, dispatched inside this one
+ * function exactly like "stream on|off|grab" (cmd_stream_fn() above): a
+ * later sub-command (docs/DESIGN-MULTICHANNEL.md's other sinks, once they
+ * read something) needs no new parser slot, only another branch here. */
+static void cmd_route_fn(int argc, char **argv)
+{
+    static const char use[] = "route list - the active route(s) and the resource table";
+    if ((argc == 2) && (strcmp(argv[1], "list") == 0)) {
+        routing_visit(route_print);
+        return;
+    }
+    usage(use);
+}
+CMD_DEFINE(route, "route", cmd_route_fn, "route list - the active route(s) and the resource table");
 
 static void cmd_start_fn(int argc, char **argv)
 {
@@ -864,6 +906,7 @@ void cli_init(void)
     (void)cmd_register(&cmd_version);
     (void)cmd_register(&cmd_status);
     (void)cmd_register(&cmd_regs);
+    (void)cmd_register(&cmd_route);
     (void)cmd_register(&cmd_start);
     (void)cmd_register(&cmd_stop);
     (void)cmd_register(&cmd_samc);

@@ -16,7 +16,16 @@
  * would exceed both at once reports SCCP_LIMIT, not DMA_LIMIT - the only
  * way to observe the SCCP rule at all, since nothing in the model can ever
  * cost more SCCP than DMA.
+ *
+ * routing_visit() (P11.5, 27.09.2026), for the console command "route
+ * list": stays exactly as print-free as the rest of this file - it hands
+ * every field to the caller's route_visit_t (routing.h) instead of calling
+ * console_puts()/put_kv() itself, the same visitor pattern port/regs.h uses
+ * for a driver's register dump, so routing.c still links into
+ * tests/host/test_routing.c without a console.
  */
+#include <stddef.h>          /* NULL, routing_visit()'s v/s arguments (P11.5) */
+
 #include "routing.h"
 #include "acquisition.h"
 
@@ -296,4 +305,61 @@ route_err_t routing_apply(const route_t *r)
     }
     route_record(r);
     return ROUTE_OK;
+}
+
+/* route_src_t/route_sink_t as short, static strings for routing_visit()
+ * (P11.5, 27.09.2026) - the ATDF-independent names routing.h's own enum
+ * comments already use. */
+static const char *route_src_name(route_src_t src)
+{
+    switch (src) {
+    case ROUTE_SRC_EXT:       return "EXT";
+    case ROUTE_SRC_DAC_INT:   return "DAC_INT";
+    case ROUTE_SRC_DAC_PIN:   return "DAC_PIN";
+    case ROUTE_SRC_RAM_TABLE: return "RAM_TABLE";
+    default:                  return "?";
+    }
+}
+
+static const char *route_sink_name(route_sink_t sink)
+{
+    switch (sink) {
+    case ROUTE_SINK_RAM:     return "RAM";
+    case ROUTE_SINK_CONSOLE: return "CONSOLE";
+    case ROUTE_SINK_STREAM:  return "STREAM";
+    default:                 return "?";
+    }
+}
+
+void routing_visit(route_visit_t visit)
+{
+    if (route_count == 0u) {
+        visit("route: none - no route active", 0u, NULL, ROUTE_VIS_LINE);
+    } else {
+        for (uint32_t i = 0; i < route_count; i++) {
+            const route_t *r = &route_table[i];
+            visit("route",  i,          NULL,                     ROUTE_VIS_NUM);
+            visit("src",    0u,         route_src_name(r->src),   ROUTE_VIS_STR);
+            visit("core",   r->core,    NULL,                     ROUTE_VIS_NUM);
+            visit("pinsel", r->pinsel,  NULL,                     ROUTE_VIS_NUM);
+            visit("dac",    r->dac,     NULL,                     ROUTE_VIS_NUM);
+            visit("samc",   r->samc,    NULL,                     ROUTE_VIS_NUM);
+            visit("sink",   0u,         route_sink_name(r->sink), ROUTE_VIS_STR);
+        }
+    }
+
+    /* the resource table - the same counters route_check() charges a
+     * candidate route against, read back rather than recomputed twice */
+    const uint32_t adc_n   = count_adc_consuming();
+    const uint32_t table_n = count_table_dacs();
+    visit("dma_used",          adc_n + table_n,         NULL, ROUTE_VIS_NUM);
+    visit("dma_total",         ROUTE_DMA_CHANNELS,       NULL, ROUTE_VIS_NUM);
+    visit("sccp_used",         (adc_n > 0u ? 1u : 0u) + table_n, NULL, ROUTE_VIS_NUM);
+    visit("sccp_total",        ROUTE_SCCP_COUNT,        NULL, ROUTE_VIS_NUM);
+    visit("dac_outputs_used",  count_dac_pin(),         NULL, ROUTE_VIS_NUM);
+    visit("dac_outputs_total", ROUTE_DAC_OUTPUTS,       NULL, ROUTE_VIS_NUM);
+    visit("uref_used",         count_dac_int(),         NULL, ROUTE_VIS_NUM);
+    visit("uref_total",        ROUTE_UREF_COUNT,        NULL, ROUTE_VIS_NUM);
+    visit("ram_used",          ram_used_bytes(),        NULL, ROUTE_VIS_NUM);
+    visit("ram_budget",        ROUTE_RAM_BUDGET_BYTES,  NULL, ROUTE_VIS_NUM);
 }

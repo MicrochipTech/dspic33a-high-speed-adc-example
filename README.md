@@ -570,7 +570,7 @@ the cause of the next overrun.
 UART2 on the board's MCP2221A USB-UART channel, 115200 8N1, no flow control. The parser
 is [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser), copied unchanged except for
 one line (the command table is 32 entries instead of 16 — `CMD_PARSER_MAX_COMMANDS`,
-`cmd_parser.h`; 26 commands plus the built-in `help` are registered, `nano-board`). It
+`cmd_parser.h`; 27 commands plus the built-in `help` are registered, `nano-board`). It
 runs in the UART receive interrupt, below the DMA interrupt — which is why a rate that
 overruns makes the console unresponsive, and why the firmware boots idle.
 
@@ -580,6 +580,7 @@ overruns makes the console unresponsive, and why the firmware boots idle.
 | `version` | build id, git revision, board, configuration |
 | `status` | run state, counters, the clock, the receive diagnostics |
 | `regs` | clock, ADC, DMA, DAC, UREF and UART registers |
+| `route list` | the active route (source, core, pinsel, DAC, sink) and the resource table — which DMA channel, SCCP, DAC output and UREF are in use, RAM used vs. budget (`docs/DESIGN-MULTICHANNEL.md`'s routing core) |
 | `test [part] [halves]` | run a part of the measurement, or `all` — see below |
 | `pll <p1> <p2>` | **the sample rate**: PLL1 output dividers, 1600 MHz / (p1·p2), p1 ≥ p2, both 1…7 |
 | `clk <100…1000>` | the CLKGEN6 divide ratio ×100. Arrives in the register and does **not** change the rate on this silicon; kept for the record |

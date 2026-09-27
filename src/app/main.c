@@ -91,6 +91,7 @@ static const char *const smoke_script[] = {
     "help",       /* every registered command - the table is full when one is missing */
     "version",    /* [build] block, board, input, console                              */
     "status",     /* the counters, all idle                                            */
+    "route list", /* P11.5: no route active in the simulator - nothing streams here    */
 };
 
 static void smoke_run(void)

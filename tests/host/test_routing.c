@@ -17,6 +17,7 @@
  */
 #include <stdint.h>
 #include <stdbool.h>
+#include <string.h>
 
 #include "routing.h"
 #include "acquisition.h"
@@ -383,6 +384,98 @@ static void test_apply_on_off_on(void)
     CHECK(stub_test_dac);
 }
 
+/* ---- P11.5: routing_visit(), the "route list" console command's data
+ * source - checked here through the same route_visit_t callback the
+ * console side turns into "key: value" lines, so the test never needs a
+ * console either. ---- */
+#define VISIT_MAX 20
+static struct {
+    const char     *name;
+    uint32_t        v;
+    char            s[16];
+    route_vis_fmt_t fmt;
+} visit_log[VISIT_MAX];
+static int visit_count;
+
+static void visit_capture(const char *name, uint32_t v, const char *s, route_vis_fmt_t fmt)
+{
+    CHECK(visit_count < VISIT_MAX);
+    if (visit_count >= VISIT_MAX) { return; }
+    visit_log[visit_count].name = name;
+    visit_log[visit_count].v    = v;
+    visit_log[visit_count].fmt  = fmt;
+    visit_log[visit_count].s[0] = '\0';
+    if (s != NULL) {
+        strncpy(visit_log[visit_count].s, s, sizeof visit_log[visit_count].s - 1u);
+    }
+    visit_count++;
+}
+
+static void test_routing_visit_empty(void)
+{
+    routing_clear();
+    visit_count = 0;
+    routing_visit(visit_capture);
+
+    /* the "none" line, then the resource table - 0 used throughout */
+    CHECK_EQ(visit_count, 11);
+    CHECK_EQ(visit_log[0].fmt, ROUTE_VIS_LINE);
+    CHECK(strcmp(visit_log[0].name, "route: none - no route active") == 0);
+    CHECK(strcmp(visit_log[1].name, "dma_used") == 0);          CHECK_EQ(visit_log[1].v, 0u);
+    CHECK(strcmp(visit_log[2].name, "dma_total") == 0);         CHECK_EQ(visit_log[2].v, ROUTE_DMA_CHANNELS);
+    CHECK(strcmp(visit_log[3].name, "sccp_used") == 0);         CHECK_EQ(visit_log[3].v, 0u);
+    CHECK(strcmp(visit_log[4].name, "sccp_total") == 0);        CHECK_EQ(visit_log[4].v, ROUTE_SCCP_COUNT);
+    CHECK(strcmp(visit_log[5].name, "dac_outputs_used") == 0);  CHECK_EQ(visit_log[5].v, 0u);
+    CHECK(strcmp(visit_log[6].name, "dac_outputs_total") == 0); CHECK_EQ(visit_log[6].v, ROUTE_DAC_OUTPUTS);
+    CHECK(strcmp(visit_log[7].name, "uref_used") == 0);         CHECK_EQ(visit_log[7].v, 0u);
+    CHECK(strcmp(visit_log[8].name, "uref_total") == 0);        CHECK_EQ(visit_log[8].v, ROUTE_UREF_COUNT);
+    CHECK(strcmp(visit_log[9].name, "ram_used") == 0);          CHECK_EQ(visit_log[9].v, 0u);
+    CHECK(strcmp(visit_log[10].name, "ram_budget") == 0);       CHECK_EQ(visit_log[10].v, ROUTE_RAM_BUDGET_BYTES);
+}
+
+static void test_routing_visit_active_route(void)
+{
+    routing_clear();
+    stubs_reset(true);
+    CHECK_EQ(routing_apply(&stream_like), ROUTE_OK);   /* DAC_PIN/5/3/dac 2/STREAM/samc 0 */
+
+    visit_count = 0;
+    routing_visit(visit_capture);
+    CHECK_EQ(visit_count, 17);   /* 7 route fields + the 10 resource fields */
+
+    CHECK(strcmp(visit_log[0].name, "route") == 0);
+    CHECK_EQ(visit_log[0].fmt, ROUTE_VIS_NUM);
+    CHECK_EQ(visit_log[0].v, 0u);
+
+    CHECK(strcmp(visit_log[1].name, "src") == 0);
+    CHECK_EQ(visit_log[1].fmt, ROUTE_VIS_STR);
+    CHECK(strcmp(visit_log[1].s, "DAC_PIN") == 0);
+
+    CHECK(strcmp(visit_log[2].name, "core") == 0);   CHECK_EQ(visit_log[2].v, 5u);
+    CHECK(strcmp(visit_log[3].name, "pinsel") == 0); CHECK_EQ(visit_log[3].v, 3u);
+    CHECK(strcmp(visit_log[4].name, "dac") == 0);    CHECK_EQ(visit_log[4].v, 2u);
+    CHECK(strcmp(visit_log[5].name, "samc") == 0);   CHECK_EQ(visit_log[5].v, 0u);
+
+    CHECK(strcmp(visit_log[6].name, "sink") == 0);
+    CHECK_EQ(visit_log[6].fmt, ROUTE_VIS_STR);
+    CHECK(strcmp(visit_log[6].s, "STREAM") == 0);
+
+    /* one ADC-consuming route, no table: 1 DMA channel, 1 shared SCCP, one
+     * DAC pin (dac 2), no UREF, one channel's worth of RAM */
+    CHECK(strcmp(visit_log[7].name, "dma_used") == 0);           CHECK_EQ(visit_log[7].v, 1u);
+    CHECK(strcmp(visit_log[8].name, "dma_total") == 0);          CHECK_EQ(visit_log[8].v, ROUTE_DMA_CHANNELS);
+    CHECK(strcmp(visit_log[9].name, "sccp_used") == 0);          CHECK_EQ(visit_log[9].v, 1u);
+    CHECK(strcmp(visit_log[10].name, "sccp_total") == 0);        CHECK_EQ(visit_log[10].v, ROUTE_SCCP_COUNT);
+    CHECK(strcmp(visit_log[11].name, "dac_outputs_used") == 0);  CHECK_EQ(visit_log[11].v, 1u);
+    CHECK(strcmp(visit_log[12].name, "dac_outputs_total") == 0); CHECK_EQ(visit_log[12].v, ROUTE_DAC_OUTPUTS);
+    CHECK(strcmp(visit_log[13].name, "uref_used") == 0);         CHECK_EQ(visit_log[13].v, 0u);
+    CHECK(strcmp(visit_log[14].name, "uref_total") == 0);        CHECK_EQ(visit_log[14].v, ROUTE_UREF_COUNT);
+    CHECK(strcmp(visit_log[15].name, "ram_used") == 0);          CHECK_EQ(visit_log[15].v, ROUTE_CHANNEL_BYTES);
+    CHECK(strcmp(visit_log[16].name, "ram_budget") == 0);        CHECK_EQ(visit_log[16].v, ROUTE_RAM_BUDGET_BYTES);
+
+    routing_clear();
+}
+
 static void test_apply_setup_failure(void)
 {
     /* the clock tree/DAC refused: restore once, SETUP, and the route is not
@@ -418,6 +511,9 @@ int main(void)
     test_internal_channels_pass_the_rules();
     test_apply_on_off_on();
     test_apply_setup_failure();
+
+    test_routing_visit_empty();
+    test_routing_visit_active_route();
 
     return check_summary();
 }

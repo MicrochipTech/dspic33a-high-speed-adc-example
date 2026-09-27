@@ -231,4 +231,45 @@ route_err_t routing_add(const route_t *r);
  * (acq_chain_restore()) and the route is not recorded. */
 route_err_t routing_apply(const route_t *r);
 
+/* route_vis_fmt_t/route_visit_t (P11.5, 27.09.2026): routing_visit() hands
+ * the active route(s) and the resource table to this callback, one field
+ * per call, exactly the same print-free pattern port/regs.h's reg_visit_t
+ * uses for a driver's register dump - routing.c stays free of any print
+ * call and tests/host/test_routing.c can check the calls a route makes
+ * without a console.
+ *
+ *   ROUTE_VIS_NUM   name is the key, v the value (decimal), s ignored.
+ *   ROUTE_VIS_STR   name is the key, s the value (a short, static string
+ *                   naming an enum - route_src_t/route_sink_t), v ignored.
+ *   ROUTE_VIS_LINE  name is the whole line, v and s ignored - only used
+ *                   for "no route active" when nothing has been recorded.
+ *
+ * The console command this drives, "route list" (cli.c), turns every call
+ * into one "key: value" line - the same shape every other command's reply
+ * already uses (put_kv()/put_line()) - so its console.h/git-committed
+ * examples, board_run.py's `route list` for the first board run
+ * (docs/IMPLEMENTATION-PLAN.md phase BR, block R6) and tests/smoke/
+ * expected.log all read the same lines this function defines the order
+ * of. */
+typedef enum {
+    ROUTE_VIS_NUM,
+    ROUTE_VIS_STR,
+    ROUTE_VIS_LINE
+} route_vis_fmt_t;
+
+typedef void (*route_visit_t)(const char *name, uint32_t v, const char *s, route_vis_fmt_t fmt);
+
+/* Hands out, in this fixed order: with no route recorded, one ROUTE_VIS_LINE
+ * ("route: none - ..."); otherwise, for every recorded route in the order
+ * routing_add()/routing_apply() added them, "route" (its index, NUM), then
+ * "src"/"core"/"pinsel"/"dac"/"samc"/"sink" (STR for src and sink, NUM for
+ * the rest) - route_t's own fields, routing.h's comment on route_t names
+ * what each means. After every route (including when there is none), the
+ * resource table: "dma_used"/"dma_total", "sccp_used"/"sccp_total",
+ * "dac_outputs_used"/"dac_outputs_total", "uref_used"/"uref_total",
+ * "ram_used"/"ram_budget" (NUM throughout) - the same counters route_check()
+ * charges a candidate route against, read back rather than recomputed
+ * twice. Never writes a register, never prints anything itself. */
+void routing_visit(route_visit_t visit);
+
 #endif /* ROUTING_H */
