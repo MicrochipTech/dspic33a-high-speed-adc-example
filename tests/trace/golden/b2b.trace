@@ -1,7 +1,7 @@
 # scenario b2b
 # layout check: 0 fields differ from the pack's masks
-W AD3CON       0x80000000 -> 0x80008000
-W PLL1DIV      0x00000000 -> 0x0000002D
+W AD3CON       0x80480000 -> 0x80488000
+W PLL1DIV      0x0100C812 -> 0x0100C82D
 # capture_set_pll(5, 5) -> 0
 # capture_set_pll(5, 5)
 W IEC2         0x00000000 -> 0x00002000
@@ -13,7 +13,7 @@ W DMA0CH       0x00000000 -> 0x0600144B
 W DMA0SEL      0x00000000 -> 0x0000003B
 W DMA0SRC      0x00000000 -> &AD3CH0RES(0x000B64)
 W DMA0DST      0x00000000 -> &dma_buffer+0x0
-W DMA0CNT      0x00000000 -> 0x00000800
+W DMA0CNT      0x00000001 -> 0x00000800
 C [dma] channel 0 armed, IRQ on; address window = the buffer:
 C [dma] DMALOW: &dma_buffer+0x0
 C [dma] DMAHIGH: &dma_buffer+0xFFF

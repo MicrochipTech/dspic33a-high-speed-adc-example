@@ -51,11 +51,20 @@ Dynamic check (--sim-dump, needs a simulator run first):
                  written fields back as 0 (PLLxDIV: the P0.3 finding -
                  PLLPRE survives, POSTDIV1/2 and PLLFBDIV do not);
     reset value  differs only in bits the simulator's reset value sets
-                 and the host assumed 0 (ADxCON.RPTCNT = 18, the ATDF's
-                 initval) - the host trace's all-0 reset assumption;
+                 and the host's reset value lacks. Until P0.9 the host
+                 assumed every SFR 0 at reset and this class explained
+                 ADxCON.RPTCNT = 18 (the ATDF's initval); since P0.9
+                 (27.09.2026) the host presets every SFR from that very
+                 initval (gen_fake_sfr.py's sfr_reset[]), so this class
+                 can only mean the ATDF and the simulator disagree - it
+                 is a finding now, like DISAGREE;
     not written  the host trace wrote it but the simulator build does not
                  (sim_dma.c replaces dma.c; see tests/trace/README.md);
-    DISAGREE     anything else - the only class that is a finding.
+    DISAGREE     anything else - a finding.
+  Independently of the class, every register's simulator reset value is
+  compared with the ATDF's initval (the "initval" column: "same" or the
+  ATDF's value) - that is the evidence the P0.9 preset rests on, and a
+  register whose two values differ is a finding ("INITVAL") and exit 1.
 
 Usage:
   python tools/check_fake_sfr.py                       both devices, static
@@ -345,6 +354,25 @@ def load_header(dfp, mcu):
     return sfrs
 
 
+def match_sfr(name, ad, by_name, by_addr):
+    """The ATDF register a header SFR (name, gld address) stands for:
+    by name first (the candidate names resolve_atdf() derives; among
+    several claimants the one at the same address), else by address
+    alone. Returns (reg, "name" | "addr") or (None, None). The one rule
+    both the static check below and gen_fake_sfr.py's reset-value table
+    (P0.9) use, so a register's initval comes from exactly the ATDF entry
+    whose address and fields the check verified."""
+    cands = by_name.get(name, [])
+    if len(cands) == 1:
+        return cands[0], "name"
+    if cands:
+        return next((c for c in cands if c.addr == ad), cands[0]), "name"
+    at = by_addr.get(ad, [])
+    if at:
+        return at[0], "addr"
+    return None, None
+
+
 # ---------------------------------------------------------------------------
 # Static check
 # ---------------------------------------------------------------------------
@@ -372,21 +400,14 @@ def static_check(mcu, dfp, atdf_dir, verbose, golden_names=()):
 
     for name in sorted(sfrs, key=lambda n: sfrs[n][0]):
         ad, hfields = sfrs[name]
-        reg = None
-        cands = by_name.get(name, [])
-        if len(cands) == 1:
-            reg = cands[0]
-        elif cands:
-            reg = next((c for c in cands if c.addr == ad), cands[0])
+        reg, how = match_sfr(name, ad, by_name, by_addr)
         if reg is None:
-            at = by_addr.get(ad, [])
-            if not at:
-                none.append((name, ad))
-                continue
-            reg = at[0]
+            none.append((name, ad))
+            continue
+        if how == "addr":
             name_only.append((name, ad, "".join(reg.parts) + reg.name))
         checked += 1
-        full = bool(cands)
+        full = how == "name"
         if reg.addr == ad:
             addr_ok += 1
         elif reg.grp is not None and reg.idx != reg.start:
@@ -521,7 +542,7 @@ def dynamic_check(mcu, atdf_dir, dump_path, trace_path, not_written):
     end = trace_end_state(trace_path)
     dump = load_dump(dump_path)
     counts = {"agree": 0, "status": 0, "not stored": 0, "reset value": 0, "not written": 0,
-              "DISAGREE": 0, "unread": 0}
+              "DISAGREE": 0, "unread": 0, "INITVAL": 0}
     rows = []
     for name, (final, _first) in end.items():
         host = parse_value(final)
@@ -581,11 +602,13 @@ def dynamic_check(mcu, atdf_dir, dump_path, trace_path, not_written):
                 why = "simulator zeroes the written fields %s (reset 0x%08X, after 0x%08X)" % (
                     ", ".join(unexplained) or "0x%08X" % rest, reset, after)
             elif (rest & ~reset) == 0 and (after & rest) == (reset & rest):
-                # bits set in the simulator's reset value that the host
-                # trace assumed 0 (tests/trace/README.md: reset values all
-                # 0) and that the firmware never wrote
+                # bits set in the simulator's reset value that the host's
+                # reset value lacks and that the firmware never wrote.
+                # Before P0.9 (host reset all 0) this was AD3CON.RPTCNT;
+                # since P0.9 the host starts from the ATDF's initval, so
+                # this can only be an ATDF/simulator disagreement
                 cls = "reset value"
-                why = "simulator reset value 0x%08X keeps %s; host assumed 0 at reset%s" % (
+                why = "simulator reset value 0x%08X keeps %s; the host's reset value (ATDF initval) lacks it%s" % (
                     reset, ", ".join(unexplained) or "0x%08X" % rest,
                     "; read-only " + ", ".join(n for n in names if "(R)" in n) if explained else "")
             else:
@@ -594,10 +617,13 @@ def dynamic_check(mcu, atdf_dir, dump_path, trace_path, not_written):
                 why += " - unexplained bits 0x%08X" % rest
         counts[cls] += 1
         # the simulator's reset value against the ATDF's initval - the
-        # evidence for presetting reset values from the ATDF (README,
-        # open points)
+        # evidence the P0.9 preset (gen_fake_sfr.py's sfr_reset[]) rests
+        # on; a difference is a finding of its own, whatever the class
         iv = "-" if reg is None or reg.initval is None else (
             "same" if reg.initval == reset else "0x%08X" % reg.initval)
+        if iv not in ("-", "same"):
+            counts["INITVAL"] += 1
+            why = ("ATDF initval %s != simulator reset 0x%08X; " % (iv, reset)) + why
         rows.append((name, cls, "0x%08X" % reset, "0x%08X" % after, iv, final, why))
     w = max(len(r[0]) for r in rows) if rows else 8
     print("%-*s  %-11s  %-10s  %-10s  %-10s  %-22s  %s"
@@ -605,7 +631,7 @@ def dynamic_check(mcu, atdf_dir, dump_path, trace_path, not_written):
     for r in rows:
         print("%-*s  %-11s  %-10s  %-10s  %-10s  %-22s  %s" % ((w,) + r))
     print("summary: " + ", ".join("%s %d" % kv for kv in counts.items()))
-    return 1 if counts["DISAGREE"] else 0
+    return 1 if (counts["DISAGREE"] or counts["reset value"] or counts["INITVAL"]) else 0
 
 
 def main():
@@ -623,7 +649,7 @@ def main():
                          "verified ('' to skip)")
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args()
-    atdf_dir = a.atdf_dir or os.path.normpath(os.path.join(a.dfp, "..", "..", "..", "atdf"))
+    atdf_dir = a.atdf_dir or gen_fake_sfr.atdf_dir_default(a.dfp)
     mcus = a.mcu or list(MCUS_DEFAULT)
     if a.sim_dump:
         return dynamic_check(mcus[0], atdf_dir, a.sim_dump, a.trace,

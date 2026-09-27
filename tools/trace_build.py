@@ -70,6 +70,7 @@ OBJDIR = OUTDIR / "obj"
 GEN = OUTDIR / "gen"
 DEFAULT_MCU = "33AK512MPS512"
 GEN_SCRIPT = ROOT / "tools" / "gen_fake_sfr.py"
+CHECK_SCRIPT = ROOT / "tools" / "check_fake_sfr.py"   # its ATDF resolver feeds the generator (P0.9)
 DFP_DEFAULT = (r"C:\Program Files\Microchip\MPLABX\v6.35\packs\Microchip"
                r"\dsPIC33AK-MP_DFP\1.4.260\xc16\support\dsPIC33A")
 
@@ -107,8 +108,11 @@ def ensure_header(mcu, out):
     script. Returns True on success."""
     hdr = Path(DFP_DEFAULT) / "h" / f"p{mcu}.h"
     gld = Path(DFP_DEFAULT) / "gld" / f"p{mcu}.gld"
+    # P0.9: the reset values come from the pack's ATDF, resolved by
+    # check_fake_sfr.py's parser - both are inputs of the generator now
+    atdf = Path(DFP_DEFAULT).parent.parent.parent / "atdf" / f"dsPIC{mcu}.atdf"
     marker = out / "xc.h"
-    deps_epoch = newest_mtime([hdr, gld, GEN_SCRIPT])
+    deps_epoch = newest_mtime([hdr, gld, atdf, GEN_SCRIPT, CHECK_SCRIPT])
     if marker.exists() and marker.stat().st_mtime >= deps_epoch:
         return True
     print(f"trace: generating the fake SFR header for {mcu} -> {out}")

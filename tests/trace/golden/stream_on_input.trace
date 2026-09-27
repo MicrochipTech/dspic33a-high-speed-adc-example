@@ -1,14 +1,13 @@
 # scenario stream_on_input
 # layout check: 0 fields differ from the pack's masks
-W PLL1DIV      0x00000000 -> 0x0100C829
+W PLL1DIV      0x0100C812 -> 0x0100C829
 W VCO1DIV      0x00000000 -> 0x00020000
 # preset: PLL1DIV/VCO1DIV as clock_init() leaves them at boot
-W AD2CON       0x80000000 -> 0x80008000
+W AD2CON       0x80480000 -> 0x80488000
 W AD2CH0CON1   0x00000000 -> 0x07010281
 W AD2CH0CNT    0x00000000 -> 0x00000800
 W T1CON        0x00000000 -> 0x00008010
-W PR1          0x00000000 -> 0xFFFFFFFF
-W CLK13CON     0x80000000 -> 0x80029500
+W CLK13CON     0x80000101 -> 0x80029500
 W CLK13DIV     0x00000000 -> 0x00010000
 C [adc] core ready, Integration mode, CNT 2048, back-to-back
 C [adc] pinsel: 7
@@ -21,7 +20,7 @@ W DMA0CH       0x00000000 -> 0x0600144B
 W DMA0SEL      0x00000000 -> 0x00000035
 W DMA0SRC      0x00000000 -> &AD2CH0RES(0x000A24)
 W DMA0DST      0x00000000 -> &dma_buffer+0x0
-W DMA0CNT      0x00000000 -> 0x00000800
+W DMA0CNT      0x00000001 -> 0x00000800
 C [dma] channel 0 armed, IRQ on; address window = the buffer:
 C [dma] DMALOW: &dma_buffer+0x0
 C [dma] DMAHIGH: &dma_buffer+0xFFF
@@ -30,14 +29,14 @@ C [dma] channel 0 armed, IRQ on; address window = the buffer:
 C [dma] DMALOW: &dma_buffer+0x0
 C [dma] DMAHIGH: &dma_buffer+0xFFF
 W CCP1CON1     0x00000000 -> 0x00008120
-W CCP1CON2     0x00000000 -> 0x00100000
-W CCP1PR       0x00000000 -> 0x0000009F
+W CCP1CON2     0x01000000 -> 0x00100000
+W CCP1PR       0xFFFFFFFF -> 0x0000009F
 W CCP1RB       0x00000000 -> 0x00000050
 # chain_stream_on_input(1000, core=2, pinsel=7, samc=1, test_signal=false) -> 1
 # chain_stream_on_input(1000, 2, 7, 1, false)
 W IEC2         0x00002000 -> 0x00000000
-W AD2CON       0x80008000 -> 0x80000000
-W AD3CON       0x80000000 -> 0x80008000
+W AD2CON       0x80488000 -> 0x80480000
+W AD3CON       0x80480000 -> 0x80488000
 W AD3CH0CON1   0x00000000 -> 0x05000281
 W AD3CH0CNT    0x00000000 -> 0x00000800
 W CCP1CON1     0x00008120 -> 0x00000120

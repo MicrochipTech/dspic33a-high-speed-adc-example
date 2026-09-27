@@ -2,18 +2,18 @@
 # layout check: 0 fields differ from the pack's masks
 # hardware model ON
 # clock_init()
-C [clk] CLK1CON at entry: 0x80000000
-W PLL1CON      0x00000000 -> 0x00008100
-W PLL1DIV      0x00000000 -> 0x0100C829
+C [clk] CLK1CON at entry: 0x80000101
+W PLL1CON      0x00020101 -> 0x00008100
+W PLL1DIV      0x0100C812 -> 0x0100C829
 W VCO1DIV      0x00000000 -> 0x00020000
 C [clk] PLL1 locked, 320 MHz
-W PLL2CON      0x00000000 -> 0x00008100
-W PLL2DIV      0x00000000 -> 0x01007D29
+W PLL2CON      0x00020101 -> 0x00008100
+W PLL2DIV      0x0100C812 -> 0x01007D29
 W VCO2DIV      0x00000000 -> 0x00010000
 C [clk] PLL2 locked, 200 MHz
 C <flush>
 W IEC0         0x00000000 -> 0x00000200
-W CLK1CON      0x80000000 -> 0x80129600
-W CLK6CON      0x80000000 -> 0x80029500
+W CLK1CON      0x80000101 -> 0x80129600
+W CLK6CON      0x80000101 -> 0x80029500
 # clock_init() returned
 # after clock_init()

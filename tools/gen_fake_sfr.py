@@ -41,6 +41,21 @@ Output (into --out DIR):
                every named bit field, the mask the HOST compiler gives it,
                compared with the pack's _X_F_MASK. Catches MinGW's
                ms_struct bit-field layout (build with -mno-ms-bitfields).
+               And (P0.9, 27.09.2026) sfr_reset[idx]: the device's reset
+               value of every SFR, from the pack's THIRD description of
+               the silicon, the ATDF (atdf/dsPIC<MCU>.atdf, attribute
+               `initval` - the one P0.8 found equal to the simulator's
+               reset value for all 23 registers it could read). The
+               harness's trace_begin() presets sfr_mem[] from it, so a
+               field no driver touches (AD3CON.RPTCNT = 18) shows its
+               real value in the trace instead of 0. An SFR the ATDF has
+               no register for (the CPU's, APG*, PMD*, ...: 445 on the
+               MPS512, 441 on the MPS506, listed by check_fake_sfr.py -v
+               as "none") keeps 0 and is marked so in the table. The
+               header-to-ATDF matching is check_fake_sfr.match_sfr(),
+               the same rule the P0.8 check verifies addresses and
+               fields with - so every initval comes from an ATDF entry
+               that check has confirmed is the same register.
   xc_cxx.h     (--cxx) C++ proxies for approach (b): Reg<idx> per register,
                a struct of Field<idx,pos,len> per bit-field typedef, positions
                from the pack's _POSITION/_LENGTH macros.
@@ -59,6 +74,13 @@ import sys
 
 DFP_DEFAULT = (r"C:\Program Files\Microchip\MPLABX\v6.35\packs\Microchip"
                r"\dsPIC33AK-MP_DFP\1.4.260\xc16\support\dsPIC33A")
+
+
+def atdf_dir_default(dfp):
+    """The pack's atdf directory for a given xc16/support/dsPIC33A one -
+    shared with check_fake_sfr.py and trace_build.py."""
+    return os.path.normpath(os.path.join(dfp, "..", "..", "..", "atdf"))
+
 
 RE_EXTERN = re.compile(
     r"^extern\s+(?:volatile\s+)?(\w+)\s+(\w+)\s+__attribute__\(\((.*)\)\);\s*$")
@@ -124,6 +146,8 @@ def main():
     ap.add_argument("--dfp", default=DFP_DEFAULT,
                     help="the pack's xc16/support/dsPIC33A directory")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--atdf-dir", default=None,
+                    help="the pack's atdf directory, for the reset values (default: derived from --dfp)")
     ap.add_argument("--cxx", action="store_true", help="also write xc_cxx.h")
     ap.add_argument("--style", choices=("symbols", "macros"), default="symbols",
                     help="symbols: keep `extern volatile T X;` and place X by sfr_syms.ld "
@@ -158,6 +182,26 @@ def main():
         i = idx_of_addr[ad]
         if i not in name_of_idx:
             name_of_idx[i] = n[:-4] if (kind == "bits" and n.endswith("bits")) else n
+
+    # ---- reset values (P0.9) --------------------------------------------
+    # The ATDF resolver is check_fake_sfr.py's (P0.8): the same instance/
+    # group/register chain and the same name-then-address matching that
+    # the static check verifies every address and field mask with.
+    # Imported here, lazily, because check_fake_sfr imports this module
+    # for parse_header()/parse_gld() at load time.
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import check_fake_sfr
+    atdf = os.path.join(a.atdf_dir or atdf_dir_default(a.dfp), "dsPIC%s.atdf" % a.mcu)
+    _r, by_name, by_addr, _notes = check_fake_sfr.resolve_atdf(atdf)
+    reset = [0] * len(addrs)
+    reset_src = [None] * len(addrs)      # "name" | "addr" | None (not in the ATDF)
+    for i, ad in enumerate(addrs):
+        reg, how = check_fake_sfr.match_sfr(name_of_idx[i], ad, by_name, by_addr)
+        if reg is not None:
+            reset_src[i] = how
+            reset[i] = (reg.initval or 0) & 0xFFFFFFFF
+    n_none = sum(1 for s in reset_src if s is None)
+    n_nonzero = sum(1 for v in reset if v)
 
     os.makedirs(a.out, exist_ok=True)
 
@@ -220,6 +264,18 @@ def main():
     t.append("};")
     t.append("const unsigned sfr_count = SFR_COUNT;")
     t.append("")
+    t.append("/* Reset value of every SFR (P0.9): the pack's ATDF `initval`, matched to")
+    t.append(" * the header's register by check_fake_sfr.match_sfr(). %d of %d from the"
+             % (len(addrs) - n_none, len(addrs)))
+    t.append(" * ATDF (%d of them non-zero); %d have no ATDF register and keep 0 - each"
+             % (n_nonzero, n_none))
+    t.append(" * marked \"not in the ATDF\" below. trace_begin() copies this into sfr_mem[]. */")
+    t.append("const uint32_t sfr_reset[SFR_COUNT] = {")
+    for i, ad in enumerate(addrs):
+        t.append("    0x%08Xu, /* %s%s */" % (reset[i], name_of_idx[i],
+                                              "" if reset_src[i] else ": not in the ATDF"))
+    t.append("};")
+    t.append("")
     t.append("/* Host bit-field layout against the pack's masks. Returns the number")
     t.append(" * of fields whose host mask differs; prints each. */")
     t.append("int sfr_layout_check(void)")
@@ -248,6 +304,7 @@ def main():
                 "#ifndef SFR_TABLE_H\n#define SFR_TABLE_H\n#include <stdint.h>\n"
                 "typedef struct { uint32_t addr; const char *name; } sfr_info_t;\n"
                 "extern const sfr_info_t sfr_info[];\nextern const unsigned sfr_count;\n"
+                "extern const uint32_t sfr_reset[];   /* ATDF initval per SFR (P0.9) */\n"
                 "int sfr_layout_check(void);\n#endif\n")
 
     # ---- xc_cxx.h (C++ proxies, approach b) -----------------------------
@@ -306,9 +363,12 @@ def main():
             f.write("\n".join(c) + "\n")
 
     print("gen_fake_sfr: %d SFR declarations, %d addresses, %d bit-field typedefs, "
-          "%d fields checked by sfr_layout_check(), %d without a gld address%s"
+          "%d fields checked by sfr_layout_check(), %d without a gld address%s; "
+          "reset values: %d from the ATDF initval (%d non-zero, %d matched by address only), "
+          "%d not in the ATDF (kept 0)"
           % (len(regs), len(addrs), len(typedefs), nchecked, len(missing),
-             (": " + ", ".join(missing[:8])) if missing else ""))
+             (": " + ", ".join(missing[:8])) if missing else "",
+             len(addrs) - n_none, n_nonzero, sum(1 for s in reset_src if s == "addr"), n_none))
     return 0
 
 

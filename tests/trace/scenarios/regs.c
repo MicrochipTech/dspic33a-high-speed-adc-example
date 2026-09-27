@@ -2,13 +2,16 @@
  * regs.c (scenario, P0.5) - regs_dump(), diag.c compiled unchanged.
  *
  * The plan's only entry point is regs_dump() itself, called straight from
- * the reset state (every SFR 0, as trace_begin() sets up) - this scenario
+ * the reset state (every SFR at its ATDF reset value, sfr_reset[], as
+ * trace_begin() sets up since P0.9 - all 0 before that) - this scenario
  * is about the DUMP'S OWN OUTPUT FORMAT (the order it visits each module,
  * the "name: value" / "name: 0x........" lines, all routed through the
  * stubbed console as `C` lines per decision 1), not about reproducing a
  * booted system's register values - `boot`, `b2b`, `variants`, `clk` and
  * `stream_on(_input)` already exercise those. Because nothing before it
- * has run, every register regs_dump() reads is still 0 and none of its
+ * has run, every register regs_dump() reads is still at its reset value
+ * (which makes this golden, as a side effect, a printed list of the ATDF
+ * reset values of every register the dump covers) and none of its
  * callees waits on anything, so no hardware-model rules are needed here.
  *
  * regs_dump() (diag.c) calls, in order: clock_regs_dump(), adc_regs_dump(),

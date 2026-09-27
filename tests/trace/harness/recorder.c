@@ -139,8 +139,18 @@ static void trace_flush(void)
 void trace_begin(const char *scenario)
 {
     setvbuf(stdout, NULL, _IOFBF, 1 << 16);
-    memset((void *)sfr_mem, 0, sizeof sfr_mem);   /* reset values: all 0, README */
-    memset(shadow, 0, sizeof shadow);
+    /* Reset values (P0.9, 27.09.2026): every SFR starts at the device's
+     * reset value, sfr_reset[] from the pack's ATDF `initval` (generated
+     * into sfr_table.c by tools/gen_fake_sfr.py; an SFR the ATDF has no
+     * register for is 0 there). Until P0.9 every SFR started at 0, which
+     * left a field no driver writes (AD3CON.RPTCNT = 18 at reset) wrong
+     * in the trace's absolute values - P0.8's one substantive finding.
+     * The shadow starts equal, so the preset itself is never a W line:
+     * the trace shows what the DRIVER changed, starting from reset. Words
+     * beyond SFR_COUNT (the array is page-rounded) stay 0. */
+    memset((void *)sfr_mem, 0, sizeof sfr_mem);
+    memcpy((void *)sfr_mem, sfr_reset, SFR_COUNT * sizeof sfr_mem[0]);
+    memcpy(shadow, (const void *)sfr_mem, sizeof shadow);
     n_regions = 0;
 
     const char *e = getenv("TRACE_TIMEOUT_MS");

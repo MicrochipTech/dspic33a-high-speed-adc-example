@@ -131,7 +131,8 @@ nothing under `tests/trace/` builds them.
 `tests/trace/harness/recorder.c` implements three calls (`recorder.h`):
 
 ```
-trace_begin(name)     zero every SFR (the reset value assumed throughout), print
+trace_begin(name)     preset every SFR to its device reset value (sfr_reset[], the
+                       ATDF's initval - P0.9; all 0 before that), print
                        "# scenario NAME", start the runaway watchdog (below)
 trace_point(label)     diff every SFR against the shadow copy, address order, then "# label"
 trace_end()             final diff, stop the watchdog, flush stdout
@@ -302,7 +303,7 @@ at a different device.
 | `sccp` | `sccp1_start()` for every (clock, mode, event) combination the firmware uses: (PERIPHERAL,TIMER,SPECIAL), (GEN13,TIMER,SPECIAL), (PERIPHERAL,OC,SPECIAL), (GEN13,OC,SPECIAL), (PERIPHERAL,TIMER,ROLLOVER) | sccp, clock, timebase | CLK13CON (`clock_trig_on()`) | `CAP_VAR_SCCP_TRG2` uses the same (clk,mode,ev) tuple as `CAP_VAR_SCCP_T_G13` - five distinct tuples cover all six SCCP variants. `clock_trig_on()` called exactly once (P0.5b) |
 | `clk` | `capture_set_clkdiv(500)`, `clock_adc_set_rate()` for 4000/8000/40000 ksps | capture, adc, dma, clock, sccp, timebase, led | PLL1CON, OSCCTRL(PLL1RDY), CLK6CON, AD3CON.ADRDY | Not `clock_init()` first - neither function needs a rate already configured, both derive their result purely from the argument. Every call made exactly once (P0.5b) |
 | `fail` | `_CLKFInterrupt()` called directly | clock, timebase | none (`capture_halt()`/`console_force_up()` resolve to stubs, see below) | `capture_halt()` and `console_force_up()`: neither is "linkable" here without pulling in unrelated modules just for one line each (capture.c + adc/dma/sccp/led for `dma0_halt()`; cli.c, categorically excluded, for the other) - both stubbed, per the task's "use the real ones where linkable, stubs otherwise". diag.c is NOT linked: its real `fail()` never returns (blinks forever), which would hang this scenario until the watchdog kills it - `_CLKFInterrupt()`'s `fail(10u)` resolves to the stub (`longjmp` back) instead |
-| `regs` | `regs_dump()`, called from the reset state (every SFR 0) | diag, clock, adc, dma, capture, dac, sccp, timebase, led | none (nothing here waits) | The only scenario that links diag.c - its real `fail_code`/`boot_stage`/`chain_mark`/`fail()` take over from stubs.c's copies (`-DHAVE_DIAG`); nothing here calls `fail()`, so diag.c's real, never-returning one is never exercised, only linked. `console_sync_baud()`/`console_regs_dump()` (cli.c-only, referenced by diag.c's `fail()`/`regs_dump()`) are stubbed. Registers are at their reset assumption throughout - this scenario is about the dump's OWN output format/order, not about reproducing a booted system's values (`boot`/`b2b`/`variants`/`clk`/`stream_on(_input)` do that) |
+| `regs` | `regs_dump()`, called from the reset state (every SFR at its ATDF reset value since P0.9, 0 before) | diag, clock, adc, dma, capture, dac, sccp, timebase, led | none (nothing here waits) | The only scenario that links diag.c - its real `fail_code`/`boot_stage`/`chain_mark`/`fail()` take over from stubs.c's copies (`-DHAVE_DIAG`); nothing here calls `fail()`, so diag.c's real, never-returning one is never exercised, only linked. `console_sync_baud()`/`console_regs_dump()` (cli.c-only, referenced by diag.c's `fail()`/`regs_dump()`) are stubbed. Registers are at their reset assumption throughout - this scenario is about the dump's OWN output format/order, not about reproducing a booted system's values (`boot`/`b2b`/`variants`/`clk`/`stream_on(_input)` do that) |
 | `nano` | `boot`'s exact sequence, `-DBOARD=2` (nano.cflags), the fake header generated from the MPS506's own device pack header (nano.mcu = `33AK512MPS506`) | same as `boot` | same shape as `boot`, but AD1CON.ADRDY (BOARD_EV17P63A's ADC_INSTANCE = 1) | Everything `boot` leaves out, left out here too. The MPS506 and MPS512 share every register `boot`'s entry points touch (CLAUDE.md: "every register and vector core 5 uses is identical on the MPS506, checked against the pack header 25.09.2026") - only which core/pins board.h names differs, which is exactly what the two golden traces, side by side, show |
 | `clock` (P0.4, kept) | `clock_init()`, called twice (idempotency), plus `TRACE_HWMODEL=0` as a documented (not golden) fault-injection check | clock, timebase | PLL1CON, PLL2CON, OSCCTRL, CLK1CON, CLK6CON | Kept as an isolation test of `clock_init()` alone - `boot`'s value is the end-to-end boot order, not `clock_init()`'s own idempotency or a negative check that the model is what makes it succeed (`TRACE_HWMODEL=0`, not itself a golden trace) |
 | `timebase` (P0.4, kept) | `timebase_init()` (twice), `timebase_check()`, `timebase_ticks()` (twice) | timebase | none | Kept for the same reason: `boot` calls `timebase_init()` once as part of a longer sequence; this is the acceptance trace P0.4's own "Done" criterion names ("a trace of `timebase_init()` matches the four writes in `timebase.c`") |
@@ -414,10 +415,14 @@ it never appears as a driver write.
   `SET/CLR/INV` behaviour are not modelled; later reads see what was written.
 - **Access width.** A bit-field store may be a byte store on the host and a 32-bit or
   `bset` on the dsPIC; the trace shows the register value, not the width.
-- The **device reset values** (all 0, as in the spike; the gld/header have none - not
-  revisited in P0.4). P0.8 measured the consequence: `AD3CON` reads 0x80488000 on the
-  device after `adc_init()` (`RPTCNT` = 18 at reset), the trace says 0x80008000; the
-  ATDF's `initval` would supply the right value (see "P0.8 cross-check").
+- The **device reset values** of the SFRs the ATDF has no register for (445 / 441, the
+  CPU's, `APG*`, `PMD*`, ... - see "P0.8 cross-check"): 0 assumed, none of them written
+  by any golden. Every other SFR starts at the ATDF's `initval` since P0.9 (see "P0.9:
+  reset values from the ATDF" below); until then every SFR started at 0, which P0.8
+  caught in `AD3CON` (0x80008000 in the trace, 0x80488000 on the device: `RPTCNT` = 18
+  at reset). And a write of a value EQUAL to the reset value is invisible - approach
+  (a) diffs states, it does not count stores (`PR1 = 0xFFFFFFFF` in `timebase_init()`,
+  listed under P0.9).
 - Code under `#ifdef __MPLAB_DEBUGGER_SIMULATOR` (the host takes the hardware path,
   `WAIT_LIMIT` = 2 000 000 not the simulator's 20 000) and the other `BOARD`'s code
   unless built with `-DBOARD=2` against the MPS506 header.
@@ -569,7 +574,7 @@ simulator ("not written"); the smoke script's `help`/`version`/`status` write no
 | agree | 7 | `VCO1DIV`, `VCO2DIV`, `IEC0`, `T1CON`, `PR1`, `AD3CH0CON1`, `AD3CH0CNT` | the simulator holds exactly the host's end value |
 | status | 4 | `PLL1CON`, `PLL2CON`, `CLK1CON`, `CLK6CON` | the writable, non-switch bits agree (`ON`, `NOSC`, `FSCMEN`, `BOSC`...); the rest is `COSC`/`CLKRDY` (read-only: the simulator shows its own, the host model sets `CLKRDY`) and `OSWEN`/`DIVSWEN`/`FOUTSWEN`/`PLLSWEN` (the switch requests: hardware and the host model clear them when the switch is done, the simulator has no clock model and leaves them set) |
 | not stored | 2 | `PLL1DIV`, `PLL2DIV` | the P0.3 finding made precise: the write reaches the register (it leaves its reset value 0x0100C812) but `POSTDIV1/2` and `PLLFBDIV` read back 0; only `PLLPRE` = 1 survives (0x01000000). A simulator model artefact, not a header one: the layout of the reset value itself (`PLLFBDIV` = 200, `POSTDIV` 2/2 in the header's field positions) agrees with the header |
-| reset value | 1 | `AD3CON` | differs in `ADRDY` (read-only, set by the host model) and in `RPTCNT` = 18 (0x480000): the simulator's reset value, equal to the ATDF's `initval`, which `adc_init()`'s bit-field write of `ON` preserves and the host's all-0 reset assumption lacks. See below |
+| reset value | 1 | `AD3CON` | differs in `ADRDY` (read-only, set by the host model) and in `RPTCNT` = 18 (0x480000): the simulator's reset value, equal to the ATDF's `initval`, which `adc_init()`'s bit-field write of `ON` preserves and the host's all-0 reset assumption lacks. See below. **Since P0.9 `AD3CON` is class "status" (`ADRDY` only) and this class is a finding** |
 | not written | 9 | `IEC2`, `DMACON`, `DMALOW`, `DMAHIGH`, `DMA0CH`, `DMA0SEL`, `DMA0SRC`, `DMA0DST`, `DMA0CNT` | `sim_dma.c` |
 | DISAGREE | 0 | - | the only class that would have been a finding |
 
@@ -587,7 +592,10 @@ the ATDF's `initval`** (`PLL1CON` 0x20101, `PLL1DIV` 0x0100C812, `CLKnCON` 0x101
 `AD3CON` 0x480000, `DMA0CNT` 1, `PR1` 0xFFFFFFFF, the rest 0). Presetting `sfr_mem[]`
 from `initval` (the "reset values" open point below) would therefore be a change of
 known effect: `AD3CON`'s golden lines would become `0x80480000 -> 0x80488000`, and
-`CLK1CON`'s hand preset would become unnecessary.
+`CLK1CON`'s hand preset would become unnecessary. **P0.9 did exactly that** (next
+section) - with one correction to the last sentence: there never was a hand preset of
+`CLK1CON`; the 0x80000000 the `boot`/`clock` goldens showed "at entry" is the model
+rule's `CLKRDY` set-mask applied on `clock_init()`'s first read, and that rule stays.
 
 **Limitation - what the simulator cannot confirm**: the DMA registers and `IEC2` (never
 written in that build), the divider fields of `PLLxDIV` (zeroed by the model), and any
@@ -595,6 +603,112 @@ read-only or self-clearing bit (`COSC`, `CLKRDY`, `ADRDY`, `*SWEN`) - 11 of the 
 registers in full, 4 more in some of their bits. For those the static check against
 the ATDF (part 1) is the only confirmation, and it is complete for every register a
 golden trace writes.
+
+## P0.9: reset values from the ATDF (27.09.2026, user decision after P0.8)
+
+Until P0.9 `trace_begin()` zeroed every SFR. The device does not: P0.8's dump showed
+`AD3CON` = 0x480000 (`RPTCNT` = 18), `PLL1DIV` = 0x0100C812, `PR1` = 0xFFFFFFFF at reset,
+and every one of the 23 simulator reset values it read equal to the ATDF's `initval`.
+So the generator now writes a reset table and the harness starts from it. No firmware
+source changed.
+
+**The table.** `tools/gen_fake_sfr.py` emits `sfr_reset[SFR_COUNT]` into `sfr_table.c`
+(declared in `sfr_table.h`), one `initval` per SFR, matched to the ATDF register through
+`check_fake_sfr.match_sfr()` - the same name-then-address rule the P0.8 static check
+verifies every address and field mask with, factored out of `static_check()` for this
+purpose - so every reset value comes from an ATDF entry that check has confirmed is the
+same register. An SFR the ATDF has no register for keeps 0 and is marked `not in the
+ATDF` in the table. `trace_begin()` copies the table into `sfr_mem[]` and the shadow
+alike, so the preset itself is never a `W` line. `trace_build.py` counts the ATDF and
+`check_fake_sfr.py` among the generator's inputs for its freshness check.
+
+| device | SFR addresses | from `initval` | non-zero | by address only | not in the ATDF (kept 0) |
+|---|---|---|---|---|---|
+| MPS512 | 2039 | 1594 | 253 | 34 | 445 |
+| MPS506 | 1989 | 1548 | 246 | 34 | 441 |
+
+The 445 / 441 are the classes P0.8 listed (`check_fake_sfr.py -v`, "none"): `APG*`
+(116), ADC5's channels 8..15 and the `ACC7`s (62), the PAC's `PRn*` (32), `ITC*` (71),
+`SDATACMD*`/`SMATHCMD*` (32), `C1FIFOUA*`/`BMXCAN*`, `HPCCNT*`, `PMD1..4`,
+`CLK1DIV..CLK3DIV`, `FEX*`, and the CPU's (`PC`, `SPLIM`, `CORCON`, `MODCON`, ...).
+None of them is written by any golden (the static check's "48 registers ... 48 verified
+by name" line: a `none` register cannot be verified).
+
+**Hand presets: none removed.** The only value presets in any scenario are
+`PLL1DIV = 0x0100C829` / `VCO1DIV = 0x20000` in `stream_on`, `stream_on_input`, `dac`
+and `variants` - the state `clock_init()` leaves at boot, not the reset value
+(0x0100C812 / 0) - and they stay. The `CLK1CON` "preset" P0.8 expected to become
+unnecessary never was one (see the correction in the P0.8 section above); the `CLKRDY`
+rule stays, and its effect now sits on top of the initval (`CLK1CON at entry:
+0x80000101`).
+
+**Every golden changed - 89 lines, every one of a foreseen kind**, checked line by
+line with a classifier (pairs old and new by register, verifies that a changed old value
+equals the register's previous value in the new trace - its reset value or its last
+write, plus the model-rule bits the old line already carried - and that a changed new
+value differs only in bits the old value also gained):
+
+| scenario | (a) old/new gain reset bits | (b) write of the reset value vanished | (c) console text | (d) newly visible |
+|---|---|---|---|---|
+| `b2b` | 3 | | | |
+| `boot` | 8 | 1 | 1 | 1 |
+| `clk` | 4 | | | |
+| `clock` | 6 | | 1 | |
+| `dac` | 4 | | | |
+| `fail` | | | 3 | |
+| `nano` | 8 | 1 | 1 | 1 |
+| `regs` | | | 15 | |
+| `sccp` | 3 | | | |
+| `stream_on` | 11 | 1 | | |
+| `stream_on_input` | 8 | 1 | | |
+| `timebase` | | 1 | | |
+| `variants` | 6 | | | |
+| total | 61 | 5 | 21 | 2 |
+
+- **(a)**, 61 lines: whole-word writes keep their new value and their old value becomes
+  the reset value (`PLL1CON 0x00020101 -> 0x00008100`, `CLK1CON 0x80000101 ->
+  0x80129600`, `CCP1PR 0xFFFFFFFF -> 0x00000063`, `CCP1CON2 0x01000000 -> 0x00100000`,
+  `DMA0CNT 0x00000001 -> 0x00000800`); bit-field writes gain the untouched reset bits
+  on both sides (`AD3CON 0x80480000 -> 0x80488000` - exactly as P0.8 predicted;
+  `PLL1DIV 0x0100C812 -> 0x0100C82D` in `b2b`, `PLLPRE`/`PLLFBDIV` kept while
+  `capture_set_pll()` writes `POSTDIV1/2`; `DACCTRL1 0x3F7F0000 -> 0x3F7F8000`).
+- **(b)**, 5 lines, one register - `W PR1 0x00000000 -> 0xFFFFFFFF` is gone from
+  `boot`, `nano`, `stream_on`, `stream_on_input` and `timebase`: `timebase_init()`
+  writes `PR1 = 0xFFFFFFFF`, which is `PR1`'s reset value, and a write that changes
+  nothing is invisible to a state diff. **A loss of visibility, accepted and listed
+  here rather than countered**: the store is one line of `timebase.c`, guarded by the
+  three `T1CON`/`TMR1`/`IEC0` lines around it that remain, and a scenario contrivance
+  (presetting `PR1` to something else first) would trade a real reset state for a
+  fake one to see a write whose value the trace could not distinguish from "not
+  written" anyway.
+- **(c)**, 21 lines: `[clk] CLK1CON at entry: 0x80000101` (`boot`, `clock`; `nano`:
+  0x80028180, see the open point on the MPS506's ATDF); `fail`'s `[CLKF]` dump
+  (`OSCCTRL` 0x300, `PLL2CON` 0x20101, `CLK1CON` 0x101); `regs`' 15 lines, now a printed
+  list of reset values (`PLL1DIV` 0x0100C812, `IPC9` 0x44444444, `DACCTRL1` 0x3F7F0000,
+  `INTCON1` 0x8000, ..., and `DAC clock Hz (read back): 8000000` - `clock_dac_hz()`
+  computed from `PLL1DIV`'s reset dividers instead of from zeros).
+- **(d)**, 2 lines, the mirror image of (b) and not on the task's list of expected
+  kinds, so stated separately: `W TRISC 0x0000FFFF -> 0x0000FEFF` (`boot`) and
+  `W TRISD 0x000001FF -> 0x000001FE` (`nano`) - `led_init()` clearing the LED pin's
+  TRIS bit. All TRIS bits are 1 at reset (inputs); under the all-0 assumption the
+  clear changed nothing and was invisible. The trace now shows the one write of
+  `led_init()` it never showed before. `TRISC`/`TRISD` join the golden-written set
+  (47 -> 48 registers, all verified by the static check on both devices).
+
+**Simulator agreement, re-run** (`tools\build.bat smoke` ELF unchanged, one
+`sim_trap.py --smoke --dump-sfr @tests\trace\golden\boot.trace`, 68 s, `[smoke]
+PASS`, no trap, then `check_fake_sfr.py --sim-dump build\sfr_dump.txt`): 24 registers
+(`TRISC` now among them), **`initval` = simulator reset value for all 24**, `AD3CON` is
+class "status" (`ADRDY` only - the P0.8 "reset value" finding is gone), `TRISC` "agree"
+(0xFFFF at reset in the simulator too, 0xFEFF after), summary `agree 7, status 5, not
+stored 2, reset value 0, not written 9, DISAGREE 0, INITVAL 0`. The dynamic check now
+fails on a "reset value" row or on any `initval` that differs from the simulator's
+reset (new "INITVAL" count), since either would mean the preset is wrong.
+
+**Mutation check** (`CCP1RA = 0u` -> `1u` in `sccp.c`): exactly `sccp`, `stream_on`,
+`stream_on_input`, `variants` FAIL, the other nine PASS; reverted, firmware diff empty.
+Three consecutive full `trace.bat` runs byte-identical in their output (13/13 PASS, the
+static check 0 errors on both devices). `hosttest.bat` 1/1 PASS.
 
 ## How to run it
 
@@ -710,13 +824,24 @@ a clean run" above for what `tools\trace.bat`'s own per-invocation cost now is.
   second run does not reproduce, that would be new information (none of the runs behind
   this task's commit ever saw one, including 20 consecutive `dac` runs and 5 full check
   runs), and worth its own investigation rather than assumed to be this race again.
-- **Reset values from the ATDF** (`initval`), for scenarios whose code branches on a
-  register's state at entry (`clock_init()` reads `CLK1CONbits.COSC`) - still assumed
-  all-0, as in the spike. P0.8 (above) found the ATDF's `initval` equal to the
-  simulator's reset value for all 23 registers it read, and one golden value that
-  differs from silicon because of the assumption (`AD3CON.RPTCNT`); `check_fake_sfr.py`'s
-  `resolve_atdf()` already parses `initval`, so a preset would be a small change to
-  `gen_fake_sfr.py`/`recorder.c` with the effect on the goldens stated above.
+- ~~**Reset values from the ATDF** (`initval`)~~ - **done (P0.9, 27.09.2026)**, see
+  "P0.9: reset values from the ATDF": every SFR the ATDF describes starts at its
+  `initval`, the 24 registers the simulator dump reads all agree with it, `AD3CON`'s
+  golden lines are `0x80480000 -> 0x80488000` now.
+- **The MPS506 ATDF's `CLK1CON`/`CLK2CON`/`CLK3CON` initval** (found by P0.9): 0x28180
+  (`NOSC` = 1, `ON` = 1, `BOSC` = 2, `COSC` = 0 and a bit in no named field, bit 7)
+  where the MPS512's says 0x101 (`COSC` = 1, `NOSC` = 1 - FRC, what the simulator
+  confirmed for the MPS512). The two headers lay the register out identically; 0x28180
+  with `COSC` = 0 and a reserved bit set looks like an error in the MPS506's ATDF, not
+  a silicon difference. Consequence today: the `nano` golden's "CLK1CON at entry" line
+  and the old value of its `CLK1CON` W line carry 0x28180; `clock_init()` writes the
+  whole word and its only branch on the entry state (`COSC` in the PLL range, 4..8)
+  goes the same way for 0 and 1, so nothing else depends on it. An MPS506 simulator
+  run (the smoke dump against the nano build; not done in P0.9 - `sim_trap.py --smoke`
+  runs the MPS512 smoke ELF) would settle which value the simulator holds. The other
+  seven initvals that differ between the two ATDFs are real package differences
+  (`TRISA/B/C` and `ANSELA/B` 0xFFF instead of 0xFFFF, `TRISD` 0x1FF: fewer pins) and
+  `IPC39` (0 instead of 0x444400).
 - ~~**Simulator cross-check (P0.8)**~~ - **done (27.09.2026)**, see "P0.8 cross-check":
   0 errors static on both devices, 0 real disagreements dynamic; `trace.bat` now runs
   the static check every time.

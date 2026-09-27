@@ -1,12 +1,12 @@
 # scenario sccp
 # layout check: 0 fields differ from the pack's masks
 W CCP1CON1     0x00000000 -> 0x00008020
-W CCP1CON2     0x00000000 -> 0x00100000
-W CCP1PR       0x00000000 -> 0x00000063
+W CCP1CON2     0x01000000 -> 0x00100000
+W CCP1PR       0xFFFFFFFF -> 0x00000063
 W CCP1RB       0x00000000 -> 0x00000032
 # sccp1_start(PERIPHERAL, TIMER, SPECIAL) -> 1
 # T_PER: peripheral clock, timer mode, special event trigger
-W CLK13CON     0x80000000 -> 0x80029500
+W CLK13CON     0x80000101 -> 0x80029500
 W CLK13DIV     0x00000000 -> 0x00010000
 # clock_trig_on() (CLKGEN13)
 W CCP1CON1     0x00008020 -> 0x00008120

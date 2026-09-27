@@ -5,9 +5,9 @@ D capture_halt()
 C <force_up>
 C 
 [CLKF] clock fail: the FSCM switched the CPU to the backup FRC
-C [CLKF] OSCCTRL: 0x00000000
-C [CLKF] PLL2CON: 0x00000000
-C [CLKF] CLK1CON: 0x00000000
+C [CLKF] OSCCTRL: 0x00000300
+C [CLKF] PLL2CON: 0x00020101
+C [CLKF] CLK1CON: 0x00000101
 C [CLKF] reached boot stage: 0
 F fail(10)
 # fail() longjmp'd back, as expected

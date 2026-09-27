@@ -1,30 +1,30 @@
 # scenario nano
 # layout check: 0 fields differ from the pack's masks
 W LATD         0x00000000 -> 0x00000001
+W TRISD        0x000001FF -> 0x000001FE
 # led_init()
 C <console_early_init, stub: cli.c not linked>
 # console_early_init()
-C [clk] CLK1CON at entry: 0x80000000
-W PLL1CON      0x00000000 -> 0x00008100
-W PLL1DIV      0x00000000 -> 0x0100C829
+C [clk] CLK1CON at entry: 0x80028180
+W PLL1CON      0x00020101 -> 0x00008100
+W PLL1DIV      0x0100C812 -> 0x0100C829
 W VCO1DIV      0x00000000 -> 0x00020000
 C [clk] PLL1 locked, 320 MHz
-W PLL2CON      0x00000000 -> 0x00008100
-W PLL2DIV      0x00000000 -> 0x01007D29
+W PLL2CON      0x00020101 -> 0x00008100
+W PLL2DIV      0x0100C812 -> 0x01007D29
 W VCO2DIV      0x00000000 -> 0x00010000
 C [clk] PLL2 locked, 200 MHz
 C <flush>
 W IEC0         0x00000000 -> 0x00000200
-W CLK1CON      0x80000000 -> 0x80129600
-W CLK6CON      0x80000000 -> 0x80029500
+W CLK1CON      0x80028180 -> 0x80129600
+W CLK6CON      0x80000101 -> 0x80029500
 # clock_init() returned
 # clock_init()
 C <cli_init, stub: cli.c not linked>
 # cli_init()
 W T1CON        0x00000000 -> 0x00008010
-W PR1          0x00000000 -> 0xFFFFFFFF
 # timebase_init()
-W AD1CON       0x80000000 -> 0x80008000
+W AD1CON       0x80480000 -> 0x80488000
 W AD1CH0CON1   0x00000000 -> 0x00000281
 W AD1CH0CNT    0x00000000 -> 0x00000800
 C [adc] core ready, Integration mode, CNT 2048, back-to-back
@@ -39,7 +39,7 @@ W DMA0CH       0x00000000 -> 0x0600144B
 W DMA0SEL      0x00000000 -> 0x0000002F
 W DMA0SRC      0x00000000 -> &AD1CH0RES(0x000824)
 W DMA0DST      0x00000000 -> &dma_buffer+0x0
-W DMA0CNT      0x00000000 -> 0x00000800
+W DMA0CNT      0x00000001 -> 0x00000800
 C [dma] channel 0 armed, IRQ on; address window = the buffer:
 C [dma] DMALOW: &dma_buffer+0x0
 C [dma] DMAHIGH: &dma_buffer+0xFFF
