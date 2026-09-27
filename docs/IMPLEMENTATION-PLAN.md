@@ -74,7 +74,9 @@ not counted.
 | P9.2 Simulator hooks out of pingpong.c | done | `d868bbb`, merge `12d2383` | Sonnet | pingpong.c had none to move; [SIM] run once already: `[simtest] PASS`, 100 halves, 0 mismatches |
 | P9.3-P9.5 meter.c, acquisition.c, [SIM] | open | | | P9.5 = [SIM], runs without asking since 27.09.2026 |
 | P10.1-P10.4 Split `clock.c` | moved to N+2 | | | user decision 27.09.2026; when it is done: needs `trace_point()` between clock steps (approach (a)) |
-| P11.1-P11.5 Routing core | open | | | P11.4 is the central proof |
+| P11.1 Routing types | done | `4bddb2c` | Sonnet | routing.h/.c, host-only, no apply yet; pin-reachability table from a new generator, tools/gen_route_pins.py, against tools/pins128.py |
+| P11.2 Host tests of the conflict rules | done | this commit | Sonnet | tests/host/test_routing.c, 45/45 checks, one test per rule; a deliberately broken SCCP check caught it (44/45, reverted) |
+| P11.3-P11.5 | open | | | P11.4 is the central proof |
 | P12.1-P12.4 Close-out | open | | | P12.4 = [SIM], runs without asking since 27.09.2026 |
 
 ### Decisions taken during the work
