@@ -28,7 +28,7 @@ PACK_NAME = "dsPIC33AK-MP_DFP"
 # P1.1); the same files build.bat compiles. SRC_DIRS go on the include path.
 SRC_DIRS = ["drivers", "app", "cli", "tests", "lib", "diag", "sim", "port"]
 SOURCES = ["app/main.c", "app/config_bits.c", "app/port_impl.c", "drivers/clock.c", "drivers/adc.c", "drivers/dma.c",
-           "app/capture.c", "lib/crc16.c", "drivers/sccp.c", "drivers/led.c", "diag/diag.c",
+           "app/capture.c", "lib/crc16.c", "lib/fmt.c", "lib/stats.c", "lib/tri_eval.c", "drivers/sccp.c", "drivers/led.c", "diag/diag.c",
            "drivers/timebase.c", "drivers/dac.c", "tests/dactest.c", "tests/chaintest.c",
            "cli/cli.c", "cli/cmd_parser.c"]
 
