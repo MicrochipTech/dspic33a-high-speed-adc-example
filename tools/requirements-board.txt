@@ -1,0 +1,4 @@
+pyserial>=3.5
+numpy>=1.26
+matplotlib>=3.8
+# matplotlib is only for eval_chain.py --png; board_run.py/eval_board.py never import it.
