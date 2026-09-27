@@ -1,8 +1,6 @@
 src/app/pingpong.c
 src/app/capture.c
 src/app/acquisition.c
-src/tests/chaintest.c
-src/meter/meter.c
 src/drivers/adc.c
 src/drivers/dma.c
 src/drivers/clock.c
@@ -11,6 +9,5 @@ src/drivers/dac.c
 src/drivers/timebase.c
 src/drivers/led.c
 src/lib/stats.c
-src/lib/tri_eval.c
 src/app/port_impl.c
 src/boards/ev74h48a.c

@@ -8,6 +8,7 @@
         <itemPath>../src/app/capture.h</itemPath>
         <itemPath>../src/app/capture_priv.h</itemPath>
         <itemPath>../src/app/acquisition.h</itemPath>
+        <itemPath>../src/app/acquisition_priv.h</itemPath>
         <itemPath>../src/app/pingpong.h</itemPath>
         <itemPath>../src/app/board.h</itemPath>
       </logicalFolder>
@@ -60,7 +61,6 @@
       </logicalFolder>
       <logicalFolder name="tests" displayName="tests" projectFiles="true">
         <itemPath>../src/tests/chaintest.h</itemPath>
-        <itemPath>../src/tests/chaintest_priv.h</itemPath>
         <itemPath>../src/tests/dactest.h</itemPath>
         <itemPath>../src/tests/bench.h</itemPath>
       </logicalFolder>

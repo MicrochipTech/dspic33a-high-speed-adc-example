@@ -15,18 +15,37 @@
  *     s_on/s_ticks - moving them here too avoided a second, reverse-
  *     direction private header just for two one-line readers.
  *
- * Private state these functions need stayed where it was, reached through
- * two narrow, non-public headers - the same pattern P9.3 set for meter.c:
+ * P9.4b (27.09.2026, docs/IMPLEMENTATION-PLAN.md) added what chain_stream_
+ * on_input() (below) needs to bring the chain up in the first place:
+ * chaintest.c's setup()/restore()/triangle_for()/rate_hz()/ksps_of()/
+ * wait_ticks(), renamed acq_chain_setup()/acq_chain_restore()/acq_
+ * triangle_for()/acq_rate_hz()/acq_ksps_of()/acq_wait_ticks(), bodies
+ * unchanged apart from the rename. P9.4 had left them in chaintest.c and
+ * reached them from here through a chaintest_priv.h - the application
+ * layer (this file) depending on the test layer's (chaintest.c's)
+ * internals, backwards, and through non-static globals with generic names
+ * in the whole firmware's namespace besides. Now chaintest.c's own stages
+ * ("chain all", "chain run") call these six functions here instead - test
+ * depending on app, the normal direction (CLAUDE.md's module table).
+ * s_core/s_pinsel/s_samc/s_test_dac (the input acq_chain_setup() applies)
+ * moved with them and went back to being a plain static below: their only
+ * reader was setup() itself, their only writer already chain_stream_
+ * on_input(), so both ends of that state are in this one file now.
  *
- *   capture_priv.h      clkdiv_cur (capture.c): capture_set_clkdiv() is
- *                        the only writer, capture_clkdiv_wanted() (still
- *                        in capture.c) the only other reader.
- *   chaintest_priv.h    setup()/restore()/triangle_for()/rate_hz()/
- *                        ksps_of()/wait_ticks() and g_trig_hz/s_core/
- *                        s_pinsel/s_samc/s_test_dac (chaintest.c): all of
- *                        them are also used by "chain all"'s stages and
- *                        "chain run", which stay in chaintest.c, so they
- *                        could not move - see that header's comment.
+ * Private state these functions need stayed where it was, or moved here
+ * with them, reached through two narrow, non-public headers - the same
+ * pattern P9.3 set for meter.c:
+ *
+ *   capture_priv.h        clkdiv_cur (capture.c): capture_set_clkdiv() is
+ *                          the only writer, capture_clkdiv_wanted() (still
+ *                          in capture.c) the only other reader.
+ *   acquisition_priv.h    acq_trig_hz, acq_setup_rc_pll/_trig/_dac/_ok and
+ *                          acq_step_on (this file): also written or read
+ *                          directly by "chain all"'s stages and "chain
+ *                          run" (chaintest.c), which is why they are not
+ *                          plain statics here - see that header's comment
+ *                          for each one. Replaces chaintest.c's P9.4
+ *                          chaintest_priv.h, deleted by P9.4b.
  */
 
 /* <xc.h> is not used directly here (no register access - everything goes
@@ -42,12 +61,14 @@
 #include <stdbool.h>
 
 #include "acquisition.h"
+#include "acquisition_priv.h"
 #include "capture.h"
 #include "capture_priv.h"
-#include "chaintest_priv.h"
 #include "adc.h"
 #include "clock.h"
 #include "sccp.h"
+#include "dac.h"
+#include "timebase.h"
 #include "console.h"
 #include "diag.h"
 
@@ -269,6 +290,96 @@ void capture_variant_regs(void)
 }
 
 /* ------------------------------------------------------------------ *
+ * The chain setup itself (chaintest.c until P9.4b, 27.09.2026) - shared by
+ * chain_stream_on_input() (below) and chaintest.c's "chain all"/"chain run"
+ * ------------------------------------------------------------------ */
+uint32_t     acq_trig_hz = TRIG_HZ_NOMINAL;   /* measured in chaintest.c's S1 */
+uint32_t     acq_setup_rc_pll;
+bool         acq_setup_trig, acq_setup_dac, acq_setup_ok;
+volatile bool acq_step_on = false;            /* chaintest.c's CPU-stepped ADC flag */
+
+uint32_t acq_rate_hz(uint32_t n)       { return acq_trig_hz / n; }
+uint32_t acq_ksps_of(uint32_t n)       { return (acq_trig_hz / 1000u + n / 2u) / n; }
+
+void acq_wait_ticks(uint32_t t)
+{
+    const uint32_t t0 = timebase_ticks();
+    while ((timebase_ticks() - t0) < t) { }
+}
+
+/* setup() with the input the chain samples: core, PINSEL, SAMC, and
+ * whether this module drives DAC2 as the test signal (the chain test and
+ * "stream on <ksps>" do; "stream on <ksps> <core> <pinsel>" leaves the
+ * DAC to whoever set it up - the GUI's DAC controls). Both ends of this
+ * state are in this file since P9.4b, so it is a plain static again. */
+static uint8_t s_core = CHAIN_CORE, s_pinsel = CHAIN_PINSEL, s_samc = CHAIN_SAMC;
+static bool    s_test_dac = true;
+
+bool acq_chain_setup(void)
+{
+    timebase_init();
+    (void)capture_settle();
+    sccp1_stop();
+    (void)capture_set_half_len(SAMPLES_PER_HALF_MAX);
+    acq_setup_rc_pll = capture_set_pll(5u, 1u);       /* 320 MHz, VCO 1600 */
+    acq_setup_trig   = clock_trig_on();               /* CLKGEN13 160 MHz  */
+    clock_dac_select(CLOCK_DAC_PLL1_VCO);
+    acq_setup_dac    = s_test_dac ? dac2_level_start(0x800u) : true;   /* CLKGEN7 400 MHz */
+    (void)capture_select_core(s_core, s_pinsel, s_samc);
+    adc_set_mode_single(SCCP1_ADC_TRIGGER);
+    adc_set_irqsel(0u);
+    (void)capture_settle();                           /* DMA down          */
+    if (acq_trig_hz == 0u) { acq_trig_hz = TRIG_HZ_NOMINAL; }
+    acq_setup_ok = (acq_setup_rc_pll == CLKDIV_OK) && acq_setup_trig && acq_setup_dac;
+    return acq_setup_ok;
+}
+
+void acq_chain_restore(void)
+{
+    (void)capture_settle();
+    sccp1_stop();
+    sccp1_count(false);
+    adc_ch0_irq(false, false);
+    acq_step_on = false;
+    dac2_off();
+    clock_dac_select(CLOCK_DAC_PLL1_VCO);
+    (void)capture_select_core(ADC_INSTANCE, ADC_PINSEL, ADC_SAMC);  /* burst mode again */
+    (void)capture_set_pll(board_cfg.adc_pll_postdiv1, board_cfg.adc_pll_postdiv2);
+    counters_clear();
+}
+
+/* Pick SLPDAT so that one slope lasts about SLOPE_TARGET samples at this
+ * rate, with the widest range the limits allow: DACLOW >= 0xCD + SLPDAT
+ * and DACDAT <= 0xF32 - SLPDAT (note 1 of Example 18-3, p1422), 32 codes
+ * of margin inside that. The slope in samples is
+ *   span * 32 * rate / (SLPDAT * F_DAC),   span = 0xE65 - 2 * SLPDAT - 64,
+ * which falls as SLPDAT rises, so the first SLPDAT at or below the target
+ * is taken. 128 samples: short enough for about 16 turning points per
+ * window, so that a fault almost anywhere in it is enclosed by four of
+ * them (see tri_eval), and steep enough (about 27 LSB per sample) for a
+ * turning point to a few hundredths of a sample; long enough that the
+ * corners the DAC's output filter rounds (600 ns, Table 40-43) stay in
+ * the eighth of each slope the fit leaves out, even at 40 MSPS. At
+ * 100 kSPS the slowest triangle the DAC makes lasts only about 29
+ * samples per slope; that is what it gets there. */
+#define SLOPE_TARGET  128u
+bool acq_triangle_for(uint32_t rate, uint16_t *slp_out)
+{
+    const uint32_t f = clock_dac_hz();
+    if (f == 0u) { return false; }
+    const uint32_t full = DAC_CODE_MAX - DAC_CODE_MIN - 64u;       /* 3621 */
+    uint32_t s = 1u;
+    for (; (2u * s + 64u) < full; s++) {
+        const uint64_t span = full - 2u * s;
+        const uint64_t samples = span * 32u * rate / ((uint64_t)s * f);
+        if (samples <= SLOPE_TARGET) { break; }
+    }
+    *slp_out = (uint16_t)s;
+    return dac2_triangle_start((uint16_t)(DAC_CODE_MIN + s + 32u),
+                               (uint16_t)(DAC_CODE_MAX - s - 32u), (uint16_t)s);
+}
+
+/* ------------------------------------------------------------------ *
  * The chain as a standing stream ("stream on") - chaintest.c until P9.4
  * (27.09.2026) - the example itself
  *
@@ -291,7 +402,7 @@ static uint64_t g_grab_xf0;
 
 static uint32_t period_for(uint32_t ksps)
 {
-    uint32_t n = (g_trig_hz / 1000u + ksps / 2u) / ksps;
+    uint32_t n = (acq_trig_hz / 1000u + ksps / 2u) / ksps;
     return (n < 4u) ? 4u : n;                 /* 40 MSPS is the ceiling      */
 }
 
@@ -306,16 +417,16 @@ bool chain_stream_on_input(uint32_t ksps, uint8_t core, uint8_t pinsel, uint8_t 
     chain_stream_off();
     if (CHAIN_ON_SIMULATOR || (ksps == 0u) || (core < 1u) || (core > 5u) ||
         (pinsel > 15u) || (samc > 31u)) { return false; }
-    g_trig_hz = TRIG_HZ_NOMINAL;
+    acq_trig_hz = TRIG_HZ_NOMINAL;
     s_core = core; s_pinsel = pinsel; s_samc = samc; s_test_dac = test_signal;
-    const bool ok = setup();
+    const bool ok = acq_chain_setup();
     s_core = CHAIN_CORE; s_pinsel = CHAIN_PINSEL; s_samc = CHAIN_SAMC; s_test_dac = true;
-    if (!ok) { restore(); return false; }
+    if (!ok) { acq_chain_restore(); return false; }
     const uint32_t n = period_for(ksps);
     uint16_t slp = 0u;                        /* 0 in the frame: no test triangle */
-    if (test_signal) { (void)triangle_for(rate_hz(n), &slp); }
-    wait_ticks(TICKS_PER_MS);
-    if (!capture_chain_start(n, SCCP_MODE_TIMER, 0u, false)) { restore(); return false; }
+    if (test_signal) { (void)acq_triangle_for(acq_rate_hz(n), &slp); }
+    acq_wait_ticks(TICKS_PER_MS);
+    if (!capture_chain_start(n, SCCP_MODE_TIMER, 0u, false)) { acq_chain_restore(); return false; }
     s_on     = true;
     s_ticks  = n;
     s_slpdat = slp;
@@ -327,7 +438,7 @@ void chain_stream_off(void)
 {
     if (!s_on) { return; }
     (void)capture_chain_stop();
-    restore();
+    acq_chain_restore();
     s_on = false;
 }
 
@@ -348,7 +459,7 @@ bool chain_stream_grab_begin(chain_grab_t *g)
     g->win     = capture_completed_half();
     g->win_len = capture_half_len();
     g->from    = (uint32_t)(g->win - capture_buffer());
-    g->ksps    = ksps_of(s_ticks);
+    g->ksps    = acq_ksps_of(s_ticks);
     const uint32_t ov = dma_overrun, la = late_service, mi = proc_missed, hv = blocks_done;
     const uint64_t xf = capture_transfers();
     g->overrun   = ov - g_grab_ov0;
@@ -375,12 +486,12 @@ bool chain_stream_grab_end(void)
 bool chain_stream_state(uint32_t *ksps, uint64_t *transfers, uint32_t *free_cyc)
 {
     if (!s_on) { return false; }
-    *ksps = ksps_of(s_ticks);
+    *ksps = acq_ksps_of(s_ticks);
     *transfers = capture_transfers();
     /* The budget as in S6: a half lasts half_len * N / f_trig, 16 CPU
      * cycles per Timer1 tick, minus the mean processing time. */
     const uint32_t hl = capture_half_len();
-    const uint32_t half_ticks = (uint32_t)(((uint64_t)hl * s_ticks * TIMEBASE_HZ) / g_trig_hz);
+    const uint32_t half_ticks = (uint32_t)(((uint64_t)hl * s_ticks * TIMEBASE_HZ) / acq_trig_hz);
     const uint32_t pmean = (proc_count != 0u) ? (proc_ticks_sum / proc_count) : 0u;
     *free_cyc = (half_ticks > pmean) ? ((half_ticks - pmean) * CPU_PER_TICK / hl) : 0u;
     return capture_chain_active();            /* false once the brake fired  */

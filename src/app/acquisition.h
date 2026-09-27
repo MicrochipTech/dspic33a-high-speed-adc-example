@@ -12,6 +12,22 @@
  *     GUI drives ("stream on"/"stream grab"), which is acquisition, not a
  *     test, even though it grew inside the chain test file first.
  *
+ * P9.4b (27.09.2026) added the chain setup itself: acq_chain_setup()/
+ * acq_chain_restore()/acq_triangle_for()/acq_rate_hz()/acq_ksps_of()/
+ * acq_wait_ticks(), moved out of chaintest.c (there as setup()/restore()/
+ * triangle_for()/rate_hz()/ksps_of()/wait_ticks()). P9.4 had left them in
+ * chaintest.c and reached them from chain_stream_on_input() (above) through
+ * a chaintest_priv.h - the application layer depending on the test layer's
+ * internals, the wrong direction, through generic global names besides.
+ * chaintest.c's own stages ("chain all", "chain run") call these same six
+ * functions now declared here, the normal test -> app direction; the raw
+ * state a few of them still share with chaintest.c (the measured trigger
+ * frequency, the setup diagnostics, the CPU-stepped ADC flag) is declared
+ * in acquisition_priv.h instead - too raw for this public header. P11.3's
+ * routing_apply() (ROUTE_STREAM, next week) is expected to call the same
+ * six functions, which is why they belong here rather than staying
+ * chaintest.c's private business.
+ *
  * Declared here rather than in capture.h/chaintest.h so that this file,
  * not capture.c/chaintest.c, documents them; both of those headers pull
  * this one in with a single #include, so every existing caller keeps
@@ -94,6 +110,43 @@ const char *capture_variant_name(capture_variant_t v);
 uint32_t    capture_variant_ksps(void);        /* what it should deliver */
 uint32_t    capture_trigger_period_ns(void);   /* 0 = untriggered        */
 void        capture_variant_regs(void);        /* the defining registers */
+
+/* ---- The chain setup itself (chaintest.c until P9.4b) ----
+ *
+ * What chain_stream_on_input() (below) and chaintest.c's "chain all"/
+ * "chain run" both need to bring SCCP1 -> ADC core 5 -> DMA0 up (or back
+ * down) and to convert between an SCCP1 period in ticks and a rate in Hz
+ * or kSPS. Moved out of chaintest.c on 27.09.2026 (P9.4b,
+ * docs/IMPLEMENTATION-PLAN.md), bodies unchanged apart from the rename -
+ * chaintest.c called them as setup()/restore()/triangle_for()/rate_hz()/
+ * ksps_of()/wait_ticks(), generic names in the whole firmware's namespace,
+ * reached from here through a chaintest_priv.h that made the application
+ * layer depend on the test layer's internals. The input a caller wants
+ * (core, PINSEL, SAMC, whether to drive the DAC2 triangle) and acq_chain_
+ * setup()'s own report stay as static/extern state in acquisition.c/
+ * acquisition_priv.h - see the "call it, do not read its internals" note
+ * there. */
+
+/* The clock tree and core switch: DMA down, SCCP1 stopped, half length at
+ * the maximum, PLL1 at 320 MHz, CLKGEN13 on, the DAC's own clock selected,
+ * DAC2 started at mid-scale if the caller wants the test signal, the input
+ * selected, ADC in Single mode on the SCCP1 trigger. acq_chain_restore()
+ * puts the boot configuration (board_cfg's PLL dividers, core burst mode)
+ * back and clears the counters. */
+bool acq_chain_setup(void);
+void acq_chain_restore(void);
+
+/* Pick SLPDAT so that one triangle slope lasts about SLOPE_TARGET samples
+ * at `rate` Hz, the widest range the DAC's limits allow. */
+bool acq_triangle_for(uint32_t rate, uint16_t *slp_out);
+
+/* acq_trig_hz arithmetic (acquisition_priv.h): the sample rate an SCCP1
+ * period of n ticks gives, and the period n ticks corresponds to. */
+uint32_t acq_rate_hz(uint32_t n);
+uint32_t acq_ksps_of(uint32_t n);
+
+/* Busy-wait t Timer1 ticks. */
+void acq_wait_ticks(uint32_t t);
 
 /* ---- The standing stream ("stream on"/"stream grab", chaintest.c until
  * P9.4) ----
