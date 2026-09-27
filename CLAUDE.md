@@ -164,6 +164,22 @@ tools\build.bat        hardware  -> build\adc_dma_40msps.elf/.hex   (must be -Wa
 tools\build.bat sim    simulator -> build\adc_dma_40msps_sim.elf    (same)
 ```
 
+Two more checks run on every change, not just a clean build:
+
+```
+tools\trace.bat        14 scenarios (tests/trace/scenarios/*.c), register-write/console/
+                        stub golden diff against tests/trace/golden, incremental (~7-28 s)
+tools\hosttest.bat     tests/host/test_*.c on a host MinGW gcc, plus the Python cross-checks
+                        it chains after them (test_frame_xcheck.py, test_tri_eval_xcheck.py, ...)
+```
+
+`trace.bat` must reproduce every golden trace unless the task says one changes and why;
+`hosttest.bat` must stay all green (`docs/IMPLEMENTATION-PLAN.md` rules 3 and 4). A change
+that touches `_DMA0Interrupt` or `_U2RXInterrupt` is checked against `tools\fncmp.py`'s
+instruction and indirect-call counts - 42/0 for the DMA interrupt (unchanged since P4.6),
+55/0 for the UART receive interrupt (unchanged since P5.1) - and a task that moves code
+through either ISR states the new numbers instead of leaving the old ones uncommented.
+
 `src/app/version.h` (git-ignored) carries the git revision for the banner.
 `tools/version.bat` writes it before every build: called by `build.bat`, by the
 `.build-pre` hook in `adc_dma_40msps.X/Makefile` (which the IDE runs, so a colleague's
@@ -576,7 +592,10 @@ converter never sped up.
 
 ## Open questions (as of 25.09.2026, after run 19)
 
-Questions 1, 3 and 4 below are answered by run 19 (see "settled" above and the
+None of this section is affected by the N+1 restructuring (27.09.2026): N+1 has not run
+on silicon, and the first board run to say whether it holds goes through phase BR
+(`docs/IMPLEMENTATION-PLAN.md`, section BR) - see "Remote board access" above for one way
+that run can be driven. Questions 1, 3 and 4 below are answered by run 19 (see "settled" above and the
 HARDWARE-LOG); question 2 is answered up to 8 MSPS. Still open: the DMA overruns from
 10 MSPS (bus contention with the CPU?), the ADC's triggered ceiling of ~18-20 MSPS, the
 processing budget, and two instrument faults (output-compare mode of SCCP1, the clock
