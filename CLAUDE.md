@@ -192,9 +192,10 @@ tools\build.bat sim 256 && python tools\sim_trap.py --elf build\adc_dma_40msps_s
 python tools\sim_trap.py --fault 65536            expect "[simtest] FAIL", one mismatch at index 0
 ```
 
-**Do not start the simulator acceptance run on your own.** It takes about seven minutes
-of wall clock, and the user asked on 24.09.2026 that it only ever run when he says so.
-Build the simulator variant to prove it still compiles; run it when asked.
+**The simulator acceptance run may run without asking since 27.09.2026** (user's
+standing permission; until then it ran only on request, 24.09.2026). It takes about
+seven minutes of wall clock: run it where the plan calls for it (P9.5, P12.4) or where a
+change needs it, one simulator run at a time, never several in parallel.
 
 **The smoke run [SMOKE] is the short one** (`docs/IMPLEMENTATION-PLAN.md` P0.7, rule 6):
 the simulator build with `-DSIM_SMOKE=1` boots exactly like the normal simulator build,

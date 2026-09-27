@@ -23,8 +23,9 @@ commit message stays the detailed record; this table is the one place to see whe
 work stands. `done` = committed and re-checked by the lead session (builds, `trace.bat`,
 `hosttest.bat`, goldens, no trailer).
 
-As of 27.09.2026. Done: 31 of 64 tasks (63 planned plus P0.9); P0.5b and P4.6a were
-added along the way and are not counted.
+As of 27.09.2026. Done: 32 of 52 tasks in the N+1 scope (63 planned plus P0.9 = 64; P8 and P10, 12
+tasks, moved to N+2 on 27.09.2026); P0.5b and P4.6a were added along the way and are
+not counted.
 
 | Task | Status | Commit | Model | Note |
 |---|---|---|---|---|
@@ -60,15 +61,16 @@ added along the way and are not counted.
 | P4.6 dma | done | `49497b0` | Fable | ISR unchanged, 42 instructions |
 | P4.7 clock | done | `6acd0fa` | Fable | `clock_fail_hook()` returns the boot stage; strong version in `port_impl.c` |
 | P4.8 Register visitor | done | `6e8d4b6` | Fable | `port/regs.h`: one visitor `(name, v, fmt)` with `REG_HEX/REG_DEC/REG_TITLE` reproduces the old dumps character for character (`regs` golden unchanged); the drivers keep no print call, only the three callers and the six dump functions change |
-| P5.1 `src/drivers/uart.c` | done | this commit | Sonnet | `_U2RXInterrupt` moved out of cli.c, 65 -> 55 instructions (the byte-counting/CR-LF/parser-feed body became `uart_rx_hook()`, a direct `rcall`, still 0 indirect calls); uart.c reports through neither `port/log.h` nor `port/wait.h` - it is what `console_puts()` writes through |
-| P5.2 `cli.c` on top of `uart.c` | done | this commit | Sonnet | P5.1 already finished the switch (the plan allows that order); this task is the check: `grep -E "U2\|RPCON\|RPOR\|RPINR\|IPC" src/cli/` empty, **[SMOKE]** log identical to `tests/smoke/expected.log` (110 lines) |
-| P6.1-P6.5 Split `cli.c` | open | | | |
+| P5.1 `src/drivers/uart.c` | done | `1b82b9f` | Sonnet | `_U2RXInterrupt` moved out of cli.c, 65 -> 55 instructions (the byte-counting/CR-LF/parser-feed body became `uart_rx_hook()`, a direct `rcall`, still 0 indirect calls); uart.c reports through neither `port/log.h` nor `port/wait.h` - it is what `console_puts()` writes through |
+| P5.2 `cli.c` on top of `uart.c` | done | `8c77890` | Sonnet | P5.1 already finished the switch (the plan allows that order); this task is the check: `grep -E "U2\|RPCON\|RPOR\|RPINR\|IPC" src/cli/` empty, **[SMOKE]** log identical to `tests/smoke/expected.log` (110 lines) |
+| P6.1-P6.4 Split `cli.c` | open | | | |
+| P6.5 `tools/protocol.py` | done | `88b00d6`, merge `aa1498c` | Sonnet | built in a worktree alongside P5; GUI `--selftest` 15/15 before and after; `eval_chain.py` had no copy to redirect; `gui_ui_test.py` not run (Playwright not installed in any Python on this machine) |
 | P7.1 Board config as data | open | | | |
-| P8.1-P8.8 Drivers with instances | open | | | P8.1 is the only timing risk |
-| P9.1-P9.5 Split `capture.c` | open | | | P9.5 = [SIM], ask the user first |
-| P10.1-P10.4 Split `clock.c` | open | | | needs `trace_point()` between clock steps (approach (a)) |
+| P8.1-P8.8 Drivers with instances | moved to N+2 | | | user decision 27.09.2026, see Decisions; `ROUTE_STREAM` works with today's single instances |
+| P9.1-P9.5 Split `capture.c` | open | | | P9.5 = [SIM], runs without asking since 27.09.2026 |
+| P10.1-P10.4 Split `clock.c` | moved to N+2 | | | user decision 27.09.2026; when it is done: needs `trace_point()` between clock steps (approach (a)) |
 | P11.1-P11.5 Routing core | open | | | P11.4 is the central proof |
-| P12.1-P12.4 Close-out | open | | | P12.4 = [SIM], ask the user first |
+| P12.1-P12.4 Close-out | open | | | P12.4 = [SIM], runs without asking since 27.09.2026 |
 
 ### Decisions taken during the work
 
@@ -78,6 +80,9 @@ added along the way and are not counted.
 | 27.09. | Hybrid: a page-guarded read hook serves only the polled registers; the model thread and all retries removed | `tests/trace/README.md` |
 | 27.09. | [SMOKE] runs without asking, one run at a time; the ~7-minute [SIM] run stays on request | `CLAUDE.md` |
 | 27.09. | Trace starts from the ATDF reset values (P0.9) | `tests/trace/README.md` |
+| 27.09. | Remaining cards run mixed: Fable for the hard ones (P11.3/P11.4), Sonnet for the mechanical ones - the Fable weekly budget stood at 34 % | this table, column Model |
+| 27.09. | N+1 shortened: P8 (drivers with instances) and P10 (split `clock.c`) move to N+2; independent cards run in parallel worktrees. N+1 = P0-P7, P9, P11, P12. Reason: about 20 h of agent time down to 6-8 h; P8.1 (the DMA ISR, the only timing risk) leaves the board run after N+1 | this section, "After N+1" |
+| 27.09. | The simulator, including the ~7-minute [SIM] acceptance run, runs without asking; one run at a time | `CLAUDE.md` |
 | 27.09. | Goertzel: damped textbook form `q0 = s + 2D·cos·q1 − D²·q2` (the literal reading of the design is undamped) | `docs/DESIGN-MULTICHANNEL.md` 4.3 |
 | 27.09. | Detector counts once per pulse: re-arm only below threshold × hysteresis | `docs/DESIGN-MULTICHANNEL.md` 4.3 |
 
@@ -487,7 +492,7 @@ Pattern for every driver:
 | **P9.2** | simulator hooks out of `pingpong.c`: `sim_dma.c` checks the half itself | build sim; **[SMOKE]**; the full check follows in P9.5 |
 | **P9.3** | `src/meter/meter.c`: `measure_rate`, `process_bench`, `oneshot_n`, `selftest`, `clkoff_probe` | traces `b2b`, `variants` unchanged |
 | **P9.4** | `src/app/acquisition.c`: variants, rate (`set_pll`, `set_rate`, `set_clkdiv`), and `chain_stream_*` moved out of `chaintest.c` | traces `stream_on`, `stream_on_input` unchanged |
-| **P9.5** | **[SIM] acceptance run**, ask the user first: `sim_trap.py` default and at 256 samples per half, plus the `--fault` case | `[simtest] PASS`, `PASS`, `FAIL` with one mismatch at index 0 |
+| **P9.5** | **[SIM] acceptance run** (without asking since 27.09.2026): `sim_trap.py` default and at 256 samples per half, plus the `--fault` case | `[simtest] PASS`, `PASS`, `FAIL` with one mismatch at index 0 |
 
 ---
 
@@ -575,8 +580,8 @@ To be written into the firmware as far as possible, so that one run answers ever
 2. `test all`: the back-to-back rows as before.
 3. `regs`: identical to a dump from the old firmware on the same board (bitwise
    diffable).
-4. `capture_process_bench` and the stream counters: same order as before (the ISR
-   changes in P8.1 are the only timing risk).
+4. `capture_process_bench` and the stream counters: same order as before (`_DMA0Interrupt`
+   is unchanged in N+1, 42 instructions; P8.1, which changes it, moved to N+2).
 5. `route list` shows `ROUTE_STREAM` with DMA0, SCCP1, DAC2, core 5.
 
 ---
@@ -589,11 +594,13 @@ P0 ──► P1 ──► P2 ──► P3
               └────► P4 ──► P5 ──► P6 ──► P7 ──► P8 ──► P9 ──► P10 ──► P11 ──► P12
 ```
 
+- **Since 27.09.2026, P8 and P10 are not part of N+1** (moved to N+2): P9 follows P7,
+  P11 follows P9. Cards that touch no shared file run in parallel git worktrees.
 - P3 (the libraries) depends only on P0 and P1 and can run alongside P4 to P7.
 - **[SMOKE]** runs after P1, P5.2, P6.1, P7, P9.2 and P11.5, and after any other task
   that touches `main.c`, the console or the memory layout.
-- **[SIM]** (full acceptance, ~7 min, on request only) runs at P9.5 and P12.4.
-- The only real risk of changing timing lies in P8.1 (DMA ISR). It is checked with
+- **[SIM]** (full acceptance, ~7 min; without asking since 27.09.2026, one run at a time) runs at P9.5 and P12.4.
+- The only real risk of changing timing lies in P8.1 (DMA ISR), now in N+2. It is checked with
   `fncmp` (no indirect call, instruction count recorded), but only a board run can
   confirm it.
 
@@ -601,7 +608,7 @@ P0 ──► P1 ──► P2 ──► P3
 
 | Version | Content |
 |---|---|
-| N+2 | further single-channel routes (other core, pin, DAC1..8 as the source); the `test` suite on `ROUTE_B2B` |
+| N+2 | P8 (drivers with instances) and P10 (split `clock.c`), moved here from N+1 on 27.09.2026; further single-channel routes (other core, pin, DAC1..8 as the source); the `test` suite on `ROUTE_B2B` |
 | N+3 | signal generator `siggen/`: table → DMA → DAC, playback clock from an SCCP, using `lib/wavegen` |
 | N+4 | processing chain `dsp_run/` with `lib/goertzel_f` (default), `goertzel_i`, `detect`; measure the cycles per block |
 | N+5 | multi-channel `acq/`, up to 5 cores, common trigger |
