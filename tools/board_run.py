@@ -13,6 +13,21 @@ board-run-task.md section 4, docs carried into the BR cards of the
 implementation plan (BR.1). It never programs the board: the colleague is
 told which hex file to program by hand, then presses ENTER.
 
+BR.4: the hex files are found by this script itself, one `A-*.hex` and one
+`B-*.hex` in board_run/ next to this repository's root (find_hex()), each
+checked against board_run/SHA256SUMS.txt (prepare_hex()) before the run - a
+stale, locally modified, or unlisted file stops the run and asks the
+colleague to confirm before continuing, a missing SHA256SUMS.txt or A file
+stops it outright. Until BR.8 adds a B-*.hex there is no B to find at all:
+run B is skipped, not attempted against a file that does not exist, and the
+console and summary.txt both say so plainly (`perform_full_run()`). Before
+run A, the hardware set-up checklist is parsed out of board_run/README.md's
+own marked section (load_checklist()) and printed for the colleague to
+confirm with ENTER - one source of that text, not two. `git rev-parse HEAD`
+and `git status --porcelain` (get_git_info()) go into session.json; a dirty
+tree or git itself being unavailable is a warning, never a reason to stop
+(board-run-task.md section 4.1a).
+
 Sequence per run (board-run-task.md section 4.2 / the BR card's table):
 
     R0  sync, version, help, status   - build/revision/board; command set
@@ -99,10 +114,12 @@ import json
 import os
 import platform
 import re
+import subprocess
 import sys
 import tempfile
 import time
 import zipfile
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np  # noqa: E402
@@ -113,6 +130,15 @@ from eval_chain import grid_ok as chain_grid_ok  # noqa: E402
 from eval_chain import synth as chain_synth  # noqa: E402
 
 RUNNER_VERSION = "1"
+
+# ---------------------------------------------------------------------------
+# BR.4 paths: this script lives in <repo>/tools/, board_run/ is its sibling.
+# ---------------------------------------------------------------------------
+REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+BOARD_RUN_DIR = os.path.join(REPO_ROOT, "board_run")
+README_PATH = os.path.join(BOARD_RUN_DIR, "README.md")
+CHECKLIST_BEGIN = "BOARD_RUN_CHECKLIST:BEGIN"
+CHECKLIST_END = "BOARD_RUN_CHECKLIST:END"
 
 # ---------------------------------------------------------------------------
 # Per-block timeouts - see the module docstring for the budget arithmetic.
@@ -133,8 +159,16 @@ MIN_GRABS_PER_RATE = 50            # R4
 GRABS_R5 = 10                      # R5
 R4_RATES_KSPS = (1000, 4000, 8000)  # 1, 4, 8 MSPS - "stream on" takes ksps
 R5_DEFAULT_KSPS = 1000
-R5_DEFAULT_CORE = 1
-R5_DEFAULT_PINSEL = 0
+# core 3 / pinsel 5 = AD3AN5 = RA0 = DIM pin P77 = mikroBUS A socket, pin
+# "AN" - tools/boards.py's own "default_core"/"default_pinsel" for
+# EV74H48A, the same input README.md calls out as the default analog input
+# (BR.4, board_run/README.md). NOT core 1 / pinsel 0: on THIS board that is
+# AD1AN0 = RA2, which the board wires to a capacitive touch pad instead of a
+# header pin (README.md: "that is why the example uses ADC3 here and not
+# ADC1") - a real regression found while writing board_run/README.md's R5
+# section, fixed here rather than documented as-is.
+R5_DEFAULT_CORE = 3
+R5_DEFAULT_PINSEL = 5
 R5_DEFAULT_SAMC = 0
 
 BLOCK_ORDER = ["R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7"]
@@ -549,13 +583,107 @@ def check_hex_sha256(path):
 
 def prepare_hex(path, which, ui):
     if not path:
-        return dict(which=which, path=None, sha256=None, sha256_status="not_checked")
+        return dict(which=which, path=None, sha256=None, sha256_status="not_present")
+    if not os.path.exists(path):
+        raise RuntimeError(f"{which} firmware file not found: {path}")
     digest, status = check_hex_sha256(path)
-    if status == "mismatch":
-        ui.say(f"WARNING: SHA-256 mismatch for {path} against its SHA256SUMS.txt")
+    if status == "no_sums_file":
+        raise RuntimeError(f"no SHA256SUMS.txt next to {path} - board_run/ looks incomplete; "
+                            "run 'git pull' again before continuing")
+    if status in ("mismatch", "no_entry"):
+        reason = ("does not match its entry in SHA256SUMS.txt" if status == "mismatch"
+                  else "has no entry in SHA256SUMS.txt")
+        ui.say(f"WARNING: {path} {reason} - it may be stale or locally modified.")
         if ui.prompt("continue anyway? [y/N] ").strip().lower() != "y":
-            raise RuntimeError(f"aborted: SHA-256 mismatch for {path}")
+            raise RuntimeError(f"aborted: {path} {reason}")
     return dict(which=which, path=os.path.abspath(path), sha256=digest, sha256_status=status)
+
+
+def find_hex(board_run_dir, prefix):
+    """One `<prefix>-*.hex` file in board_run_dir (board-run-task.md's naming:
+    A-EV74H48A-<rev>.hex, B-EV74H48A-<rev>.hex). None if there is no such
+    file yet (B, until BR.8 lands); a RuntimeError, not a silent pick, if
+    there is more than one - an ambiguous board_run/ should stop the run,
+    not guess which revision the colleague meant to send back."""
+    if not os.path.isdir(board_run_dir):
+        return None
+    matches = sorted(f for f in os.listdir(board_run_dir)
+                      if f.startswith(prefix + "-") and f.endswith(".hex"))
+    if not matches:
+        return None
+    if len(matches) > 1:
+        raise RuntimeError(f"more than one {prefix}-*.hex in {board_run_dir}: "
+                            f"{', '.join(matches)} - remove the stale one(s)")
+    return os.path.join(board_run_dir, matches[0])
+
+
+def load_checklist(readme_path):
+    """The hardware set-up checklist, parsed from board_run/README.md's
+    marked section (between CHECKLIST_BEGIN/CHECKLIST_END) rather than
+    duplicated here - see that file's own comment. A markdown "- " bullet
+    starts a new item; an unmarked, non-blank line continues the previous
+    one (README.md wraps long bullets across lines). Returns [] if the file
+    or the markers are missing - the caller warns rather than aborting the
+    run over a documentation glitch."""
+    if not os.path.exists(readme_path):
+        return []
+    with open(readme_path, encoding="utf-8") as f:
+        text = f.read()
+    if CHECKLIST_BEGIN not in text or CHECKLIST_END not in text:
+        return []
+    body = text.split(CHECKLIST_BEGIN, 1)[1].split(CHECKLIST_END, 1)[0]
+    if "-->" in body:
+        body = body.split("-->", 1)[1]  # drop the opening tag's own comment text
+    body = body.rsplit("<!--", 1)[0]    # drop the closing tag's leading "<!--"
+    items = []
+    current = None
+    for raw in body.splitlines():
+        s = raw.strip()
+        if not s:
+            continue
+        if s.startswith("- "):
+            if current is not None:
+                items.append(current)
+            current = s[2:].strip()
+        elif current is not None:
+            current += " " + s
+    if current is not None:
+        items.append(current)
+    return items
+
+
+def get_git_info(repo_root, run=subprocess.run):
+    """git rev-parse HEAD and git status --porcelain from repo_root, for
+    session.json (board-run-task.md section 4.1a / BR.4: "the runner also
+    checks that the working tree is at a committed revision ... and warns -
+    does not stop - if the tree is dirty"). Never raises: git missing, a
+    non-zero exit, or any other failure is recorded in info["error"] and
+    left for the caller to warn about, since a board run must not depend on
+    git being installed at the colleague's site. `run` is injectable so
+    --selftest can exercise "git missing" and "dirty tree" without a real
+    git call."""
+    info = dict(head=None, dirty=None, porcelain=None, error=None)
+    try:
+        r = run(["git", "-C", repo_root, "rev-parse", "HEAD"],
+                capture_output=True, text=True, timeout=10)
+        if r.returncode == 0:
+            info["head"] = r.stdout.strip()
+        else:
+            info["error"] = f"git rev-parse HEAD: {(r.stderr or '').strip() or r.returncode}"
+    except Exception as e:
+        info["error"] = f"git rev-parse HEAD: {e}"
+    try:
+        r = run(["git", "-C", repo_root, "status", "--porcelain"],
+                capture_output=True, text=True, timeout=10)
+        if r.returncode == 0:
+            info["porcelain"] = r.stdout
+            info["dirty"] = bool(r.stdout.strip())
+        elif info["error"] is None:
+            info["error"] = f"git status --porcelain: {(r.stderr or '').strip() or r.returncode}"
+    except Exception as e:
+        if info["error"] is None:
+            info["error"] = f"git status --porcelain: {e}"
+    return info
 
 
 # ---------------------------------------------------------------------------
@@ -626,13 +754,23 @@ def open_target(port, ui):
 # module no longer has a summary-building function of its own.
 # ---------------------------------------------------------------------------
 def write_zip(out_dir, board, session, log_a, log_b, frames_a, frames_b):
+    """log_b is None while there is no B firmware yet (BR.4: only A is
+    committed in board_run/, B follows in BR.8) - the zip then carries no
+    B.log, and summary.txt comes from eval_board.build_summary_text_single()
+    (A alone) rather than the normal A/B comparison."""
     ts = time.strftime("%Y%m%d-%H%M%S")
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, f"run-{ts}-{board}.zip")
-    summary = eval_board.build_summary_text(log_a.lines, log_b.lines, eval_board.load_expected())
+    if log_b is not None:
+        summary = eval_board.build_summary_text(log_a.lines, log_b.lines, eval_board.load_expected())
+    else:
+        summary = eval_board.build_summary_text_single(
+            log_a.lines, eval_board.load_expected(), label="A",
+            not_run_note="firmware not available yet (added in BR.8)")
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("A.log", log_a.text())
-        z.writestr("B.log", log_b.text())
+        if log_b is not None:
+            z.writestr("B.log", log_b.text())
         z.writestr("summary.txt", summary)
         z.writestr("session.json", json.dumps(session, indent=2, sort_keys=True))
         for name, blob in frames_a:
@@ -647,7 +785,46 @@ def write_zip(out_dir, board, session, log_a, log_b, frames_a, frames_b):
 # ---------------------------------------------------------------------------
 def perform_full_run(port, ui, out_dir, hex_a=None, hex_b=None,
                       r5_ksps=R5_DEFAULT_KSPS, r5_core=R5_DEFAULT_CORE,
-                      r5_pinsel=R5_DEFAULT_PINSEL, r5_samc=R5_DEFAULT_SAMC):
+                      r5_pinsel=R5_DEFAULT_PINSEL, r5_samc=R5_DEFAULT_SAMC,
+                      board_run_dir=BOARD_RUN_DIR, readme_path=README_PATH,
+                      repo_root=REPO_ROOT, git_run=subprocess.run, open_target_fn=None):
+    """hex_a/hex_b, when not given explicitly, are found in board_run_dir
+    itself (BR.4: the colleague never passes a file name - board_run.py
+    finds it). hex_b is None until BR.8 adds a B-*.hex file; run_b is then
+    skipped outright, not attempted against a file that does not exist -
+    session["hex"] still gets a "NEW" entry so the zip always shows two
+    slots, the second marked "not_present". open_target_fn lets --selftest
+    inject a stand-in target instead of opening a real serial port; the
+    default opens `port` exactly as before."""
+    if open_target_fn is None:
+        open_target_fn = lambda: open_target(port, ui)  # noqa: E731
+
+    if hex_a is None:
+        hex_a = find_hex(board_run_dir, "A")
+    if hex_a is None:
+        raise RuntimeError(f"no A-*.hex found in {board_run_dir} - 'git pull' again, or check "
+                            f"{os.path.join(board_run_dir, 'SHA256SUMS.txt')} for what should be there")
+    if hex_b is None:
+        hex_b = find_hex(board_run_dir, "B")
+
+    checklist = load_checklist(readme_path)
+    if checklist:
+        ui.say("Hardware set-up - confirm every item, then press ENTER to continue:")
+        for item in checklist:
+            ui.say(f"  - {item}")
+    else:
+        ui.say(f"WARNING: could not read the hardware checklist from {readme_path} - "
+               "check it by hand before continuing.")
+    ui.prompt("hardware set-up confirmed, press ENTER: ")
+
+    git_info = get_git_info(repo_root, run=git_run)
+    if git_info["error"]:
+        ui.say(f"WARNING: could not read git status ({git_info['error']}) - "
+               "session.json will not record a revision.")
+    elif git_info["dirty"]:
+        ui.say("WARNING: the working tree is not clean (git status --porcelain is non-empty) - "
+               "recorded in session.json, but a local edit changes what actually runs.")
+
     try:
         import serial
         pyserial_version = serial.__version__
@@ -656,21 +833,29 @@ def perform_full_run(port, ui, out_dir, hex_a=None, hex_b=None,
 
     session = dict(runner_version=RUNNER_VERSION, port=port,
                     pc_time=time.strftime("%Y-%m-%d %H:%M:%S"),
-                    python=platform.python_version(), pyserial=pyserial_version, hex=[])
+                    python=platform.python_version(), pyserial=pyserial_version,
+                    git=git_info, hex=[])
 
-    target = open_target(port, ui)
+    target = open_target_fn()
     try:
         info_a = prepare_hex(hex_a, "OLD", ui)
         session["hex"].append(info_a)
-        ui.prompt(f"program the OLD firmware{' (' + hex_a + ')' if hex_a else ''}, then press ENTER: ")
+        ui.prompt(f"program the OLD firmware ({info_a['path']}), then press ENTER: ")
         log_a, results_a, frames_a = run_session(target, ui, "A", r5_ksps, r5_core, r5_pinsel, r5_samc)
 
-        info_b = prepare_hex(hex_b, "NEW", ui)
-        session["hex"].append(info_b)
-        ui.prompt(f"program the NEW firmware{' (' + hex_b + ')' if hex_b else ''}, then press ENTER: ")
-        if hasattr(target, "sync"):
-            target.sync(timeout=TIMEOUT_SYNC)  # reprogramming rebooted the board
-        log_b, results_b, frames_b = run_session(target, ui, "B", r5_ksps, r5_core, r5_pinsel, r5_samc)
+        log_b = None
+        frames_b = []
+        if hex_b is not None:
+            info_b = prepare_hex(hex_b, "NEW", ui)
+            session["hex"].append(info_b)
+            ui.prompt(f"program the NEW firmware ({info_b['path']}), then press ENTER: ")
+            if hasattr(target, "sync"):
+                target.sync(timeout=TIMEOUT_SYNC)  # reprogramming rebooted the board
+            log_b, results_b, frames_b = run_session(target, ui, "B", r5_ksps, r5_core, r5_pinsel, r5_samc)
+        else:
+            ui.say("B firmware not available yet (added in BR.8, board-run-task.md section BR) "
+                   "- running A only.")
+            session["hex"].append(dict(which="NEW", path=None, sha256=None, sha256_status="not_present"))
     finally:
         target.close()
 
@@ -900,6 +1085,157 @@ def selftest():
             session_back = json.loads(z.read("session.json"))
         check("session.json round-trips", session_back["runner_version"] == RUNNER_VERSION)
 
+    # -----------------------------------------------------------------
+    # BR.4: hex discovery + SHA-256 checking (find_hex/check_hex_sha256/
+    # prepare_hex) - matching, modified, missing, and an ambiguous board_run/.
+    # -----------------------------------------------------------------
+    with tempfile.TemporaryDirectory() as tmp:
+        a_path = os.path.join(tmp, "A-EV74H48A-deadbee.hex")
+        with open(a_path, "wb") as f:
+            f.write(b":10000000FF\n")
+        digest = compute_sha256(a_path)
+        with open(os.path.join(tmp, "SHA256SUMS.txt"), "w") as f:
+            f.write(f"{digest} *A-EV74H48A-deadbee.hex\n")
+
+        check("find_hex(): finds the one A-*.hex", find_hex(tmp, "A") == a_path)
+        check("find_hex(): no B-*.hex yet -> None", find_hex(tmp, "B") is None)
+        _, status = check_hex_sha256(a_path)
+        check("check_hex_sha256(): a matching file", status == "match")
+        info = prepare_hex(a_path, "OLD", StubUI())
+        check("prepare_hex(): a matching file needs no confirmation", info["sha256_status"] == "match")
+
+        with open(a_path, "ab") as f:
+            f.write(b"\n")  # modified after SHA256SUMS.txt was written
+        _, status2 = check_hex_sha256(a_path)
+        check("check_hex_sha256(): a modified file is a mismatch", status2 == "mismatch")
+        try:
+            prepare_hex(a_path, "OLD", StubUI(answers=["n"]))
+            check("prepare_hex(): a modified file, declined -> aborted", False)
+        except RuntimeError:
+            check("prepare_hex(): a modified file, declined -> aborted", True)
+        info_yes = prepare_hex(a_path, "OLD", StubUI(answers=["y"]))
+        check("prepare_hex(): a modified file, accepted -> proceeds",
+              info_yes["sha256_status"] == "mismatch")
+
+        try:
+            prepare_hex(os.path.join(tmp, "A-does-not-exist.hex"), "OLD", StubUI())
+            check("prepare_hex(): a missing file raises", False)
+        except RuntimeError:
+            check("prepare_hex(): a missing file raises", True)
+
+        second = os.path.join(tmp, "A-EV74H48A-other12.hex")
+        with open(second, "wb") as f:
+            f.write(b":10000000FF\n")
+        try:
+            find_hex(tmp, "A")
+            check("find_hex(): two A-*.hex files raise", False)
+        except RuntimeError:
+            check("find_hex(): two A-*.hex files raise", True)
+
+    # -----------------------------------------------------------------
+    # BR.4: git status (get_git_info) - clean, dirty and git-unavailable,
+    # with the git call injected so this needs no real git and no real repo.
+    # -----------------------------------------------------------------
+    def fake_git_clean(cmd, **kw):
+        return SimpleNamespace(returncode=0, stderr="",
+                                stdout="deadbeefcafefeed\n" if "rev-parse" in cmd else "")
+
+    def fake_git_dirty(cmd, **kw):
+        return SimpleNamespace(returncode=0, stderr="",
+                                stdout="deadbeefcafefeed\n" if "rev-parse" in cmd
+                                else " M tools/board_run.py\n")
+
+    def fake_git_missing(cmd, **kw):
+        raise FileNotFoundError("git not found")
+
+    info_clean = get_git_info("ignored", run=fake_git_clean)
+    check("get_git_info(): a clean tree -> dirty=False, head recorded",
+          info_clean["dirty"] is False and info_clean["head"] == "deadbeefcafefeed"
+          and info_clean["error"] is None)
+    info_dirty = get_git_info("ignored", run=fake_git_dirty)
+    check("get_git_info(): a dirty tree -> dirty=True, porcelain recorded",
+          info_dirty["dirty"] is True and "board_run.py" in (info_dirty["porcelain"] or ""))
+    info_missing = get_git_info("ignored", run=fake_git_missing)
+    check("get_git_info(): git unavailable -> recorded as an error, never raised",
+          info_missing["error"] is not None and info_missing["head"] is None)
+
+    # -----------------------------------------------------------------
+    # BR.4: the hardware checklist, parsed from a README.md's marked
+    # section rather than duplicated in this script.
+    # -----------------------------------------------------------------
+    with tempfile.TemporaryDirectory() as tmp:
+        readme = os.path.join(tmp, "README.md")
+        with open(readme, "w", encoding="utf-8") as f:
+            f.write("# test\n\n<!-- BOARD_RUN_CHECKLIST:BEGIN\ncomment text\n-->\n"
+                     "- item one\n- item two, wrapped\n  across two lines\n"
+                     "<!-- BOARD_RUN_CHECKLIST:END -->\n")
+        items = load_checklist(readme)
+        check("load_checklist(): parses two items, joins the wrapped continuation",
+              items == ["item one", "item two, wrapped across two lines"])
+        check("load_checklist(): a missing file returns []",
+              load_checklist(os.path.join(tmp, "nope.md")) == [])
+    check("load_checklist(): the real board_run/README.md has a non-empty checklist",
+          len(load_checklist(README_PATH)) >= 3)
+
+    # -----------------------------------------------------------------
+    # BR.4: perform_full_run() end to end, through the same dependency
+    # injection points (open_target_fn/git_run) that make the whole thing
+    # testable without a board or a git repository - first with only an
+    # A-*.hex present (B not built yet, the state board_run/ is actually in
+    # today), then with both.
+    # -----------------------------------------------------------------
+    with tempfile.TemporaryDirectory() as tmp:
+        board_run_dir = os.path.join(tmp, "board_run")
+        os.makedirs(board_run_dir)
+        a_path = os.path.join(board_run_dir, "A-EV74H48A-deadbee.hex")
+        with open(a_path, "wb") as f:
+            f.write(b":10000000FF\n")
+        with open(os.path.join(board_run_dir, "SHA256SUMS.txt"), "w") as f:
+            f.write(f"{compute_sha256(a_path)} *A-EV74H48A-deadbee.hex\n")
+        readme_path = os.path.join(board_run_dir, "README.md")
+        with open(readme_path, "w", encoding="utf-8") as f:
+            f.write("<!-- BOARD_RUN_CHECKLIST:BEGIN\nc\n-->\n"
+                     "- confirm the board is plugged in\n<!-- BOARD_RUN_CHECKLIST:END -->\n")
+
+        ui_a_only = StubUI(answers=["", "", "n"])  # checklist ENTER, program-A ENTER, R5 signal "n"
+        out_dir = os.path.join(tmp, "out")
+        rc = perform_full_run("COMX", ui_a_only, out_dir, board_run_dir=board_run_dir,
+                               readme_path=readme_path, repo_root=tmp, git_run=fake_git_clean,
+                               open_target_fn=lambda: ReplayTarget("A", has_route=False))
+        check("perform_full_run(): A-only run (no B-*.hex yet) reports PASS", rc == 0)
+        check("perform_full_run(): prints the checklist item from README.md",
+              any("confirm the board is plugged in" in s for s in ui_a_only.said))
+        zips = [f for f in os.listdir(out_dir) if f.endswith(".zip")]
+        check("perform_full_run(): wrote exactly one zip", len(zips) == 1)
+        with zipfile.ZipFile(os.path.join(out_dir, zips[0])) as z:
+            names = z.namelist()
+            session_back = json.loads(z.read("session.json"))
+        check("perform_full_run(): A-only zip has A.log but no B.log",
+              "A.log" in names and "B.log" not in names)
+        check("perform_full_run(): session.json's NEW (B) hex slot is not_present",
+              session_back["hex"][1]["sha256_status"] == "not_present")
+        check("perform_full_run(): session.json carries the (injected) git HEAD",
+              session_back["git"]["head"] == "deadbeefcafefeed")
+
+        b_path = os.path.join(board_run_dir, "B-EV74H48A-cafefee.hex")
+        with open(b_path, "wb") as f:
+            f.write(b":10000000EE\n")
+        with open(os.path.join(board_run_dir, "SHA256SUMS.txt"), "a") as f:
+            f.write(f"{compute_sha256(b_path)} *B-EV74H48A-cafefee.hex\n")
+        ui_ab = StubUI(answers=["", "", "", "n"])  # checklist, program-A, program-B, R5 signal
+        out_dir2 = os.path.join(tmp, "out2")
+        rc2 = perform_full_run("COMX", ui_ab, out_dir2, board_run_dir=board_run_dir,
+                                readme_path=readme_path, repo_root=tmp, git_run=fake_git_dirty,
+                                open_target_fn=lambda: ReplayTarget("A", has_route=True))
+        check("perform_full_run(): with both A and B present, reports PASS", rc2 == 0)
+        zips2 = [f for f in os.listdir(out_dir2) if f.endswith(".zip")]
+        with zipfile.ZipFile(os.path.join(out_dir2, zips2[0])) as z:
+            names2 = z.namelist()
+        check("perform_full_run(): with B present, the zip has both A.log and B.log",
+              "A.log" in names2 and "B.log" in names2)
+        check("perform_full_run(): a dirty tree is reported to the operator, not fatal",
+              any("not clean" in s for s in ui_ab.said))
+
     print("board_run", "PASS" if ok_all else "FAIL")
     return 0 if ok_all else 1
 
@@ -912,9 +1248,11 @@ def main(argv=None):
     ap.add_argument("--list", action="store_true", help="list serial ports and exit")
     ap.add_argument("--selftest", action="store_true",
                      help="run the full A+B sequence against a stand-in, no board")
-    ap.add_argument("--hex-a", help="the OLD firmware's hex file (checked against a SHA256SUMS.txt "
-                                     "next to it, if present)")
-    ap.add_argument("--hex-b", help="the NEW firmware's hex file")
+    ap.add_argument("--hex-a", help="the OLD firmware's hex file (default: the one A-*.hex found in "
+                                     "board_run/, checked against board_run/SHA256SUMS.txt)")
+    ap.add_argument("--hex-b", help="the NEW firmware's hex file (default: the one B-*.hex in "
+                                     "board_run/, if any - not present until BR.8, in which case A "
+                                     "runs alone)")
     ap.add_argument("--out-dir", default=".", help="where to write run-*.zip (default: .)")
     ap.add_argument("--r5-ksps", type=int, default=R5_DEFAULT_KSPS)
     ap.add_argument("--r5-core", type=int, default=R5_DEFAULT_CORE)

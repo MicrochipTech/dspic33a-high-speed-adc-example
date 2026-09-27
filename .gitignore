@@ -46,3 +46,9 @@ version.h.tmp
 # The GUI's own settings (tools/adc_gui.py "save"): personal state, not the
 # standard. The standard is tools/adc_gui_defaults.json (tracked).
 tools/adc_gui_settings.json
+
+# board_run/ (BR.4) is the one deliberate exception to "*.hex" above: its
+# hex files are committed prebuilt firmware images for the colleague's
+# board run, not build output of the current tree (board_run/README.md).
+!board_run/
+!board_run/*.hex

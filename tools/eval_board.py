@@ -467,6 +467,61 @@ def build_summary_text(log_a_lines, log_b_lines, expected_entries=None):
     return "\n".join(lines) + "\n"
 
 
+def build_summary_text_single(log_lines, expected_entries=None, label="A", not_run_note=""):
+    """The A-only summary for board-run-task.md's window between BR.4 (A
+    committed) and BR.8 (B added): same log format, same BLOCK_ORDER
+    verdicts and the same run19-sourced expectation checks as
+    build_summary_text() above, but for one run instead of an A/B pair -
+    there is no A/B diff section, and "prediction"-sourced entries are
+    skipped outright (board-run-task.md ties every prediction to "the NEW
+    firmware", which has not run yet). Ends with exactly one line
+    "overview: PASS" or "overview: FAIL", the same convention
+    build_summary_text() uses, so board_run.py's return code reads either
+    the same way."""
+    entries = parse_log_lines(log_lines)
+    rv = extract_runner_version(entries)
+    if rv not in KNOWN_RUNNER_VERSIONS:
+        raise UnknownRunnerVersion(
+            f"{label}: RUNNER_VERSION {rv!r} is not one this module knows ({sorted(KNOWN_RUNNER_VERSIONS)}) "
+            "- board_run.py and eval_board.py must be updated together (see both module docstrings)")
+
+    verdicts = {b: block_verdict(entries, b) for b in BLOCK_ORDER}
+    chain_results, chain_ended = chain_all_results(block_rx_lines(entries, "R2"))
+
+    deviations = []
+    for b in BLOCK_ORDER:
+        if verdicts[b] in ("missing", "timeout"):
+            deviations.append(dict(block=b, kind="incomplete", detail=f"{label} block {verdicts[b]}"))
+    if verdicts["R2"] == "ok" and not chain_ended:
+        deviations.append(dict(block="R2", kind="incomplete", detail=f"{label}: chain all ran but no @END"))
+
+    skipped_predictions = 0
+    for e in (expected_entries or []):
+        if e["source"] == "prediction":
+            skipped_predictions += 1
+            continue
+        for d in check_expectation(e, chain_results):
+            deviations.append(dict(block=e.get("block", "R2"), kind="expectation",
+                                    detail=f"{e['id']} ({e.get('note', '')}) - {label} {d['line']}",
+                                    a=d["got"], expect=d["expect"], source=e["source"], date=e["date"]))
+
+    lines = ["board run evaluation", "", f"{label} only - B not run: {not_run_note}", "", "blocks:"]
+    for b in BLOCK_ORDER:
+        lines.append(f"  {b}: {label}={verdicts[b]}")
+    lines.append("")
+    if deviations:
+        lines.append(f"deviations ({len(deviations)}):")
+        for d in deviations:
+            lines.append("  " + format_deviation(d))
+    else:
+        lines.append("deviations: none")
+    lines.append("")
+    lines.append(f"predictions skipped (B not run): {skipped_predictions}" if skipped_predictions
+                 else "predictions skipped: none")
+    lines.append(f"overview: {'FAIL' if deviations else 'PASS'}")
+    return "\n".join(lines) + "\n"
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -582,6 +637,26 @@ def selftest():
     text = build_summary_text(log_a.lines, log_b.lines, expected)
     check("build_summary_text() ends with an overview line",
           text.rstrip("\n").splitlines()[-1].startswith("overview: "))
+
+    # 9. build_summary_text_single() (BR.4: A only, B not built yet) - the
+    # clean A-only log passes with no deviations and skips the
+    # prediction-sourced entries (about the NEW firmware) rather than
+    # silently treating "not run" as "confirmed".
+    text_a_only = build_summary_text_single(log_a.lines, expected, label="A",
+                                             not_run_note="firmware not available yet (BR.8)")
+    n_predictions = sum(1 for e in expected if e["source"] == "prediction")
+    check("build_summary_text_single() ends with an overview line",
+          text_a_only.rstrip("\n").splitlines()[-1].startswith("overview: "))
+    check("build_summary_text_single(): clean A alone is PASS",
+          text_a_only.rstrip("\n").splitlines()[-1] == "overview: PASS")
+    check("build_summary_text_single(): prediction-sourced entries are skipped, not checked",
+          n_predictions == 0 or f"predictions skipped (B not run): {n_predictions}" in text_a_only)
+    log_a_timeout, _, _ = board_run.run_session(
+        board_run.ReplayTarget("A", has_route=True, timeout_block="regs"), ui, "A")
+    text_a_timeout = build_summary_text_single(log_a_timeout.lines, label="A")
+    check("build_summary_text_single(): a timeout in A alone is reported and FAILs",
+          "R1 incomplete: A block timeout" in text_a_timeout
+          and text_a_timeout.rstrip("\n").splitlines()[-1] == "overview: FAIL")
 
     print("eval_board", "PASS" if ok_all else "FAIL")
     return 0 if ok_all else 1
