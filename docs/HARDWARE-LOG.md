@@ -1586,3 +1586,138 @@ traffic adds.
 10 MSPS; 10 MSPS shows the same few hundred overruns; the processing load at 8 MSPS falls
 well below half.
 
+## 2026-09-27, N+1 restructured, not run on silicon
+
+No board run has happened since run 19. Everything below is code, host tests and the
+simulator (`docs/IMPLEMENTATION-PLAN.md`, revision `28e88fa` at the start, this repository's
+HEAD at the end) - N+1 restructured the firmware run 19 proved, it did not change what
+that firmware does.
+
+**What changed, by phase:**
+
+- **P0** built the instruments the rest of N+1 leans on: a host test harness
+  (`tools\hosttest.bat`, gcc), a register-trace harness that reproduces every register
+  write a driver makes against golden logs of the pre-restructuring state (a page-guarded
+  read hook, ATDF reset values as the starting point), `fncmp.py` for disassembly
+  comparison, and the short simulator boot check **[SMOKE]**.
+- **P1** moved every file into `src/`, one folder per role, moves only - fncmp showed 0
+  functions differing in the hardware, simulator, Nano and smoke builds.
+- **P2/P3** pulled the hardware-free algorithms into `src/lib/` (`fmt`, `stats`,
+  `tri_eval`, `crc16`, each with a host test and a golden cross-check against the
+  original), and added `iir1`, `goertzel_f`, `goertzel_i`, `detect`, `wavegen` - a
+  damped Goertzel in float and in Q16, a hysteresis pulse detector, a signal-generator
+  table - checked against a Python reference to within 1 LSB and compiled into every
+  build, called from nowhere yet: the material N+4 needs.
+- **P4** gave every driver one path to log, wait, stop and dump its registers -
+  `src/port/log.h`/`panic.h`/`wait.h`/`regs.h`, implemented by `src/app/port_impl.c` -
+  instead of calling `console_*`/`fail()` directly.
+- **P5** pulled the UART out of `cli.c` into `src/drivers/uart.c`; the receive interrupt
+  shrank from 65 to 55 instructions on the way (the byte-counting/parser-feed body became
+  a direct call, still no indirect call anywhere in it).
+- **P6** split `cli.c`: `src/tests/bench.c` took the back-to-back suite, `src/lib/frame.c` +
+  `src/link/gui_link.c` rebuilt `blk`/`stream grab` on one frame writer, and every module
+  registers its own commands now, in the same order `help` always had.
+- **P7** made board configuration data - reduced to the one field that measured safe,
+  the boot PLL dividers (`src/boards/board_cfg.h`). ADC core/input, LED port/polarity and
+  the console's PPS/TRIS pins stay `board.h` macros; each was tried as data and reverted
+  for a reason specific to it (`docs/REFACTORING-PROPOSAL.md` V8, `CLAUDE.md`'s `board.h`
+  row).
+- **P9** split `capture.c` into `src/app/pingpong.c` (the ping-pong bookkeeping),
+  `src/meter/meter.c` (counters, processing cost, rate measurement) and
+  `src/app/acquisition.c` (rate setters, the variant matrix, and the standing chain
+  stream moved out of `chaintest.c`, inverted afterwards so the application layer no
+  longer depends on the test layer's internals).
+- **P11** added a routing core (`src/app/routing.c`): before any driver call, it checks
+  whether a route such as `ROUTE_STREAM` conflicts with DMA, SCCP, DAC output, UREF or
+  RAM already in use, and refuses a pin the addressed core cannot reach. `stream on` now
+  goes through it (P11.4); the new `route list` command reports the active route and the
+  resource table (P11.5).
+- **BR** (board-run tooling, alongside and after P9-P11) added a host-side runner
+  (`tools/board_run.py`), an evaluator against expectations tagged by source
+  (`tools/eval_board.py`, `tests/board/expected.json`), and firmware fields `status`
+  needed for it (stack high-water mark, buffer placement, boot/trap state - see below).
+  **P8** (drivers with instances) and **P10** (split `clock.c`) were moved to N+2 on
+  27.09.2026 to keep this restructuring to about a week of agent time.
+
+**What was verified without a board:**
+
+- **Register trace:** `tools\trace.bat`, 14/14 golden scenarios reproduced bit for bit at
+  every step that does not say a trace changes and why.
+- **Host tests:** `tools\hosttest.bat`, 17/17 (every `lib/` algorithm against reference
+  data, the routing conflict rules, the board-run tools' own self-tests).
+- **[SMOKE]:** every task touching boot, the console or the memory layout passed the
+  short simulator boot-and-command check; `tests/smoke/expected.log` changed exactly
+  where a task said it would (the new `status` fields, the new `route list` line) and
+  nowhere else.
+- **[SIM] (P9.5),** the ~7-minute ping-pong acceptance run, at `93c485f`: the default run
+  **PASS**, 100 halves, 0 mismatches; 256 samples per half **PASS**; `--fault 65536`
+  **FAIL**, one mismatch at half 9, index 0 - the repaired case. The fault run had
+  proved nothing since an earlier commit removed the "measurement running" marker it
+  waited for, so the fault always landed after the check and a run that should fail read
+  PASS; `sim_trap.py` now waits for the current marker and refuses a fault run that
+  PASSes.
+- **fncmp:** `_DMA0Interrupt` unchanged at 42 instructions, 0 indirect calls, through
+  every step that does not touch it; `_U2RXInterrupt` moved once, 65 to 55 instructions
+  (P5.1, the UART extraction), 0 indirect calls, unchanged since.
+
+**The one intended console behaviour change:** `stream on` at a custom core/pinsel now
+goes through the routing core (P11.4), which refuses a pinsel the addressed core cannot
+reach - the same "set-up failed" line any other refusal gives. PINSEL 6 and 7 (the
+internal 15/16*VDD reference and UREF) and, on core 5, the ATDF-named internal channels
+AN5 ("Touch ADC Input") and AN8 ("VDDCORE") are accepted everywhere; PINSEL 9..15
+(unnamed in the pack's ATDF) and a package pin the core does not bring out are refused.
+This was P11.2's rule from the day the routing core's conflict rules were written; P11.4
+is where `stream on` started being checked against it. The GUI's own PINSEL field already
+offers only a core's pins plus 6/7, so it never triggers the new refusal.
+
+**What only silicon can still answer** (`docs/IMPLEMENTATION-PLAN.md`'s open points and
+the BR risk list):
+
+- `_U2RXInterrupt` at 55 instructions instead of 65 - proven equivalent on the host and in
+  fncmp, never run against a real byte stream under DMA-interrupt load.
+- `console_force_up()`'s PPS/TRIS path - the one path no golden trace exercises, because
+  it packs non-uniform bit widths the register-trace model does not reproduce (why
+  `board.h` keeps those fields as macros, P7.1).
+- The stack high-water mark BR.6 added - a real number only a board run gives; the port
+  layer and the visitor callbacks added depth no host tool measures.
+- The sample buffer's placement, alignment and guard words after relinking (also a BR.6
+  `status` field).
+- The P9 hot path (`pingpong_on_half()`, `capture_service()`) - unchanged instruction
+  counts on paper, unmeasured latency on the board.
+- The P11.4 `stream on` path - `routing_apply()` runs before every chain start now; the
+  register sequence it produces is proven byte-identical to before (the `stream_on`,
+  `stream_on_input` and `route_stream` goldens), but the check's own cost has never run
+  in real time, and `capture_chain_halt()`/`_resume()` under it have never run against
+  real silicon timing either.
+- The DAC slope path - covered by no golden at all (found in P11.3): the register-trace
+  harness's clock model never switches `CLK7CON.COSC`, so `acq_triangle_for()` refuses the
+  triangle in every scenario but the dedicated `dac` one, and `slp=0` in `stream_on`'s and
+  `route_stream`'s goldens. Only a board run exercises the DAC route this restructuring
+  carried through `acquisition.c`.
+
+**The first board run goes through phase BR:** `tools/board_run.py` runs the same
+sequence against A = `b41af3b` (`board_run/A-EV74H48A-b41af3b.hex`, the parent of P0.1 -
+run 19's actual firmware, `fbfd883` plus local changes committed only as `c3bc644`,
+cannot be rebuilt, so this stands in for "before") and B, the P12 close-out revision,
+added in BR.8. **Pass criterion (BR.9):** B completes every block to `@END` with no
+timeout and no trap; every deviation of B from A is either absent or explained; `chain
+all` stages S4/S6/S9 show overrun/late/missed 0 at 8 MSPS; every `stream grab` cycle has
+a clean CRC and triangle verdict; the stack high-water mark leaves at least 25 % of the
+stack unused. Only then does N+1 count as "run on silicon".
+
+**Predictions for the run** (marked as such; `tests/board/expected.json` carries the same
+figures tagged `source: prediction`):
+
+- **R2 (`chain all` on B) is expected to reproduce run 19:** S3 6144 transfers for 6144
+  conversions, overrun 0; S4 and S6 pass cleanly at 1, 4 and 8 MSPS with overrun/late/missed
+  0, the same growing overrun count from 10 MSPS up; S5 slope 1.000 against the model from
+  100 kSPS through 8 MSPS; S9 picks 8 or 10 MSPS; the processing load at 8 MSPS stays well
+  below half, as the post-run-19 unrolled loop measured. Nothing P9 or P11 restructured
+  touches a register the chain test exercises differently - the prediction is that the
+  restructuring is invisible to this block.
+- **R4 (`stream on`/`stream grab` on B, 1/4/8 MSPS, >= 50 grabs each) is expected to show a
+  clean CRC and a PASS triangle verdict on every grab, with ov/late/missed deltas 0 at all
+  three rates** - the same behaviour run 19 measured for the standing stream, now reached
+  through `routing_apply()` instead of the old direct call, which the `stream_on`/
+  `stream_on_input` goldens prove writes the identical register sequence.
+
