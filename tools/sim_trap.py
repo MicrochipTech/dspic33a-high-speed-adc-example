@@ -410,11 +410,23 @@ def main():
         # a few halves more, before writing. Written while running:
         # sim_fault_once is plain RAM, not SFR space (an SFR write during
         # Run is what makes the simulator abort).
-        while "measurement running" not in uart() and time.time() - t0 < a.run_seconds:
+        # The marker: main.c's "[boot] simulator: starting the stream"
+        # since afc5e00 removed "measurement running" (kept for older
+        # builds). Until 27.09.2026 (P9.5) only the old one was looked for,
+        # so the wait ran out, the fault landed after the check had finished
+        # and the run reported PASS - a fault case that proved nothing.
+        markers = ("starting the stream for the ping-pong check", "measurement running")
+        while not any(k in uart() for k in markers) and time.time() - t0 < a.run_seconds:
             time.sleep(2.0)
+        if not any(k in uart() for k in markers):
+            m.cmd("Halt", 2)
+            m.quit()
+            sys.exit("--- fault case INVALID: the stream-start marker never appeared, "
+                     "the fault was not written")
         time.sleep(a.fault_seconds)
         m.cmd(f"write {fault_addr} {a.fault}", 0.5)
         print(f"    wrote {a.fault} to sim_fault_once @0x{fault_addr:X} at {time.time() - t0:.0f} s")
+        fault_written_at = time.time() - t0
     time.sleep(max(0.0, a.run_seconds - (time.time() - t0)))
     m.cmd("Halt", 2)
     print("\n".join(m.print_symbols(SYMBOLS)))
@@ -431,6 +443,11 @@ def main():
     else:
         verdict = "no verdict yet - run longer"
     print(f"--- ping-pong check: {verdict}")
+    if a.fault and verdict == "PASS":
+        # A fault that the check never saw: it was written after the last
+        # compared half. Say so rather than let a PASS stand for a fault run.
+        print(f"--- fault case INVALID: PASS although a fault was written at "
+              f"{fault_written_at:.0f} s - it landed after the check (lower --fault-seconds)")
 
     if a.inject:
         print(f"--- phase 3: inject IEC6/IFS6 mask 0x{AD3CH0:X}, run {a.inject_seconds:.0f} s")
