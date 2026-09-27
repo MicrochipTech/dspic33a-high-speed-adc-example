@@ -48,6 +48,7 @@
       <logicalFolder name="tests" displayName="tests" projectFiles="true">
         <itemPath>../src/tests/chaintest.h</itemPath>
         <itemPath>../src/tests/dactest.h</itemPath>
+        <itemPath>../src/tests/bench.h</itemPath>
       </logicalFolder>
     </logicalFolder>
     <logicalFolder name="ExternalFiles"
@@ -102,6 +103,7 @@
       <logicalFolder name="tests" displayName="tests" projectFiles="true">
         <itemPath>../src/tests/chaintest.c</itemPath>
         <itemPath>../src/tests/dactest.c</itemPath>
+        <itemPath>../src/tests/bench.c</itemPath>
       </logicalFolder>
     </logicalFolder>
   </logicalFolder>
