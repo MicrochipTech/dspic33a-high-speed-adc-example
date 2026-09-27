@@ -75,8 +75,11 @@ the sources still include each other as `"name.h"` without a folder prefix:
 Nobody outside `dma.c` touches a DMA register, nobody outside `adc.c` an ADC register,
 nobody outside `clock.c` reads `CLK1CON`. A driver under `src/drivers/` logs and panics
 only through `port/` (`port_log()`, `port_log_kv()`, `port_panic()`) - never `console_*`
-or `fail()` directly, and it includes none of `console.h`, `diag.h`, `capture.h` (P4.2
-to P4.7 move the drivers over one by one). The console never reads the buffer directly;
+or `fail()` directly, and it includes none of `console.h`, `diag.h`, `capture.h`.
+`timebase.c` and `led.c` comply as they are (P4.2, 27.09.2026: they never called either -
+`led.c` mentions `fail()` and `capture_service()` in its header comment only, and keeps
+`board.h` until P7); `sccp.c`, `dac.c`, `adc.c`, `dma.c`, `clock.c` move over in P4.3 to
+P4.7. The console never reads the buffer directly;
 it uses `capture_completed_half()`, or `capture_oneshot_n()` when it needs a window that
 nothing is writing.
 
