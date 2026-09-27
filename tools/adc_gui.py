@@ -47,11 +47,6 @@ import time
 
 import numpy as np
 
-ACK = b"\x06"
-NAK = b"\x15"
-BAUD = 115200
-
-
 # ---------------------------------------------------------------------------
 # Packages, boards, and where a channel comes out
 #
@@ -76,6 +71,11 @@ from boards import BOARDS  # noqa: E402
 from eval_chain import tri_eval as chain_tri_eval  # noqa: E402
 from eval_chain import grid_ok as chain_grid_ok  # noqa: E402
 from eval_chain import synth as chain_synth  # noqa: E402
+# CRC-16/CCITT-FALSE, the "stream grab" GRAB frame parser and Target (the
+# serial console client) moved out to tools/protocol.py (P6.5), so a
+# host-side tool can talk to the board's console without pulling in NiceGUI.
+# ACK/NAK stay in use here too, for FakeTarget and the self-test below.
+from protocol import ACK, NAK, crc16_ccitt_false, parse_grab_frame, Target  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -749,76 +749,6 @@ def chain_model_slope_samples(slp: int, dac_hz: float, ksps: float) -> float:
     return (high - low) * 32.0 * (ksps * 1e3) / (slp * dac_hz)
 
 
-# ---------------------------------------------------------------------------
-# CRC-16/CCITT-FALSE, shared by every binary frame the firmware sends
-# (docs/PLAN-BINARY-TRANSFER.md): poly 0x1021, init 0xFFFF, no reflect, no
-# xorout. Only "stream grab"'s GRAB frame uses it in this tool now - the
-# back-to-back "blk" block transfer is retired here (the firmware command
-# stays, for a terminal).
-# ---------------------------------------------------------------------------
-_CRC_LINE_RE = re.compile(rb"CRC ([0-9A-Fa-f]{4})")
-
-
-def crc16_ccitt_false(data: bytes) -> int:
-    """poly 0x1021, init 0xFFFF, no reflect, no xorout -- the frame's CRC."""
-    crc = 0xFFFF
-    for byte in data:
-        crc ^= byte << 8
-        for _ in range(8):
-            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
-    return crc
-
-
-assert crc16_ccitt_false(b"123456789") == 0x29B1, "CRC-16/CCITT-FALSE check value"
-
-
-# ---------------------------------------------------------------------------
-# "stream grab": one halt/transfer/restart cycle of the standing chain
-# (chaintest.c chain_stream_grab_begin/_end, cli.c cmd_stream_grab()). A
-# text header line, the payload, a CRC line, then the usual prompt and
-# ACK/NAK, same shape as the firmware's other binary frame ("blk", not used
-# by this tool any more): the actual rate, where in the raw buffer the
-# window starts, the stream counters since the PREVIOUS grab, and the DAC
-# triangle setting (slpdat, DAC clock) the model slope is computed from.
-# docs/PLAN-BINARY-TRANSFER.md.
-# ---------------------------------------------------------------------------
-_GRAB_HEADER_RE = re.compile(
-    r"GRAB n=(\d+) from=(\d+) ksps=(\d+) ov=(\d+) late=(\d+) missed=(\d+) "
-    r"halves=(\d+) xfer=(\d+) slp=(\d+) dachz=(\d+)")
-
-
-def parse_grab_frame(header_line: str, payload: bytes, tail: bytes):
-    """Decode one 'stream grab' frame from its three pieces (header text
-    line, the payload bytes, everything after the payload up to and
-    including the ACK/NAK). Used by both Target.grab() (read from serial)
-    and FakeTarget.grab() (built in memory), so the same check runs against
-    a real board and against the stand-in. Returns (ok, samples, meta); on
-    any problem meta['error'] is set and ok is False."""
-    m = _GRAB_HEADER_RE.match(header_line.strip())
-    if not m:
-        raise RuntimeError(f"grab: no GRAB header, got {header_line!r}")
-    n = int(m.group(1))
-    meta = dict(from_=int(m.group(2)), ksps=int(m.group(3)), overrun=int(m.group(4)),
-                late=int(m.group(5)), missed=int(m.group(6)), halves=int(m.group(7)),
-                transfers=int(m.group(8)), slpdat=int(m.group(9)), dac_hz=int(m.group(10)))
-    m2 = _CRC_LINE_RE.search(tail)
-    if not m2:
-        raise RuntimeError(f"grab: no CRC line, got {tail!r}")
-    crc_frame = int(m2.group(1), 16)
-    crc_calc = crc16_ccitt_false(payload)
-    samples = (np.frombuffer(payload, dtype="<u2").astype(int) & 0x0FFF) if n else np.zeros(0, dtype=int)
-    ok = n > 0 and len(payload) == 2 * n and crc_frame == crc_calc and tail.endswith(ACK)
-    if n == 0:
-        meta["error"] = "NAK: no stream on, or the halt/restart failed"
-    elif len(payload) != 2 * n:
-        meta["error"] = f"short block: got {len(payload)} of {2 * n} bytes"
-    elif crc_frame != crc_calc:
-        meta["error"] = f"CRC mismatch: frame {crc_frame:04X}, computed {crc_calc:04X}"
-    elif not tail.endswith(ACK):
-        meta["error"] = "NAK after block"
-    return ok, samples, meta
-
-
 def probe_grab(target) -> bool:
     """Does this target's 'stream' understand the 'grab' sub-command? Ask
     'help' once rather than trying 'stream grab' itself and guessing at a
@@ -849,125 +779,6 @@ def query_buf(target) -> int:
         ok, lines = False, []
     n = _parse_buf(lines) if ok else None
     return n if n is not None else 2048
-
-
-# ---------------------------------------------------------------------------
-# Transport: the board's console over a COM port
-# ---------------------------------------------------------------------------
-class Target:
-    """One command at a time, synchronised on the parser's ACK/NAK byte."""
-
-    def __init__(self, port: str, baud: int = BAUD, on_log=None):
-        import serial  # pyserial
-        self.on_log = on_log  # optional callable(str): the console transcript
-        self.ser = serial.Serial(port, baud, timeout=0.05)
-        self.port = port
-        self.sync()
-
-    def close(self):
-        self.ser.close()
-
-    def _log(self, line: str):
-        if self.on_log:
-            try:
-                self.on_log(line)
-            except Exception:
-                pass
-
-    def _read_until_ready(self, timeout: float) -> bytes:
-        buf = b""
-        t0 = time.time()
-        while time.time() - t0 < timeout:
-            chunk = self.ser.read(4096)
-            if chunk:
-                buf += chunk
-                if buf.endswith(ACK) or buf.endswith(NAK):
-                    return buf
-            # A dump of 1024 samples takes ~0.5 s at 115200; keep reading.
-        raise TimeoutError(f"no ACK/NAK within {timeout} s; got {len(buf)} bytes: {buf[-80:]!r}")
-
-    def sync(self, timeout: float = 20.0):
-        """Wait for the board to be ready. After power-up the boot, the
-        self-test, the rate test and the automatic sweep take several
-        seconds; an empty line answers with a prompt once the parser runs."""
-        self.ser.reset_input_buffer()
-        self.ser.write(b"\r")
-        self._read_until_ready(timeout)
-
-    def cmd(self, line: str, timeout: float = 5.0):
-        """Send one command, return (ok, reply_lines) without echo and prompt."""
-        self._log(f"> {line}")
-        self.ser.reset_input_buffer()
-        self.ser.write(line.encode("ascii") + b"\r")
-        raw = self._read_until_ready(timeout)
-        ok = raw.endswith(ACK)
-        text = raw[:-1].decode("ascii", "replace")
-        lines = [l.rstrip("\r") for l in text.split("\n")]
-        for l in lines:
-            if l.strip():
-                self._log(f"< {l.rstrip()}")
-        self._log(f"< {'[ACK]' if ok else '[NAK]'}")
-        # Drop the echo of the command and the prompt line.
-        out = []
-        for l in lines:
-            s = l.strip()
-            if not s or s == line.strip() or s.startswith("> ") or s == ">":
-                continue
-            out.append(l.rstrip())
-        return ok, out
-
-    def _read_line(self, timeout: float) -> str:
-        buf = b""
-        t0 = time.time()
-        while time.time() - t0 < timeout:
-            b = self.ser.read(1)
-            if b:
-                buf += b
-                if buf.endswith(b"\n"):
-                    return buf.decode("ascii", "replace")
-        raise TimeoutError(f"grab: no line within {timeout} s, got {buf!r}")
-
-    def _read_exact(self, n: int, timeout: float) -> bytes:
-        buf = b""
-        t0 = time.time()
-        while len(buf) < n and time.time() - t0 < timeout:
-            chunk = self.ser.read(n - len(buf))
-            if chunk:
-                buf += chunk
-        if len(buf) < n:
-            raise TimeoutError(f"grab: expected {n} bytes, got {len(buf)} within {timeout} s")
-        return buf
-
-    def grab(self, timeout: float = 10.0):
-        """'stream grab': one halt/transfer/restart cycle of the standing
-        chain. Reads the header first to learn the byte count before
-        looking for ACK/NAK -- a sample byte can equal 0x06 or 0x15 by
-        chance, so the generic ACK/NAK scan in _read_until_ready() must not
-        run over the payload (see parse_grab_frame). Only the ASCII framing
-        is logged to the console transcript (on_log); the sample bytes
-        themselves are not."""
-        self._log("> stream grab")
-        self.ser.reset_input_buffer()
-        self.ser.write(b"stream grab\r")
-        echo = self._read_line(timeout)
-        self._log(f"< {echo.rstrip()}")
-        header_line = self._read_line(timeout)
-        self._log(f"< {header_line.rstrip()}")
-        m = _GRAB_HEADER_RE.match(header_line.strip())
-        if not m:
-            raise RuntimeError(f"grab: unsupported or no GRAB header, got {header_line!r}")
-        n = int(m.group(1))
-        payload = self._read_exact(2 * n, timeout) if n else b""
-        if payload:
-            self._log(f"< [binary payload, {len(payload)} bytes, not shown]")
-        tail = self._read_until_ready(timeout)
-        ok = tail.endswith(ACK)
-        tail_text = tail[:-1].decode("ascii", "replace") if tail else ""
-        for l in tail_text.split("\n"):
-            if l.strip():
-                self._log(f"< {l.rstrip()}")
-        self._log(f"< {'[ACK]' if ok else '[NAK]'}")
-        return parse_grab_frame(header_line, payload, tail)
 
 
 class FakeTarget:
