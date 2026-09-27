@@ -6,6 +6,7 @@
                    projectFiles="true">
       <logicalFolder name="app" displayName="app" projectFiles="true">
         <itemPath>../src/app/capture.h</itemPath>
+        <itemPath>../src/app/capture_priv.h</itemPath>
         <itemPath>../src/app/pingpong.h</itemPath>
         <itemPath>../src/app/board.h</itemPath>
       </logicalFolder>
@@ -43,6 +44,9 @@
       </logicalFolder>
       <logicalFolder name="link" displayName="link" projectFiles="true">
         <itemPath>../src/link/gui_link.h</itemPath>
+      </logicalFolder>
+      <logicalFolder name="meter" displayName="meter" projectFiles="true">
+        <itemPath>../src/meter/meter.h</itemPath>
       </logicalFolder>
       <logicalFolder name="port" displayName="port" projectFiles="true">
         <itemPath>../src/port/log.h</itemPath>
@@ -113,6 +117,9 @@
       </logicalFolder>
       <logicalFolder name="link" displayName="link" projectFiles="true">
         <itemPath>../src/link/gui_link.c</itemPath>
+      </logicalFolder>
+      <logicalFolder name="meter" displayName="meter" projectFiles="true">
+        <itemPath>../src/meter/meter.c</itemPath>
       </logicalFolder>
       <logicalFolder name="sim" displayName="sim" projectFiles="true">
         <itemPath>../src/sim/sim_dma.c</itemPath>
@@ -197,7 +204,7 @@
       </item>
       <C30>
         <property key="extra-include-directories"
-                  value="../src/drivers;../src/app;../src/cli;../src/tests;../src/lib;../src/diag;../src/sim;../src/port;../src/link;../src/boards"/>
+                  value="../src/drivers;../src/app;../src/cli;../src/tests;../src/lib;../src/diag;../src/sim;../src/port;../src/link;../src/boards;../src/meter"/>
       </C30>
       <Tool>
         <property key="ADC1" value="true"/>
@@ -1019,7 +1026,7 @@
       </item>
       <C30>
         <property key="extra-include-directories"
-                  value="../src/drivers;../src/app;../src/cli;../src/tests;../src/lib;../src/diag;../src/sim;../src/port;../src/link;../src/boards"/>
+                  value="../src/drivers;../src/app;../src/cli;../src/tests;../src/lib;../src/diag;../src/sim;../src/port;../src/link;../src/boards;../src/meter"/>
         <property key="preprocessor-macros" value="BOARD=2"/>
       </C30>
       <Tool>
@@ -1701,7 +1708,7 @@
       </item>
       <C30>
         <property key="extra-include-directories"
-                  value="../src/drivers;../src/app;../src/cli;../src/tests;../src/lib;../src/diag;../src/sim;../src/port;../src/link;../src/boards"/>
+                  value="../src/drivers;../src/app;../src/cli;../src/tests;../src/lib;../src/diag;../src/sim;../src/port;../src/link;../src/boards;../src/meter"/>
         <property key="preprocessor-macros" value="__MPLAB_DEBUGGER_SIMULATOR=1"/>
       </C30>
       <Simulator>

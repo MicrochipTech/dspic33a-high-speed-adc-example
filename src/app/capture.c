@@ -49,17 +49,9 @@
 #include "sccp.h"
 #include "stats.h"
 #include "pingpong.h"
+#include "capture_priv.h"
 
-/* Self-test input and window. ADxAN6 is the internal 15/16 * VDD
- * reference on every core and package (Table 16-2, p1224), which the
- * datasheet itself samples for gain calibration (Example 16-3, p1328) -
- * with SAMC = 3, because an internal reference is not a 50 ohm source.
- * Expected mean: 15/16 * 4096 = 3840; the window allows +-5 %. */
-#define SELFTEST_PINSEL   6u
-#define SELFTEST_SAMC     3u      /* 6.5 TAD = 81 ns, as in Example 16-3 */
-#define SELFTEST_HALVES   6u      /* halves to let the switch settle    */
-#define SELFTEST_MIN      3648u   /* 3840 - 5 %                          */
-#define SELFTEST_MAX      4032u   /* 3840 + 5 %                          */
+/* SELFTEST_* moved to meter.c with capture_selftest() (P9.3, 27.09.2026). */
 
 /* Heartbeat: LED toggles every N completed halves. 39 062 halves per
  * second, so 19 531 gives a 1 Hz blink, 3 906 a 5 Hz blink. */
@@ -220,9 +212,12 @@ static volatile bool     overrun_abort  = false;
  * very first overrun of every later test tripped it again and every
  * test reported "DMA channel disabled" (run 9). */
 static volatile uint32_t overrun_run    = 0;
-/* One burst and then stop, decided in the ISR (capture_oneshot). */
-static volatile uint32_t oneshot_left   = 0u;  /* bursts still to run */
-static volatile uint32_t oneshot_ticks  = 0;   /* of the burst alone */
+/* One burst and then stop, decided in the ISR (capture_oneshot, now
+ * meter.c). Non-static since P9.3 (27.09.2026): capture_oneshot_n() in
+ * meter.c sets/clears them, dma0_event() below still reads/decrements
+ * oneshot_left directly - see capture_priv.h. */
+volatile uint32_t oneshot_left   = 0u;  /* bursts still to run */
+volatile uint32_t oneshot_ticks  = 0;   /* of the burst alone */
 
 /* The triggered stream of the chain test (capture_chain_start): SCCP1
  * paces the ADC in Single Conversion mode, the DMA runs on by itself, and
@@ -749,7 +744,10 @@ void counters_clear(void)
  * even number of samples), four loads per pass. The compiler barrier
  * keeps the reads after whatever told the caller the half was ready.
  * Same result as before: the sum of the half's samples. */
-static void process_buffer(const volatile uint16_t *b, uint32_t n)
+/* Non-static since P9.3 (27.09.2026): meter.c's capture_process_bench()
+ * calls it too - see capture_priv.h for why it stays defined here
+ * (capture_service() below is its other caller). */
+void process_buffer(const volatile uint16_t *b, uint32_t n)
 {
     __asm__ volatile ("" ::: "memory");
     const uint32_t *w = (const uint32_t *)(const volatile void *)b;
@@ -769,18 +767,9 @@ static void process_buffer(const volatile uint16_t *b, uint32_t n)
     SIM_CHECK_HALF(b, n);             /* simulator: is this really the next half? */
 }
 
-/* capture.h: the processing of one half timed with nothing else running -
- * the DMA idle, no interrupt - against which the load measured in a
- * stream shows what the DMA's bus traffic costs the CPU. Timer1 ticks. */
-uint32_t capture_process_bench(void)
-{
-    const uint32_t t0 = timebase_ticks();
-    process_buffer(&buf[0], half_len);
-    return timebase_ticks() - t0;
-}
-
-/* half_mean() is lib/stats.c since P2.2 (27.09.2026); capture_selftest()
- * below is its only caller here. */
+/* capture_process_bench() moved to meter.c with the other back-to-back
+ * instruments (P9.3, 27.09.2026); half_mean() (lib/stats.c, P2.2) moved
+ * with it - capture_selftest() is its only caller. */
 
 bool capture_service(void)
 {
@@ -811,8 +800,13 @@ bool capture_service(void)
 }
 
 /* Wait until blocks_done passes a value. Returns 0, or 6 (nothing
- * moves) or 8 (the DMA switched itself off, e.g. on an address fault). */
-static uint32_t wait_for_blocks(uint32_t target)
+ * moves) or 8 (the DMA switched itself off, e.g. on an address fault).
+ * Non-static since P9.3 (27.09.2026): meter.c's capture_selftest()/
+ * _clkoff_probe()/_oneshot_n()/_measure_rate() call it too - see
+ * capture_priv.h for why it stays defined here (it calls guard_check(),
+ * which reads the private DMA buffer's guard words directly, and
+ * capture_service() below calls it too). */
+uint32_t wait_for_blocks(uint32_t target)
 {
     uint32_t n = WAIT_LIMIT;
     while (blocks_done < target) {
@@ -824,93 +818,9 @@ static uint32_t wait_for_blocks(uint32_t target)
     return 0u;
 }
 
-uint32_t capture_selftest(uint32_t *mean)
-{
-    const uint8_t  keep_pinsel = adc_pinsel();
-    const uint8_t  keep_samc   = adc_samc();
-    const bool     was_running = capture_settle();   /* defined start   */
-    uint32_t       rc;
-
-    (void)capture_set_input(SELFTEST_PINSEL, SELFTEST_SAMC);
-    capture_start();
-
-    /* The switch takes effect at the next DONE, then a full burst runs
-     * on the new input: wait long enough that the half we judge is the
-     * reference and nothing else. */
-    rc = wait_for_blocks(blocks_done + SELFTEST_HALVES);
-    if (rc == 0u) {
-        /* The cast drops `volatile`: the completed half is the one the
-         * DMA finished last and is not writing (it fills the other half
-         * until the next DONE), so half_mean() may read it as ordinary
-         * memory. Same reasoning as completed_half_stats() in cli.c. */
-        const uint32_t m = half_mean((const uint16_t *)capture_completed_half(), half_len);
-        selftest_mean = m;
-        if (mean != NULL) { *mean = m; }
-        if ((m < SELFTEST_MIN) || (m > SELFTEST_MAX)) { rc = 7u; }
-    }
-
-    if (rc == 0u) {
-        console_kv("[selftest] mean on internal 15/16 VDD (expect ~3840)", selftest_mean);
-    } else if (rc == 6u) {
-        console_puts("[selftest] no DMA blocks arrived\r\n");
-    } else if (rc == 7u) {
-        console_kv("[selftest] mean outside 3648..4032", selftest_mean);
-    } else {
-        console_puts("[selftest] DMA channel disabled\r\n");
-    }
-
-    (void)capture_set_input(keep_pinsel, keep_samc);
-    if (rc == 0u) {
-        rc = wait_for_blocks(blocks_done + SELFTEST_HALVES);   /* settle */
-    }
-    if (!was_running) {
-        capture_stop();
-    }
-    return rc;
-}
-
-/* ------------------------------------------------------------------ *
- * Delivered rate
- *
- * Timer1 (timebase.c) is only the stopwatch; the ADC clock produces the
- * rate. Measuring it is one thing and one thing only now: run `halves`
- * halves at whatever the divider is set to and divide the sample count
- * by the elapsed time. The judgement - does this rate match the ratio,
- * and did anything get lost - belongs to the caller, which prints it.
- * ------------------------------------------------------------------ */
-uint32_t capture_clkoff_probe(uint32_t halves)
-{
-#ifdef __MPLAB_DEBUGGER_SIMULATOR
-    (void)halves;
-    return 6u;
-#else
-    /* The control experiment for the question runs 8 and 9 raised: is the
-     * ADC really clocked from CLKGEN6? Table 16-1 says it is, and yet the
-     * generator's divider has no effect on the conversion rate. So take
-     * the core down, switch the generator OFF, bring the core back and
-     * try to convert.
-     *
-     * Returns 0 if halves still arrive - which would mean the ADC is not
-     * running off CLKGEN6 at all and explains everything at a stroke - or
-     * 6/8 if nothing arrives, which is the expected, boring answer. The
-     * generator and the core are restored either way. */
-    (void)capture_settle();
-    adc_deinit();
-    clock_adc_off();
-    const bool ready_off = adc_reinit();   /* does the core even come up? */
-    counters_clear();
-    const uint32_t target = blocks_done + halves;
-    capture_start();
-    const uint32_t rc = wait_for_blocks(target);
-    (void)capture_settle();
-
-    adc_deinit();                          /* restore, in the boot order  */
-    (void)clock_adc_on();
-    (void)adc_reinit();
-    console_kv("[clkoff]   ADC core reported ready with the generator off", ready_off ? 1u : 0u);
-    return rc;
-#endif
-}
+/* capture_selftest() and capture_clkoff_probe() (with the "Delivered
+ * rate" comment that used to introduce it here) moved to meter.c with the
+ * other back-to-back instruments (P9.3, 27.09.2026). */
 
 /* ------------------------------------------------------------------ *
  * The variant matrix (capture.h)
@@ -1193,38 +1103,10 @@ void capture_fill(uint16_t v)
     for (uint32_t i = 0; i < SAMPLES_PER_BUF_MAX; i++) { buf[i] = v; }
 }
 
-uint32_t capture_oneshot(void)
-{
-    return capture_oneshot_n(1u);
-}
-
-uint32_t capture_oneshot_n(uint32_t bursts)
-{
-    if (bursts == 0u) { bursts = 1u; }
-    /* Fill the buffer exactly once and stop. The ADC burst is CNT =
-     * 2 * half_len conversions, so one burst is one full buffer: HALF at
-     * the middle, DONE at the end, and the ISR does not restart it. The
-     * buffer then holds one contiguous window that nothing is writing
-     * any more, which is the only way to look at the data at a rate
-     * where the main loop cannot keep up (run 11). */
-    (void)capture_settle();
-    counters_clear();
-    const uint32_t target = blocks_done + (2u * bursts);  /* HALF and DONE each */
-    oneshot_left = bursts;
-    capture_start();
-    /* The clock starts HERE, not before capture_settle(): taking the DMA
-     * channel down and setting it up again costs a fixed 11.3 us, and
-     * with it inside the window every rate came out low - by 2.2 % at
-     * 4 MSPS and 17.8 % at 40, purely because the same 11.3 us is a
-     * different share of a shorter burst (run 14). Corrected, the
-     * delivered rate matches the setting to better than 1 % everywhere. */
-    const uint32_t t0 = timebase_ticks();
-    const uint32_t rc = wait_for_blocks(target);
-    oneshot_ticks = timebase_ticks() - t0;
-    oneshot_left  = 0u;
-    capture_stop();
-    return rc;
-}
+/* capture_oneshot() and capture_oneshot_n() moved to meter.c with the
+ * other back-to-back instruments (P9.3, 27.09.2026); oneshot_left/
+ * oneshot_ticks stay defined here (capture_priv.h) because dma0_event()
+ * below reads oneshot_left on every DONE. */
 
 uint32_t capture_oneshot_ticks(void)
 {
@@ -1236,26 +1118,8 @@ const volatile uint16_t *capture_buffer(void)
     return &buf[0];
 }
 
-uint32_t capture_measure_rate(uint32_t halves, uint32_t *ksps)
-{
-#ifdef __MPLAB_DEBUGGER_SIMULATOR
-    (void)halves;
-    if (ksps != NULL) { *ksps = 0u; }
-    return 0u;                        /* no ADC clock to measure        */
-#else
-    (void)capture_settle();           /* defined start                  */
-    counters_clear();
-    const uint32_t target = blocks_done + halves;
-    const uint32_t t0     = timebase_ticks();
-    capture_start();
-    const uint32_t rc     = wait_for_blocks(target);
-    const uint32_t ticks  = timebase_ticks() - t0;
-    (void)capture_settle();           /* test over: DMA down            */
-    if (rc != 0u) { return rc; }
-    if (ksps != NULL) { *ksps = timebase_ksps(halves * half_len, ticks); }
-    return 0u;
-#endif
-}
+/* capture_measure_rate() moved to meter.c with the other back-to-back
+ * instruments (P9.3, 27.09.2026). */
 
 void capture_regs_dump(void)
 {

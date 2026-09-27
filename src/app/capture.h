@@ -10,6 +10,13 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+/* capture_process_bench()/_selftest()/_clkoff_probe()/_measure_rate()/
+ * _oneshot()/_oneshot_n() moved to src/meter/meter.c (P9.3, 27.09.2026).
+ * Declared in meter.h, pulled in here so every existing caller of
+ * capture.h keeps working unchanged - the smaller diff over adding
+ * #include "meter.h" to cli.c/bench.c/gui_link.c/chaintest.c/dactest.c
+ * individually. */
+#include "meter.h"
 
 /* The buffer is allocated at this maximum; the length in use is set at
  * run time (capture_set_half_len, "buf" command) and defaults to the
@@ -179,49 +186,12 @@ uint32_t    capture_variant_ksps(void);        /* what it should deliver */
 uint32_t    capture_trigger_period_ns(void);   /* 0 = untriggered        */
 void        capture_variant_regs(void);        /* the defining registers */
 
-/* Sample the ADC's internal 15/16 * VDD reference (ANx6) for a few halves
- * and compare the mean against the expected window. Blocking, bounded.
- * Returns 0 on success, 6 if no data arrived, 7 if the mean is outside the
- * window, 8 if the DMA channel switched itself off. The mean is stored in
- * selftest_mean and returned through *mean if non-NULL. Restores the
- * previous input afterwards. */
-uint32_t capture_selftest(uint32_t *mean);
-
-/* Switch CLKGEN6 off and try to convert anyway: the control experiment
- * for "is the ADC really clocked from CLKGEN6?". 0 means halves still
- * arrived with the generator off, anything else that nothing did. The
- * generator and the ADC core are restored either way. Blocking, bounded.
- * In the simulator it returns 6 without doing anything. */
-uint32_t capture_clkoff_probe(uint32_t halves);
-
-/* Run `halves` halves at whatever the divider is set to and return the
- * delivered rate in ksps, measured against Timer1. Blocking, bounded,
- * prints nothing - the caller judges and reports. Returns 0, or 6/8 from
- * the waits. In the simulator it returns 0 with ksps 0. */
-uint32_t capture_measure_rate(uint32_t halves, uint32_t *ksps);
-
 /* Process the completed half if a new one arrived; returns true if it did.
  * Called from the main loop and from the console's yield hook, so that
  * the measurement keeps running while a long console reply drains. */
 bool capture_service(void);
 
-/* Fill the buffer exactly once and stop, the stop decided in the DMA
- * interrupt. Afterwards the whole buffer - 2 * capture_half_len()
- * samples from capture_buffer() - is one contiguous window that nothing
- * is writing any more. This is the only way to look at the data at a
- * rate where the main loop runs tens of milliseconds behind the DMA.
- * Returns 0, or 6/8 from the wait. */
-uint32_t capture_oneshot(void);
-/* The same, but `bursts` bursts back to back before it stops - the ISR
- * restarts each one exactly as continuous streaming does, and only the
- * last ends the run. It exists to answer the contradiction of run 16: a
- * single burst delivers the rate the PLL was set to, while a run of a
- * thousand delivers about 40 MSPS whatever the setting. If the rate
- * measured over ten bursts equals the rate over one, the first burst is
- * ordinary and the difference lies in continuous operation; if it jumps,
- * the first burst is the odd one and every "clean" rate measured so far
- * describes a start-up, not the stream. */
-uint32_t capture_oneshot_n(uint32_t bursts);
+/* capture_oneshot()/capture_oneshot_n(): meter.h (P9.3, 27.09.2026). */
 /* Timer1 ticks of the last one-shot, the BURST ALONE - the DMA channel
  * being taken down and set up again costs a fixed 11.3 us and used to sit
  * inside the measured window, which made every rate read low (run 14).
@@ -286,8 +256,7 @@ void     capture_fill(uint16_t v);
  * half torn down. */
 bool capture_chain_halt(void);
 bool capture_chain_resume(void);
-/* One half processed with the DMA idle, in Timer1 ticks (80 ns). */
-uint32_t capture_process_bench(void);
+/* capture_process_bench(): meter.h (P9.3, 27.09.2026). */
 /* Processing cost of a half in Timer1 ticks, since counters_clear(). */
 extern volatile uint32_t proc_ticks_max;
 extern volatile uint32_t proc_ticks_sum;
