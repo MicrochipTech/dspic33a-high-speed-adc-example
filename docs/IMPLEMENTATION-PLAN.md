@@ -23,7 +23,7 @@ commit message stays the detailed record; this table is the one place to see whe
 work stands. `done` = committed and re-checked by the lead session (builds, `trace.bat`,
 `hosttest.bat`, goldens, no trailer).
 
-As of 27.09.2026, 18:30. Done: 42 of 52 tasks in the N+1 scope (63 planned plus P0.9 = 64; P8 and P10, 12
+As of 27.09.2026, 18:30. Done: 43 of 52 tasks in the N+1 scope (63 planned plus P0.9 = 64; P8 and P10, 12
 tasks, moved to N+2 on 27.09.2026); P0.5b and P4.6a were added along the way and are
 not counted.
 
@@ -73,7 +73,8 @@ not counted.
 | P9.1 `src/app/pingpong.c` | done | `4d40f82`, merge `12d2383` | Sonnet | `pingpong_on_half()` static inline; `dma0_event` 124 instructions before and after, `_DMA0Interrupt` 42/0; `late`/`overrun` stay capture.c globals (two literal designs measured slower) |
 | P9.2 Simulator hooks out of pingpong.c | done | `d868bbb`, merge `12d2383` | Sonnet | pingpong.c had none to move; [SIM] run once already: `[simtest] PASS`, 100 halves, 0 mismatches |
 | P9.3 `src/meter/meter.c` | done | `37e9484` | Sonnet | `capture_process_bench/_selftest/_clkoff_probe/_oneshot/_oneshot_n/_measure_rate` moved verbatim (two like-for-like substitutions: direct `buf`/`half_len` reads became `capture_buffer()`/`capture_half_len()` calls); `process_buffer()`/`wait_for_blocks()`/`oneshot_left`/`oneshot_ticks` stay in capture.c, made non-static, reached through `capture_priv.h` (guard_check()/dma_buffer stay private, oneshot_left is also touched by `dma0_event()`); `_DMA0Interrupt` 42/0, `_U2RXInterrupt` 55/0 unchanged, `dma0_event()` 124/124 instructions (only a symbol-label change); traces 13/13, `b2b`/`variants` byte-identical, `stream_on`/`stream_on_input` needed `meter.c` added to their `.sources` (chaintest.c calls the moved functions) but their goldens are unchanged; [SMOKE] PASS |
-| P9.4-P9.5 acquisition.c, [SIM] | open | | | P9.5 = [SIM], runs without asking since 27.09.2026 |
+| P9.4 `src/app/acquisition.c` | done | this commit | Sonnet | rate setters + variant matrix (capture.c) and the standing stream `chain_stream_*()` (chaintest.c, plus `chain_streaming()`/`chain_stream_state()` not named in the card but sharing their state) moved verbatim; `clkdiv_cur` (capture_priv.h) and `chaintest.c`'s `setup()`/`restore()`/`triangle_for()`/`rate_hz()`/`ksps_of()`/`wait_ticks()`/`g_trig_hz`/`s_core`/`s_pinsel`/`s_samc`/`s_test_dac` (new `chaintest_priv.h`) reached as plain externs; traces `b2b`/`clk`/`variants` needed `acquisition.c` plus `chaintest.c`'s own dependency closure and `-DHAVE_CHAINTEST` (linking one object that mixes both groups); 13/13 traces unchanged, `stream_on`/`stream_on_input` goldens byte-identical, fncmp shows only the moved/renamed symbols differ (identical instruction counts), `_DMA0Interrupt` 42/0, `_U2RXInterrupt` 55/0, [SMOKE] PASS |
+| P9.5 [SIM] acceptance run | open | | | runs without asking since 27.09.2026 |
 | P10.1-P10.4 Split `clock.c` | moved to N+2 | | | user decision 27.09.2026; when it is done: needs `trace_point()` between clock steps (approach (a)) |
 | P11.1 Routing types | done | `4bddb2c` (worktree, beside P9.3) | Sonnet | routing.h/.c, host-only, no apply yet; pin-reachability table from a new generator, tools/gen_route_pins.py, against tools/pins128.py |
 | P11.2 Host tests of the conflict rules | done | `0a5ecca`, merge (see log) | Sonnet | tests/host/test_routing.c, 45/45 checks, one test per rule; a deliberately broken SCCP check caught it (44/45, reverted) |

@@ -1,11 +1,12 @@
 /*
- * capture_priv.h - private state and helpers shared with meter.c only
+ * capture_priv.h - private state and helpers shared with meter.c and
+ * acquisition.c only
  *
  * NOT part of capture.h's public, console-facing API - nothing outside
- * capture.c and meter.c includes this. It exists because P9.3 (27.09.2026)
- * moved capture_selftest()/capture_clkoff_probe()/capture_oneshot_n()/
- * capture_measure_rate() into src/meter/meter.c, but two things they need
- * stay in capture.c on purpose:
+ * capture.c, meter.c and acquisition.c includes this. It exists because
+ * P9.3 (27.09.2026) moved capture_selftest()/capture_clkoff_probe()/
+ * capture_oneshot_n()/capture_measure_rate() into src/meter/meter.c, but
+ * two things they need stay in capture.c on purpose:
  *
  *   process_buffer()   also called by capture_service() (the main loop),
  *                       which stays in capture.c; and
@@ -45,5 +46,13 @@ extern volatile uint32_t oneshot_left;
 /* Timer1 ticks of the last one-shot burst alone (capture.c); read back by
  * the public capture_oneshot_ticks(), which stays in capture.c too. */
 extern volatile uint32_t oneshot_ticks;
+
+/* The ADC clock divide ratio last asked for, in hundredths (capture.c).
+ * P9.4 (27.09.2026): acquisition.c's capture_set_clkdiv() writes it;
+ * capture.c's own capture_clkdiv_wanted() reads it back. Same "plain
+ * extern" pattern as oneshot_left/_ticks above, not volatile - only
+ * ever written from capture_set_clkdiv(), which itself is not
+ * reentrant (it settles the capture first). */
+extern uint32_t clkdiv_cur;
 
 #endif /* CAPTURE_PRIV_H */

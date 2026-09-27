@@ -17,6 +17,12 @@
  * #include "meter.h" to cli.c/bench.c/gui_link.c/chaintest.c/dactest.c
  * individually. */
 #include "meter.h"
+/* capture_set_pll()/_set_rate()/_set_clkdiv() and the variant matrix
+ * (capture_select_variant() and its reporting functions) moved to
+ * src/app/acquisition.c (P9.4, 27.09.2026), together with chaintest.c's
+ * chain_stream_*() - the standing stream is acquisition, not a test.
+ * Declared in acquisition.h, pulled in here the same way meter.h is. */
+#include "acquisition.h"
 
 /* The buffer is allocated at this maximum; the length in use is set at
  * run time (capture_set_half_len, "buf" command) and defaults to the
@@ -113,78 +119,25 @@ uint8_t capture_samc(void);
  * by the eight clocks one conversion takes. The clock comes from PLL1
  * through CLKGEN6, and PLL1 feeds nothing else (the CPU is on PLL2).
  *
- * Two knobs exist and only one of them works:
- *   capture_set_pll(p1, p2)  PLL1's output dividers, 1600 MHz / (p1*p2),
- *                            p1 >= p2, both 1..7: 320 down to 32.65 MHz,
- *                            i.e. 40 down to 4.08 MSPS, and 5/5 = 8 MSPS.
- *                            THIS is the rate control.
- *   capture_set_clkdiv(r)    the CLKGEN6 divide ratio in hundredths. It
- *                            arrives in the register and is confirmed by
- *                            DIVSWEN and CLKRDY - and does not change the
- *                            conversion rate (HARDWARE-LOG runs 8 and 9).
- *                            Kept for the record and for the "clk"
- *                            command; do not build on it.
- * Both return CLKDIV_OK or the step that failed (clock.h), and both do
- * the switch in the boot order: DMA channel down, ADC core off, clock
- * changed, core on, DMA set up from scratch on the next start.
+ * capture_set_pll()/_set_rate()/_set_clkdiv() - the two knobs, only one of
+ * which works - moved to src/app/acquisition.c (P9.4, 27.09.2026),
+ * declared in acquisition.h, included above. What stays here reads back
+ * what the hardware is set up for rather than changing it:
  *
  * capture_nominal_ksps() is what the hardware is set up for, read back
  * from the clock registers - not what was asked for. */
 struct pll_step { uint8_t p1, p2; };
-uint32_t capture_set_pll(uint32_t p1, uint32_t p2);
-/* The same switch, but addressed by a rate instead of by divider
- * settings: the closest combination of PLL1 output dividers and PLLFBDIV
- * is chosen (clock.h), so the caller says 8000 and gets 8000. *got_ksps
- * is what the hardware will deliver - always read it, the wish is not
- * always reachable exactly. */
-uint32_t capture_set_rate(uint32_t want_ksps, uint32_t *got_ksps);
-uint32_t capture_set_clkdiv(uint32_t ratio_h);
 uint32_t capture_clkdiv(void);
 uint32_t capture_clkdiv_wanted(void);
 uint32_t capture_nominal_ksps(uint32_t ignored);
-/* The rate ladder, slowest first. */
+/* The rate ladder, slowest first - acquisition.c's capture_select_
+ * variant() reads it too, through this same public accessor. */
 const struct pll_step *capture_sweep_steps(uint32_t *count);
 
-/* ---- The variant matrix ----
- *
- * Every documented way to set the sample rate on this device, as
- * something the board can be asked to try one after another. The point
- * is not elegance: four of these were tried before and reported as "does
- * not work", and for three of them the reason turned out to be in our own
- * code (see sccp.h). Since the documentation has been wrong twice, the
- * board decides.
- *
- * capture_select_variant() takes the target rate in kSPS and translates
- * it into that variant's registers - a PLL pair, an SCCP period, an
- * RPTCNT, an accumulation count. It leaves the chain configured and idle;
- * capture_oneshot() then runs it. False if the variant could not be set
- * up at all (a clock that did not come, a period out of range).
- *
- * capture_trigger_period_ns() is 0 for the untriggered variants and the
- * exact trigger period for the others. With it, one buffer and the window
- * length from Timer1, the number of DMA transfers per trigger can be
- * computed - which is the direct measurement of the issue Microchip
- * acknowledges for this silicon: "ADC triggers for DMA on this device
- * have an issue. A few transfers are possible per one trigger." */
-typedef enum {
-    CAP_VAR_B2B = 0,          /* back-to-back, rate from PLL1           */
-    CAP_VAR_SCCP_T_PER,       /* SCCP1 timer + special event, periph clk */
-    CAP_VAR_SCCP_T_G13,       /* SCCP1 timer + special event, CLKGEN13   */
-    CAP_VAR_SCCP_OC_PER,      /* SCCP1 output compare, periph clk        */
-    CAP_VAR_SCCP_OC_G13,      /* SCCP1 output compare, CLKGEN13          */
-    CAP_VAR_SCCP_OLD,         /* the combination that failed in runs 5-7 */
-    CAP_VAR_SCCP_TRG2,        /* SCCP1 as TRG2 inside an Integration burst */
-    CAP_VAR_RPTCNT,           /* the ADC repeat timer                    */
-    CAP_VAR_OVERSAMPLE,       /* MODE 3, ACCNUM divides the event rate   */
-    CAP_VAR_CLKDIV,           /* the CLKGEN6 divider                     */
-    CAP_VAR_COUNT
-} capture_variant_t;
-
-bool        capture_select_variant(capture_variant_t v, uint32_t want_ksps);
-const char *capture_variant_name(capture_variant_t v);
-uint32_t    capture_variant_ksps(void);        /* what it should deliver */
-uint32_t    capture_trigger_period_ns(void);   /* 0 = untriggered        */
-void        capture_variant_regs(void);        /* the defining registers */
+/* The variant matrix (capture_variant_t, capture_select_variant() and its
+ * reporting functions) moved to src/app/acquisition.c with the rate
+ * setters above (P9.4, 27.09.2026); declared in acquisition.h, included
+ * above. */
 
 /* Process the completed half if a new one arrived; returns true if it did.
  * Called from the main loop and from the console's yield hook, so that

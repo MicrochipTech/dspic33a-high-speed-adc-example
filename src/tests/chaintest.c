@@ -63,16 +63,16 @@
 #include "diag.h"
 #include "dma.h"
 #include "tri_eval.h"
+/* CHAIN_CORE/_PINSEL/_SAMC, TRIG_HZ_NOMINAL, CPU_PER_TICK, TICKS_PER_MS,
+ * CHAIN_ON_SIMULATOR and the setup()/restore()/triangle_for()/rate_hz()/
+ * ksps_of()/wait_ticks()/g_trig_hz/s_core/s_pinsel/s_samc/s_test_dac this
+ * file shares with acquisition.c's chain_stream_*() (P9.4, 27.09.2026):
+ * chaintest_priv.h, NOT part of chaintest.h's public API. */
+#include "chaintest_priv.h"
 
 /* ------------------------------------------------------------------ *
  * Configuration
  * ------------------------------------------------------------------ */
-#define CHAIN_CORE        DAC_ADC_CORE      /* 5: DACOUT2 is AD5AN3        */
-#define CHAIN_PINSEL      DAC_ADC_PINSEL    /* 3: RA8                      */
-#define CHAIN_SAMC        0u                /* 0.5 TAD, the shortest       */
-#define TRIG_HZ_NOMINAL   160000000u        /* CLKGEN13 = PLL1 out / 2     */
-#define CPU_PER_TICK      16u               /* 200 MHz / 12.5 MHz          */
-
 /* The rate ladder: SCCP1 period in ticks of its 160 MHz clock, slowest
  * first. 100 kSPS, then 1, 4, 8, 10, 16, 20, 26.7, 32, 40 MSPS
  * (ANALYSIS.md C.12.9). */
@@ -88,7 +88,7 @@ typedef enum { V_PASS = 0, V_FAIL, V_SKIP, V_INFO } verdict_t;
 
 static uint32_t g_stage;                    /* stage being run             */
 static uint16_t tally[10][4];               /* per stage, per verdict      */
-static uint32_t g_trig_hz = TRIG_HZ_NOMINAL;/* measured in S1              */
+uint32_t        g_trig_hz = TRIG_HZ_NOMINAL;/* measured in S1              */
 static bool     g_setup_ok;                 /* clock tree and core         */
 static bool     g_trigger_ok;               /* S2: SCCP1 reaches the ADC   */
 static bool     s4_ok[LADDER_LEN], s4_data[LADDER_LEN];
@@ -183,16 +183,14 @@ static void say(const char *s) { console_puts(s); }
 /* ------------------------------------------------------------------ *
  * Time
  * ------------------------------------------------------------------ */
-static void wait_ticks(uint32_t t)
+void wait_ticks(uint32_t t)
 {
     const uint32_t t0 = timebase_ticks();
     while ((timebase_ticks() - t0) < t) { }
 }
 
-#define TICKS_PER_MS  (TIMEBASE_HZ / 1000u)
-
-static uint32_t rate_hz(uint32_t n)       { return g_trig_hz / n; }
-static uint32_t ksps_of(uint32_t n)       { return (g_trig_hz / 1000u + n / 2u) / n; }
+uint32_t rate_hz(uint32_t n)       { return g_trig_hz / n; }
+uint32_t ksps_of(uint32_t n)       { return (g_trig_hz / 1000u + n / 2u) / n; }
 
 /* Triggers expected in a Timer1 window, and the tolerance of the count:
  * +-3 Timer1 ticks of read placement, about 1 us between a Timer1 read
@@ -346,10 +344,10 @@ static bool     setup_trig, setup_dac;
  * whether this module drives DAC2 as the test signal (the chain test and
  * "stream on <ksps>" do; "stream on <ksps> <core> <pinsel>" leaves the
  * DAC to whoever set it up - the GUI's DAC controls). */
-static uint8_t s_core = CHAIN_CORE, s_pinsel = CHAIN_PINSEL, s_samc = CHAIN_SAMC;
-static bool    s_test_dac = true;
+uint8_t s_core = CHAIN_CORE, s_pinsel = CHAIN_PINSEL, s_samc = CHAIN_SAMC;
+bool    s_test_dac = true;
 
-static bool setup(void)
+bool setup(void)
 {
     timebase_init();
     (void)capture_settle();
@@ -368,7 +366,7 @@ static bool setup(void)
     return g_setup_ok;
 }
 
-static void restore(void)
+void restore(void)
 {
     (void)capture_settle();
     sccp1_stop();
@@ -397,7 +395,7 @@ static void restore(void)
  * 100 kSPS the slowest triangle the DAC makes lasts only about 29
  * samples per slope; that is what it gets there. */
 #define SLOPE_TARGET  128u
-static bool triangle_for(uint32_t rate, uint16_t *slp_out)
+bool triangle_for(uint32_t rate, uint16_t *slp_out)
 {
     const uint32_t f = clock_dac_hz();
     if (f == 0u) { return false; }
@@ -1147,12 +1145,9 @@ static void summary(void)
 
 /* The simulator has no SCCP, ADC or DMA: the test says so and stops.
  * A run-time test rather than #ifdef, so that the simulator build still
- * compiles - and warns about - every line of it. */
-#ifdef __MPLAB_DEBUGGER_SIMULATOR
-#define CHAIN_ON_SIMULATOR  1
-#else
-#define CHAIN_ON_SIMULATOR  0
-#endif
+ * compiles - and warns about - every line of it. CHAIN_ON_SIMULATOR
+ * itself: chaintest_priv.h (P9.4, 27.09.2026 - acquisition.c's
+ * chain_stream_on_input() needs it too). */
 
 void chain_all(uint32_t first, uint32_t last)
 {
@@ -1235,119 +1230,13 @@ void chain_run(uint32_t ksps, uint32_t seconds)
     say("@END\r\n");
 }
 
-/* ------------------------------------------------------------------ *
- * The chain as a standing stream ("stream on") - the example itself
- *
- * Set up as the test does, the DAC triangle on RA8 as the signal, the
- * triggered stream started with no end, and then the command RETURNS:
- * from here on main() serves every completed half through
- * capture_service(), exactly as the application will, and the console
- * stays free. Nothing prints by itself while it runs; "stream" asks.
- * ------------------------------------------------------------------ */
-static bool     s_on     = false;
-static uint32_t s_ticks  = 0u;
-static uint16_t s_slpdat = 0u;
-
-/* Baselines for chain_stream_grab_begin()'s per-cycle counters: the
- * lifetime counter as it stood after the previous grab (or after
- * "stream on", for the first one - all of them are 0 then, because
- * capture_chain_start() calls counters_clear()). */
-static uint32_t g_grab_ov0, g_grab_la0, g_grab_mi0, g_grab_hv0;
-static uint64_t g_grab_xf0;
-
-static uint32_t period_for(uint32_t ksps)
-{
-    uint32_t n = (g_trig_hz / 1000u + ksps / 2u) / ksps;
-    return (n < 4u) ? 4u : n;                 /* 40 MSPS is the ceiling      */
-}
-
-bool chain_stream_on(uint32_t ksps)
-{
-    return chain_stream_on_input(ksps, CHAIN_CORE, CHAIN_PINSEL, CHAIN_SAMC, true);
-}
-
-bool chain_stream_on_input(uint32_t ksps, uint8_t core, uint8_t pinsel, uint8_t samc,
-                           bool test_signal)
-{
-    chain_stream_off();
-    if (CHAIN_ON_SIMULATOR || (ksps == 0u) || (core < 1u) || (core > 5u) ||
-        (pinsel > 15u) || (samc > 31u)) { return false; }
-    g_trig_hz = TRIG_HZ_NOMINAL;
-    s_core = core; s_pinsel = pinsel; s_samc = samc; s_test_dac = test_signal;
-    const bool ok = setup();
-    s_core = CHAIN_CORE; s_pinsel = CHAIN_PINSEL; s_samc = CHAIN_SAMC; s_test_dac = true;
-    if (!ok) { restore(); return false; }
-    const uint32_t n = period_for(ksps);
-    uint16_t slp = 0u;                        /* 0 in the frame: no test triangle */
-    if (test_signal) { (void)triangle_for(rate_hz(n), &slp); }
-    wait_ticks(TICKS_PER_MS);
-    if (!capture_chain_start(n, SCCP_MODE_TIMER, 0u, false)) { restore(); return false; }
-    s_on     = true;
-    s_ticks  = n;
-    s_slpdat = slp;
-    g_grab_ov0 = 0u; g_grab_la0 = 0u; g_grab_mi0 = 0u; g_grab_hv0 = 0u; g_grab_xf0 = 0u;
-    return true;
-}
-
-void chain_stream_off(void)
-{
-    if (!s_on) { return; }
-    (void)capture_chain_stop();
-    restore();
-    s_on = false;
-}
-
-bool chain_streaming(void)
-{
-    return s_on;
-}
-
-bool chain_stream_grab_begin(chain_grab_t *g)
-{
-    if (!s_on) { return false; }
-    if (!capture_chain_halt()) {
-        /* The brake fired, or the chain was already down under us: leave
-         * nothing half-configured, and let "stream" say it is off. */
-        chain_stream_off();
-        return false;
-    }
-    g->win     = capture_completed_half();
-    g->win_len = capture_half_len();
-    g->from    = (uint32_t)(g->win - capture_buffer());
-    g->ksps    = ksps_of(s_ticks);
-    const uint32_t ov = dma_overrun, la = late_service, mi = proc_missed, hv = blocks_done;
-    const uint64_t xf = capture_transfers();
-    g->overrun   = ov - g_grab_ov0;
-    g->late      = la - g_grab_la0;
-    g->missed    = mi - g_grab_mi0;
-    g->halves    = hv - g_grab_hv0;
-    g->transfers = (uint32_t)(xf - g_grab_xf0);
-    g_grab_ov0 = ov; g_grab_la0 = la; g_grab_mi0 = mi; g_grab_hv0 = hv; g_grab_xf0 = xf;
-    g->slpdat  = s_slpdat;
-    g->dac_hz  = clock_dac_hz();
-    return true;
-}
-
-bool chain_stream_grab_end(void)
-{
-    if (!s_on) { return false; }
-    if (!capture_chain_resume()) {
-        chain_stream_off();
-        return false;
-    }
-    return true;
-}
-
-bool chain_stream_state(uint32_t *ksps, uint64_t *transfers, uint32_t *free_cyc)
-{
-    if (!s_on) { return false; }
-    *ksps = ksps_of(s_ticks);
-    *transfers = capture_transfers();
-    /* The budget as in S6: a half lasts half_len * N / f_trig, 16 CPU
-     * cycles per Timer1 tick, minus the mean processing time. */
-    const uint32_t hl = capture_half_len();
-    const uint32_t half_ticks = (uint32_t)(((uint64_t)hl * s_ticks * TIMEBASE_HZ) / g_trig_hz);
-    const uint32_t pmean = (proc_count != 0u) ? (proc_ticks_sum / proc_count) : 0u;
-    *free_cyc = (half_ticks > pmean) ? ((half_ticks - pmean) * CPU_PER_TICK / hl) : 0u;
-    return capture_chain_active();            /* false once the brake fired  */
-}
+/* The chain as a standing stream ("stream on") - chain_stream_on()/
+ * _on_input()/_off()/_streaming()/_state()/_grab_begin()/_grab_end() and
+ * their private state (s_on/s_ticks/s_slpdat, the grab baseline) moved to
+ * acquisition.c on 27.09.2026 (P9.4, docs/IMPLEMENTATION-PLAN.md): the
+ * standing stream the GUI drives is acquisition, not a test, even though
+ * it grew inside this file first. They reach setup()/restore()/
+ * triangle_for()/rate_hz()/ksps_of()/wait_ticks() and g_trig_hz/s_core/
+ * s_pinsel/s_samc/s_test_dac here through the narrow, non-public
+ * chaintest_priv.h - see that header for why each one stays defined in
+ * this file. */

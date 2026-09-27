@@ -180,8 +180,11 @@ static volatile uint8_t samc_next      = ADC_SAMC;
 /* The ADC clock divide ratio in hundredths, as last set successfully.
  * The hardware's own answer is clock_adc_div(); this is what was asked
  * for, so that a switch that did not arrive can be told from one that
- * did (capture_clkdiv_wanted vs capture_clkdiv). */
-static uint32_t          clkdiv_cur     = ADC_CLKDIV;
+ * did (capture_clkdiv_wanted vs capture_clkdiv). Non-static since P9.4
+ * (27.09.2026): acquisition.c's capture_set_clkdiv() writes it; reached
+ * through capture_priv.h, the same "plain extern" pattern oneshot_left
+ * already uses (P9.3). */
+uint32_t                  clkdiv_cur     = ADC_CLKDIV;
 
 /* Emergency brake against the overrun interrupt storm.
  *
@@ -640,49 +643,9 @@ static const struct pll_step sweep_steps[] = {
 
 
 
-uint32_t capture_set_clkdiv(uint32_t ratio_h)
-{
-    /* Kept for the record and for "clk": the CLKGEN6 divider does arrive
-     * in the register but does not change the conversion rate on this
-     * silicon (runs 8 and 9). The rate is set with capture_set_pll(). */
-    const bool restart = capture_settle();      /* DMA down, burst ended */
-    adc_deinit();                               /* core off              */
-    const uint32_t rc    = clock_adc_set_div(ratio_h);
-    const bool     ready = adc_reinit();        /* core on, ADRDY        */
-    if (rc == CLKDIV_OK) { clkdiv_cur = ratio_h; }
-    if (restart) { capture_start(); }           /* dma0_init() again     */
-    if (rc != CLKDIV_OK) { return rc; }
-    return ready ? CLKDIV_OK : CLKDIV_ADC;
-}
-
-uint32_t capture_set_pll(uint32_t p1, uint32_t p2)
-{
-    /* Same order as the divider and as the boot: DMA channel down and
-     * burst finished, ADC core off (the PLL's output dividers must not
-     * move while something runs off them, p778), PLL retuned, core on
-     * with ADRDY, DMA set up from scratch on the next start. */
-    const bool restart = capture_settle();
-    adc_deinit();
-    const uint32_t rc    = clock_adc_set_pll(p1, p2);
-    const bool     ready = adc_reinit();
-    if (restart) { capture_start(); }
-    if (rc != CLKDIV_OK) { return rc; }
-    return ready ? CLKDIV_OK : CLKDIV_ADC;
-}
-
-uint32_t capture_set_rate(uint32_t want_ksps, uint32_t *got_ksps)
-{
-    /* Same order as every other clock change here, and the same reason:
-     * the DMA channel and the ADC core are what run off this clock, so
-     * they go down first and come back the way the boot brings them up. */
-    const bool restart = capture_settle();
-    adc_deinit();
-    const uint32_t rc    = clock_adc_set_rate(want_ksps, got_ksps);
-    const bool     ready = adc_reinit();
-    if (restart) { capture_start(); }
-    if (rc != CLKDIV_OK) { return rc; }
-    return ready ? CLKDIV_OK : CLKDIV_ADC;
-}
+/* capture_set_clkdiv()/_set_pll()/_set_rate() moved to acquisition.c
+ * (P9.4, 27.09.2026); clkdiv_cur (above) is what capture_set_clkdiv()
+ * writes, reached through capture_priv.h. */
 
 uint32_t capture_clkdiv(void)        { return clock_adc_div(); }  /* hardware */
 uint32_t capture_clkdiv_wanted(void) { return clkdiv_cur; }       /* asked for */
@@ -822,175 +785,9 @@ uint32_t wait_for_blocks(uint32_t target)
  * rate" comment that used to introduce it here) moved to meter.c with the
  * other back-to-back instruments (P9.3, 27.09.2026). */
 
-/* ------------------------------------------------------------------ *
- * The variant matrix (capture.h)
- * ------------------------------------------------------------------ */
-static capture_variant_t var_cur      = CAP_VAR_B2B;
-static uint32_t          var_ksps     = 0u;   /* what it should deliver */
-static uint32_t          var_trig_ns  = 0u;   /* 0 = untriggered        */
-
-const char *capture_variant_name(capture_variant_t v)
-{
-    switch (v) {
-    case CAP_VAR_B2B:         return "back-to-back, rate from PLL1";
-    case CAP_VAR_SCCP_T_PER:  return "SCCP1 timer + special event, peripheral clock";
-    case CAP_VAR_SCCP_T_G13:  return "SCCP1 timer + special event, CLKGEN13";
-    case CAP_VAR_SCCP_OC_PER: return "SCCP1 output compare, peripheral clock";
-    case CAP_VAR_SCCP_OC_G13: return "SCCP1 output compare, CLKGEN13";
-    case CAP_VAR_SCCP_OLD:    return "SCCP1 as in runs 5-7 (trigger 34, rollover)";
-    case CAP_VAR_SCCP_TRG2:   return "SCCP1 special event as TRG2 inside a burst";
-    case CAP_VAR_RPTCNT:      return "ADC repeat timer (RPTCNT)";
-    case CAP_VAR_OVERSAMPLE:  return "oversampling, ACCNUM divides the event rate";
-    case CAP_VAR_CLKDIV:      return "CLKGEN6 divider";
-    default:                  return "?";
-    }
-}
-
-uint32_t capture_variant_ksps(void)      { return var_ksps; }
-uint32_t capture_trigger_period_ns(void) { return var_trig_ns; }
-
-/* The PLL pair whose rate is closest to the wish, from the sweep ladder. */
-static struct pll_step pll_for(uint32_t want_ksps, uint32_t *got_ksps)
-{
-    uint32_t n = 0u;
-    const struct pll_step *st = capture_sweep_steps(&n);
-    struct pll_step best = st[0];
-    uint32_t best_d = 0xFFFFFFFFu, best_k = 0u;
-    for (uint32_t i = 0; i < n; i++) {
-        const uint32_t k = (uint32_t)(1600000u / ((uint32_t)st[i].p1 * st[i].p2) / 8u);
-        const uint32_t d = (k > want_ksps) ? (k - want_ksps) : (want_ksps - k);
-        if (d < best_d) { best_d = d; best = st[i]; best_k = k; }
-    }
-    if (got_ksps != NULL) { *got_ksps = best_k; }
-    return best;
-}
-
-bool capture_select_variant(capture_variant_t v, uint32_t want_ksps)
-{
-    if ((v >= CAP_VAR_COUNT) || (want_ksps == 0u)) { return false; }
-
-    (void)capture_settle();           /* idle before anything changes   */
-    sccp1_stop();
-    var_cur     = v;
-    var_ksps    = 0u;
-    var_trig_ns = 0u;
-
-    /* Every variant starts from the same base: the ADC clock undivided
-     * and at full speed, so that only the variant's own mechanism can
-     * account for a rate below it. The PLL variant overrides this. */
-    if (v != CAP_VAR_B2B) {
-        adc_deinit();
-        (void)clock_adc_set_div(100u);
-        (void)clock_adc_set_pll(5u, 1u);   /* 320 MHz                   */
-        (void)adc_reinit();
-    }
-
-    switch (v) {
-    case CAP_VAR_B2B: {
-        uint32_t got = 0u;
-        const struct pll_step st = pll_for(want_ksps, &got);
-        adc_deinit();
-        if (clock_adc_set_pll(st.p1, st.p2) != CLKDIV_OK) { (void)adc_reinit(); return false; }
-        if (!adc_reinit()) { return false; }
-        adc_set_mode_burst();
-        var_ksps = got;
-        break;
-    }
-
-    case CAP_VAR_SCCP_T_PER:
-    case CAP_VAR_SCCP_T_G13:
-    case CAP_VAR_SCCP_OC_PER:
-    case CAP_VAR_SCCP_OC_G13:
-    case CAP_VAR_SCCP_OLD:
-    case CAP_VAR_SCCP_TRG2: {
-        const bool        g13  = (v == CAP_VAR_SCCP_T_G13) || (v == CAP_VAR_SCCP_OC_G13) ||
-                                 (v == CAP_VAR_SCCP_TRG2);
-        const bool        oc   = (v == CAP_VAR_SCCP_OC_PER) || (v == CAP_VAR_SCCP_OC_G13);
-        const bool        old  = (v == CAP_VAR_SCCP_OLD);
-        const sccp_clk_t  clk  = g13 ? SCCP_CLK_GEN13 : SCCP_CLK_PERIPHERAL;
-        const sccp_mode_t mode = oc  ? SCCP_MODE_OC   : SCCP_MODE_TIMER;
-        const sccp_event_t ev  = old ? SCCP_EVENT_ROLLOVER : SCCP_EVENT_SPECIAL;
-        const uint8_t     trg  = old ? SCCP3_ADC_TRIGGER : SCCP1_ADC_TRIGGER;
-
-        if (g13 && !clock_trig_on()) { return false; }
-        /* ticks of the module's own clock per sample */
-        const uint32_t hz = g13 ? clock_trig_hz() : clock_periph_hz();
-        const uint32_t ticks = hz / 1000u / want_ksps;
-        if (ticks < 2u) { return false; }
-        if (!sccp1_start(ticks, clk, mode, ev)) { return false; }
-
-        if (v == CAP_VAR_SCCP_TRG2) {
-            adc_set_mode_burst();     /* software starts, SCCP continues */
-            adc_set_trg2(trg);
-        } else {
-            adc_set_mode_single(trg); /* one conversion per trigger      */
-        }
-        var_ksps    = sccp1_nominal_ksps();
-        var_trig_ns = (uint32_t)(((uint64_t)ticks * 1000000000ull) / hz);
-        break;
-    }
-
-    case CAP_VAR_RPTCNT: {
-        /* TAD is a quarter of the ADC clock and a conversion is two TAD,
-         * so the repeat timer's period in TAD gives 80000/n kSPS at
-         * 320 MHz. 2..63. */
-        uint32_t n = 80000u / want_ksps;
-        if (n < 2u)  { n = 2u; }
-        if (n > 63u) { n = 63u; }
-        adc_set_mode_burst();
-        adc_set_period((uint8_t)n);
-        adc_set_trg2(0x03u);          /* repeat timer                    */
-        var_ksps = 80000u / n;
-        break;
-    }
-
-    case CAP_VAR_OVERSAMPLE: {
-        /* ACCNUM is two bits. The event rate should be the conversion
-         * rate divided by the accumulation count. */
-        uint32_t acc = 0u;
-        const uint32_t ratio = 40000u / want_ksps;
-        if      (ratio >= 8u) { acc = 3u; }
-        else if (ratio >= 4u) { acc = 2u; }
-        else if (ratio >= 2u) { acc = 1u; }
-        adc_set_mode_oversample((uint8_t)acc);
-        var_ksps = 40000u >> acc;
-        break;
-    }
-
-    case CAP_VAR_CLKDIV: {
-        uint32_t ratio = 4000000u / want_ksps;
-        if (ratio < 100u)  { ratio = 100u; }
-        if (ratio > 1000u) { ratio = 1000u; }
-        if ((ratio > 100u) && (ratio < 200u)) { ratio = 200u; }
-        adc_deinit();
-        const uint32_t rc = clock_adc_set_div(ratio);
-        (void)adc_reinit();
-        if (rc != CLKDIV_OK) { return false; }
-        adc_set_mode_burst();
-        var_ksps = 4000000u / ratio;
-        break;
-    }
-
-    default:
-        return false;
-    }
-    return true;
-}
-
-void capture_variant_regs(void)
-{
-    console_kv("[var]   adc MODE", adc_mode());
-    console_kv("[var]   adc TRG1SRC", adc_trg1());
-    console_kv("[var]   adc TRG2SRC", adc_trg2());
-    console_kv("[var]   adc ACCNUM", adc_accnum());
-    console_kv("[var]   adc RPTCNT", adc_period());
-    console_kv("[var]   adc clock Hz", clock_adc_hz());
-    console_kv("[var]   clkgen6 ratio x100", clock_adc_div());
-    if (var_trig_ns != 0u) {
-        console_kv("[var]   trigger period ns", var_trig_ns);
-        sccp1_regs_visit(reg_print);
-    }
-}
+/* The variant matrix (capture_variant_t, capture_select_variant() and its
+ * reporting functions) moved to acquisition.c with the rate setters above
+ * (P9.4, 27.09.2026). */
 
 /* ------------------------------------------------------------------ *
  * The triggered stream - the chain the example is about (capture.h)
