@@ -293,6 +293,44 @@ def diff_raw_block(entries_a, entries_b, block):
 
 
 # ---------------------------------------------------------------------------
+# BR.6 stack rule (BR.9 pass criterion): "the stack high-water mark leaves
+# at least 25% of the stack unused". Judged in B only - A predates BR.6 and
+# its "status" has none of these fields, reported as NOT_AVAILABLE rather
+# than compared, the same vocabulary board_run.py uses for R6 on A (no
+# 'route' command at all). The ordinary diff_kv_block(..., "R7", "status")
+# call already reports every BR.6 field as an "only in B" difference; this
+# is the extra check that turns "B has a stack_free_pct" into a pass/fail
+# judgement, and separately flags the DMA buffer's guard words.
+# ---------------------------------------------------------------------------
+def check_stack_criterion(entries_b):
+    """Only ever looks at B: A is the fixed pre-BR.6 baseline and will
+    never have these fields, which is normal, not a deviation (the plain
+    diff_kv_block(..., "R7", "status") call above already reports each
+    BR.6 field as an ordinary "only in B" difference; A's side of THIS
+    judgement is always "NOT_AVAILABLE", never fetched from A's log). A B
+    that does not have the field either (a pre-BR.6 stand-in, or a B build
+    that predates BR.6) is not judged - nothing to compare against 25%."""
+    kv_b = parse_kv_lines(block_rx_lines(entries_b, "R7"))
+    out = []
+    pct = kv_b.get("stack_free_pct")
+    if pct is not None:
+        try:
+            pct_val = int(pct)
+        except ValueError:
+            pct_val = -1
+        if pct_val < 25:
+            out.append(dict(block="R7", kind="expectation",
+                             detail="stack_free_pct below the BR.9 pass criterion (>= 25% unused)",
+                             a="NOT_AVAILABLE", b=pct))
+    guard = kv_b.get("buf_guard_ok")
+    if guard is not None and guard != "1":
+        out.append(dict(block="R7", kind="expectation",
+                         detail="buf_guard_ok: the guard words behind the DMA buffer are not intact",
+                         a="NOT_AVAILABLE", b=guard))
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Expectations: tests/board/expected.json
 # ---------------------------------------------------------------------------
 def load_expected(path=DEFAULT_EXPECTED_PATH):
@@ -411,6 +449,7 @@ def evaluate(log_a_lines, log_b_lines, expected_entries=None):
     deviations += diff_grab_family(entries_a, entries_b, "R4")
     deviations += diff_grab_family(entries_a, entries_b, "R5")
     deviations += diff_kv_block(entries_a, entries_b, "R7", "status")
+    deviations += check_stack_criterion(entries_b)
 
     expectation_deviations = evaluate_expectations(expected_entries, chain_results_a, chain_results_b) \
         if expected_entries else []
@@ -603,17 +642,55 @@ def selftest():
           r4["verdicts_a"]["R2"] == "missing"
           and any(d["block"] == "R2" and d["detail"] == "A block missing" for d in r4["deviations"]))
 
-    # 5. A without a BR.6-style extra status field B has: must not crash,
-    # and must show up as an ordinary "only in B" difference - BR.6 has not
-    # landed and has not named these fields yet, so this only proves eval_board
-    # copes with an extra key on one side, not any specific field name.
+    # 5. BR.6's real fields: A has none of them (the fixed pre-BR.6 baseline),
+    # B has the full set. The plain ab_diff mechanism reports every one of
+    # them as "only in B" without any field-name-specific code (proven
+    # below); check_stack_criterion() is the one piece that DOES know two
+    # of the names, and judges them.
+    BR6_FIELDS_PASS = {
+        "stack_size": "12480", "stack_used_max": "4928", "stack_free_pct": "61",
+        "buf_addr": "16512", "buf_align_mod4": "0", "buf_len": "4096",
+        "buf_guard_ok": "1", "boot_stage": "9", "trap_seen": "0", "trap_vec": "0",
+        "chain_mark": "0",
+    }
     log_a5, _, _ = board_run.run_session(board_run.ReplayTarget("A", has_route=True), ui, "A")
     log_b5, _, _ = board_run.run_session(
-        board_run.ReplayTarget("B", has_route=True, extra_status_fields={"stack_margin_pct": "61"}), ui, "B")
+        board_run.ReplayTarget("B", has_route=True, extra_status_fields=BR6_FIELDS_PASS), ui, "B")
     r5 = evaluate(log_a5.lines, log_b5.lines)
-    extra = [d for d in r5["deviations"] if "stack_margin_pct" in d["detail"]]
-    check("A without a BR.6-style extra status field: reported, not a crash",
-          len(extra) >= 1 and all(d.get("a") in (None, "-") for d in extra))
+    extra = [d for d in r5["deviations"] if d["block"] == "R7" and d["kind"] == "ab_diff"
+             and any(f in d["detail"] for f in BR6_FIELDS_PASS)]
+    check("A without any BR.6 field, B with all of them: every one reported, not a crash",
+          len(extra) == len(BR6_FIELDS_PASS) and all(d.get("a") is None for d in extra))
+    check("BR.6 stack rule: 61% free in B passes, nothing NOT_AVAILABLE-flagged",
+          not any(d["kind"] == "expectation" and "stack_free_pct" in d["detail"] for d in r5["deviations"])
+          and not any(d["kind"] == "expectation" and "buf_guard_ok" in d["detail"] for d in r5["deviations"]))
+
+    # 5b. Below the BR.9 pass criterion (< 25% free): a judged expectation
+    # deviation, not just the ordinary ab_diff every field already gets.
+    fields_low = dict(BR6_FIELDS_PASS, stack_free_pct="10")
+    log_b5b, _, _ = board_run.run_session(
+        board_run.ReplayTarget("B", has_route=True, extra_status_fields=fields_low), ui, "B")
+    r5b = evaluate(log_a5.lines, log_b5b.lines)
+    low = [d for d in r5b["deviations"] if d["kind"] == "expectation" and "stack_free_pct" in d["detail"]]
+    check("BR.6 stack rule: 10% free in B fails, reported with A=NOT_AVAILABLE",
+          len(low) == 1 and low[0]["a"] == "NOT_AVAILABLE" and low[0]["b"] == "10")
+
+    # 5c. A guard word behind the DMA buffer no longer intact in B.
+    fields_guard = dict(BR6_FIELDS_PASS, buf_guard_ok="0")
+    log_b5c, _, _ = board_run.run_session(
+        board_run.ReplayTarget("B", has_route=True, extra_status_fields=fields_guard), ui, "B")
+    r5c = evaluate(log_a5.lines, log_b5c.lines)
+    guard = [d for d in r5c["deviations"] if d["kind"] == "expectation" and "buf_guard_ok" in d["detail"]]
+    check("BR.6 buffer rule: guard word gone in B, reported with A=NOT_AVAILABLE",
+          len(guard) == 1 and guard[0]["a"] == "NOT_AVAILABLE" and guard[0]["b"] == "0")
+
+    # 5d. B without stack_free_pct at all (the plain stand-in every other
+    # selftest scenario uses, including test 1's "identical A/B") is not
+    # judged - nothing to compare against 25%, and this is what keeps test
+    # 1 free of a spurious deviation now that this check exists.
+    not_judged = check_stack_criterion(parse_log_lines(log_a.lines))
+    check("BR.6 stack rule: B without stack_free_pct at all is not judged",
+          not_judged == [])
 
     # 6. An unknown RUNNER_VERSION is refused, not silently misread.
     bad = ["0 EV - RUNNER_VERSION=99 label=A port=x"]

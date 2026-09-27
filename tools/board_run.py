@@ -1056,7 +1056,17 @@ def selftest():
     ui = StubUI(answers=["", "", "n"])  # ENTER x2 (reprogram prompts), "n" (no R5 signal)
     target_a = ReplayTarget("A", has_route=False, timeout_block="test all",
                              grab_fault_at=(R4_RATES_KSPS[0], 5))
-    target_b = ReplayTarget("B", has_route=True, nak_once={"regs"})
+    # BR.6 (27.09.2026): B's real "status" always carries these extra
+    # fields now (src/cli/cli.c's cmd_status_fn()); A, the fixed pre-BR.6
+    # baseline hex, never will - eval_board.py's own selftest (BR.2) is
+    # where the field-by-field judgement (the stack rule, the guard-word
+    # check) is exercised, this only proves the runner logs a status reply
+    # that carries them through untouched, end to end.
+    target_b = ReplayTarget("B", has_route=True, nak_once={"regs"}, extra_status_fields={
+        "stack_size": "52264", "stack_used_max": "5192", "stack_free_pct": "90",
+        "buf_addr": "16720", "buf_align_mod4": "0", "buf_len": "4096",
+        "buf_guard_ok": "1", "boot_stage": "9", "trap_seen": "0", "trap_vec": "0",
+        "chain_mark": "0"})
 
     log_a, results_a, frames_a = run_session(target_a, ui, "A")
     log_b, results_b, frames_b = run_session(target_b, ui, "B")
@@ -1075,6 +1085,9 @@ def selftest():
           results_b["R1"]["verdict"] == "fail"
           and any("R1" in l and "[NAK]" in l for l in log_b.lines))
     check("B: R6 (route list) runs (has 'route' in help)", results_b["R6"]["verdict"] == "ok")
+    check("BR.6: B's status carries the new fields, A's does not",
+          any("stack_free_pct: 90" in l for l in log_b.lines)
+          and not any("stack_free_pct" in l for l in log_a.lines))
 
     with tempfile.TemporaryDirectory() as tmp:
         session = dict(runner_version=RUNNER_VERSION, port="replay", pc_time="selftest",

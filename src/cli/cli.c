@@ -427,6 +427,36 @@ static void cmd_status_fn(int argc, char **argv)
     put_kv("rx_last", rx_last);
     put_kv("rx_cr", rx_cr);
     put_kv("rx_lf", rx_lf);
+
+    /* BR.6 (27.09.2026), appended so an older parser of this reply still
+     * works: no fixed-size line buffer here to size from the longest
+     * line, unlike console_status_line()'s single buffer - put_kv() sends
+     * each field through cmd_parser_write() on its own. */
+    put_kv("stack_size", diag_stack_size());
+    put_kv("stack_used_max", diag_stack_used_max());
+    put_kv("stack_free_pct", diag_stack_free_pct());
+    /* Buffer placement, after relinking: address, its alignment (dma.c's
+     * dma0_init() refuses a destination address that is not a multiple of
+     * 4 - the DMA writes through a 32-bit path, "first % 4u != 0u"), the
+     * length of the window currently armed (2 * half_len samples of 2
+     * bytes each, the same product capture_init() passes to dma0_init()),
+     * and whether the guard words behind it (capture.c) are still what
+     * capture_init() wrote. */
+    put_kv("buf_addr", (uint32_t)(uintptr_t)capture_buffer());
+    put_kv("buf_align_mod4", (uint32_t)(uintptr_t)capture_buffer() % 4u);
+    put_kv("buf_len", 2u * capture_half_len() * (uint32_t)sizeof(uint16_t));
+    put_kv("buf_guard_ok", capture_guard_ok() ? 1u : 0u);
+    /* Trap/reset history not already in the boot banner: diag_report_reset()
+     * decodes and clears RCON there, and trap_seen/trap_vec/the boot stage
+     * it happened at are printed there too, once, right after boot - so
+     * neither RCON nor that one-shot report is repeated here (RCON reads
+     * back 0 by the time any command runs). What follows are the current
+     * values, which is what changes if a chain run hangs or a trap happens
+     * later in the same session. */
+    put_kv("boot_stage", boot_stage);
+    put_kv("trap_seen", trap_seen);
+    put_kv("trap_vec", trap_vec);
+    put_kv("chain_mark", chain_mark);
 }
 CMD_DEFINE(status, "status", cmd_status_fn, "status - run state and counters");
 

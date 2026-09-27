@@ -171,6 +171,10 @@ int main(void)
      * reads it. */
     if (boot_stage > 9u) { boot_stage = 0u; trap_seen = 0u; trap_vec = 0u; trap_stage = 0u; }
 
+    /* BR.6 (27.09.2026): paint the free stack before the first call that
+     * could go deeper than this one - see diag.c for how and why. */
+    diag_stack_paint();
+
     led_init();
     boot_mark(1u);
     console_early_init();

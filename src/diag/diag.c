@@ -307,6 +307,102 @@ void fail(uint32_t code)
 }
 
 /* ------------------------------------------------------------------ *
+ * Stack high-water mark (BR.6, 27.09.2026)
+ *
+ * The stack grows upward on this device: W15 is the stack pointer and
+ * every push increases it; a CALL or an interrupt traps when W15 exceeds
+ * SPLIM by more than 4 (dsPIC33A Programmer's Reference Manual, "Stack
+ * Pointer Overflow"; DS70005591D documents SPLIM itself, e.g. the same
+ * register main.c's SIM_SMOKE_FAULT==3 case writes past on purpose to
+ * provoke exactly that trap). So the RAM between the current W15 and
+ * SPLIM is exactly the stack space nothing has used yet, and painting it
+ * with a known pattern once - as early in main() as the call tree allows,
+ * before anything goes a call deeper than this one - turns "how close did
+ * we ever get to SPLIM" into a question diag_stack_used_max() can answer
+ * without an in-circuit debugger.
+ *
+ * Every painted word is WRITTEN before diag_stack_used_max() ever reads
+ * it back: this device's RAM is ECC-protected, and reading a word never
+ * written since power-up raises a memory-error trap (trap_report() above,
+ * vectors 2..5) - the same reason capture.c fills the sample buffer and
+ * its guard words before anything reads them.
+ *
+ * Host trace harness build (MinGW gcc, __XC_DSC__ undefined there - the
+ * one macro checked to be xc-dsc-specific and absent under MinGW with
+ * `xc-dsc-gcc -dM -E -`): W15 has no C-level name on that compiler either,
+ * so the four functions below become no-ops. No golden trace calls them -
+ * cli.c, the only caller ("status"), is never linked into a scenario. */
+#define DIAG_STACK_PATTERN       0xA5A5A5A5u
+/* 64 bytes = 16 32-bit words: comfortably more than one interrupt entry's
+ * own context push (SR/RCOUNT/... land on this same C stack), so a DMA or
+ * UART interrupt landing right after boot cannot write into RAM
+ * diag_stack_paint() has not painted yet. */
+#define DIAG_STACK_MARGIN_BYTES  64u
+
+#if defined(__XC_DSC__)
+/* SPLIM, unlike W15, IS an ordinary memory-mapped SFR (p33AK512MPS512.h:
+ * "extern volatile uint32_t SPLIM"), so reading it needs no assembly. */
+static uint32_t stack_paint_lo;   /* first painted address (== W15 here) */
+static uint32_t stack_paint_hi;   /* one past the last painted address   */
+
+void diag_stack_paint(void)
+{
+    uint32_t sp;
+    __asm__ volatile ("mov.l w15, %0" : "=r" (sp));
+    stack_paint_lo = sp;
+    stack_paint_hi = SPLIM - DIAG_STACK_MARGIN_BYTES;
+    for (uint32_t a = stack_paint_lo; a < stack_paint_hi; a += (uint32_t)sizeof(uint32_t)) {
+        *(volatile uint32_t *)(uintptr_t)a = DIAG_STACK_PATTERN;
+    }
+}
+
+uint32_t diag_stack_size(void)
+{
+    return (stack_paint_hi > stack_paint_lo) ? (stack_paint_hi - stack_paint_lo) : 0u;
+}
+
+/* Scans from the top (nearest SPLIM) DOWN towards stack_paint_lo, not the
+ * other way: usage always grows upward from stack_paint_lo, so at any
+ * point in the run the painted region is untouched pattern above the
+ * high-water mark and real stack content at and below it - the boundary
+ * is the first mismatch found scanning downward from the known-clean top.
+ * Scanning bottom-up would have no such known-clean end to start from.
+ * (Standard limitation, accepted here as everywhere this technique is
+ * used: a real stack value that happens to equal the pattern by chance
+ * hides behind it, and a deep frame that never wrote every word of its
+ * own allocation can make the mark read slightly lower than the true
+ * peak.) */
+uint32_t diag_stack_used_max(void)
+{
+    if (stack_paint_hi <= stack_paint_lo) { return stack_paint_lo; }
+    uint32_t a = stack_paint_hi;
+    while (a > stack_paint_lo) {
+        a -= (uint32_t)sizeof(uint32_t);
+        if (*(volatile uint32_t *)(uintptr_t)a != DIAG_STACK_PATTERN) {
+            return a;                       /* highest address touched   */
+        }
+    }
+    return stack_paint_lo;                  /* nothing touched yet       */
+}
+
+uint32_t diag_stack_free_pct(void)
+{
+    const uint32_t size = diag_stack_size();
+    if (size == 0u) { return 0u; }
+    const uint32_t used_max = diag_stack_used_max();
+    const uint32_t used = (used_max > stack_paint_lo) ? (used_max - stack_paint_lo) : 0u;
+    const uint32_t free_bytes = (size > used) ? (size - used) : 0u;
+    return (free_bytes * 100u) / size;
+}
+
+#else /* host trace harness - see the comment above */
+void     diag_stack_paint(void)      { }
+uint32_t diag_stack_size(void)       { return 0u; }
+uint32_t diag_stack_used_max(void)   { return 0u; }
+uint32_t diag_stack_free_pct(void)   { return 0u; }
+#endif
+
+/* ------------------------------------------------------------------ *
  * Register dump - what Part 4 of docs/TROUBLESHOOTING.md asks for
  *
  * Each driver walks its own registers and hands them to reg_print()
