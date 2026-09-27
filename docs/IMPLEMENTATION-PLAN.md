@@ -23,7 +23,7 @@ commit message stays the detailed record; this table is the one place to see whe
 work stands. `done` = committed and re-checked by the lead session (builds, `trace.bat`,
 `hosttest.bat`, goldens, no trailer).
 
-As of 27.09.2026. Done: 27 of 64 tasks (63 planned plus P0.9); P0.5b and P4.6a were
+As of 27.09.2026. Done: 29 of 64 tasks (63 planned plus P0.9); P0.5b and P4.6a were
 added along the way and are not counted.
 
 | Task | Status | Commit | Model | Note |
@@ -49,7 +49,7 @@ added along the way and are not counted.
 | P3.4 `lib/goertzel_i` | done | `c015270` | Fable | max. deviation 1 LSB |
 | P3.5 `lib/detect` | done | `355f237` | Fable | exact counts 4/4/0/3, two channels independent |
 | P3.6 `lib/wavegen` | done | `c926a69` | Fable | 0 of 1536 values differ from the reference |
-| P3.7 Libraries into the builds | committed, not yet re-checked | `8376a5b` | Fable | |
+| P3.7 Libraries into the builds | done | `8376a5b` | Fable | +2932 B flash, +8 B RAM; libm already linked by default, only `expf` lands (sin/cos are FPU instructions) |
 | P3.8 Cycle count (optional) | open | | | |
 | P4.1 Port layer | done | `2f4c2cd` | Fable | |
 | P4.2 timebase, led | done | `7725dce` | Fable | nothing to move |
@@ -59,7 +59,7 @@ added along the way and are not counted.
 | P4.6a `port/wait.h` | done | `529c6a3` | Fable | added task: one bounded-wait macro instead of per-driver copies |
 | P4.6 dma | done | `49497b0` | Fable | ISR unchanged, 42 instructions |
 | P4.7 clock | done | `6acd0fa` | Fable | `clock_fail_hook()` returns the boot stage; strong version in `port_impl.c` |
-| P4.8 Register visitor | done | this commit | Fable | `port/regs.h`: one visitor `(name, v, fmt)` with `REG_HEX/REG_DEC/REG_TITLE` reproduces the old dumps character for character (`regs` golden unchanged); the drivers keep no print call, only the three callers and the six dump functions change |
+| P4.8 Register visitor | done | `6e8d4b6` | Fable | `port/regs.h`: one visitor `(name, v, fmt)` with `REG_HEX/REG_DEC/REG_TITLE` reproduces the old dumps character for character (`regs` golden unchanged); the drivers keep no print call, only the three callers and the six dump functions change |
 | P5.1-P5.2 UART driver | open | | | |
 | P6.1-P6.5 Split `cli.c` | open | | | |
 | P7.1 Board config as data | open | | | |
