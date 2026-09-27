@@ -1,7 +1,7 @@
-capture.c
-adc.c
-dma.c
-clock.c
-sccp.c
-timebase.c
-led.c
+src/app/capture.c
+src/drivers/adc.c
+src/drivers/dma.c
+src/drivers/clock.c
+src/drivers/sccp.c
+src/drivers/timebase.c
+src/drivers/led.c

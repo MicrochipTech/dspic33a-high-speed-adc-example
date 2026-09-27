@@ -4,22 +4,36 @@
     <logicalFolder name="HeaderFiles"
                    displayName="Header Files"
                    projectFiles="true">
-      <itemPath>../board.h</itemPath>
-      <itemPath>../clock.h</itemPath>
-      <itemPath>../adc.h</itemPath>
-      <itemPath>../dma.h</itemPath>
-      <itemPath>../capture.h</itemPath>
-      <itemPath>../crc16.h</itemPath>
-      <itemPath>../sccp.h</itemPath>
-      <itemPath>../led.h</itemPath>
-      <itemPath>../diag.h</itemPath>
-      <itemPath>../console.h</itemPath>
-      <itemPath>../sim.h</itemPath>
-      <itemPath>../timebase.h</itemPath>
-      <itemPath>../dac.h</itemPath>
-      <itemPath>../dactest.h</itemPath>
-      <itemPath>../chaintest.h</itemPath>
-      <itemPath>../cmd_parser.h</itemPath>
+      <logicalFolder name="app" displayName="app" projectFiles="true">
+        <itemPath>../src/app/capture.h</itemPath>
+        <itemPath>../src/app/board.h</itemPath>
+      </logicalFolder>
+      <logicalFolder name="cli" displayName="cli" projectFiles="true">
+        <itemPath>../src/cli/console.h</itemPath>
+        <itemPath>../src/cli/cmd_parser.h</itemPath>
+      </logicalFolder>
+      <logicalFolder name="diag" displayName="diag" projectFiles="true">
+        <itemPath>../src/diag/diag.h</itemPath>
+      </logicalFolder>
+      <logicalFolder name="drivers" displayName="drivers" projectFiles="true">
+        <itemPath>../src/drivers/adc.h</itemPath>
+        <itemPath>../src/drivers/dma.h</itemPath>
+        <itemPath>../src/drivers/sccp.h</itemPath>
+        <itemPath>../src/drivers/dac.h</itemPath>
+        <itemPath>../src/drivers/clock.h</itemPath>
+        <itemPath>../src/drivers/timebase.h</itemPath>
+        <itemPath>../src/drivers/led.h</itemPath>
+      </logicalFolder>
+      <logicalFolder name="lib" displayName="lib" projectFiles="true">
+        <itemPath>../src/lib/crc16.h</itemPath>
+      </logicalFolder>
+      <logicalFolder name="sim" displayName="sim" projectFiles="true">
+        <itemPath>../src/sim/sim.h</itemPath>
+      </logicalFolder>
+      <logicalFolder name="tests" displayName="tests" projectFiles="true">
+        <itemPath>../src/tests/chaintest.h</itemPath>
+        <itemPath>../src/tests/dactest.h</itemPath>
+      </logicalFolder>
     </logicalFolder>
     <logicalFolder name="ExternalFiles"
                    displayName="Important Files"
@@ -33,23 +47,37 @@
     <logicalFolder name="SourceFiles"
                    displayName="Source Files"
                    projectFiles="true">
-      <itemPath>../main.c</itemPath>
-      <itemPath>../config_bits.c</itemPath>
-      <itemPath>../clock.c</itemPath>
-      <itemPath>../adc.c</itemPath>
-      <itemPath>../dma.c</itemPath>
-      <itemPath>../sim_dma.c</itemPath>
-      <itemPath>../capture.c</itemPath>
-      <itemPath>../crc16.c</itemPath>
-      <itemPath>../sccp.c</itemPath>
-      <itemPath>../led.c</itemPath>
-      <itemPath>../diag.c</itemPath>
-      <itemPath>../timebase.c</itemPath>
-      <itemPath>../dac.c</itemPath>
-      <itemPath>../dactest.c</itemPath>
-      <itemPath>../chaintest.c</itemPath>
-      <itemPath>../cli.c</itemPath>
-      <itemPath>../cmd_parser.c</itemPath>
+      <logicalFolder name="app" displayName="app" projectFiles="true">
+        <itemPath>../src/app/main.c</itemPath>
+        <itemPath>../src/app/capture.c</itemPath>
+        <itemPath>../src/app/config_bits.c</itemPath>
+      </logicalFolder>
+      <logicalFolder name="cli" displayName="cli" projectFiles="true">
+        <itemPath>../src/cli/cli.c</itemPath>
+        <itemPath>../src/cli/cmd_parser.c</itemPath>
+      </logicalFolder>
+      <logicalFolder name="diag" displayName="diag" projectFiles="true">
+        <itemPath>../src/diag/diag.c</itemPath>
+      </logicalFolder>
+      <logicalFolder name="drivers" displayName="drivers" projectFiles="true">
+        <itemPath>../src/drivers/adc.c</itemPath>
+        <itemPath>../src/drivers/dma.c</itemPath>
+        <itemPath>../src/drivers/sccp.c</itemPath>
+        <itemPath>../src/drivers/dac.c</itemPath>
+        <itemPath>../src/drivers/clock.c</itemPath>
+        <itemPath>../src/drivers/timebase.c</itemPath>
+        <itemPath>../src/drivers/led.c</itemPath>
+      </logicalFolder>
+      <logicalFolder name="lib" displayName="lib" projectFiles="true">
+        <itemPath>../src/lib/crc16.c</itemPath>
+      </logicalFolder>
+      <logicalFolder name="sim" displayName="sim" projectFiles="true">
+        <itemPath>../src/sim/sim_dma.c</itemPath>
+      </logicalFolder>
+      <logicalFolder name="tests" displayName="tests" projectFiles="true">
+        <itemPath>../src/tests/chaintest.c</itemPath>
+        <itemPath>../src/tests/dactest.c</itemPath>
+      </logicalFolder>
     </logicalFolder>
   </logicalFolder>
   <projectmakefile>Makefile</projectmakefile>
@@ -95,7 +123,7 @@
         <makeCustomizationEnableLongLines>false</makeCustomizationEnableLongLines>
         <makeCustomizationNormalizeHexFile>false</makeCustomizationNormalizeHexFile>
       </makeCustomizationType>
-      <item path="../sim_dma.c" ex="true" overriding="false">
+      <item path="../src/sim/sim_dma.c" ex="true" overriding="false">
         <C30>
         </C30>
         <C30-AR>
@@ -109,6 +137,10 @@
         <C30Global>
         </C30Global>
       </item>
+      <C30>
+        <property key="extra-include-directories"
+                  value="../src/drivers;../src/app;../src/cli;../src/tests;../src/lib;../src/diag;../src/sim"/>
+      </C30>
       <Tool>
         <property key="ADC1" value="true"/>
         <property key="ADC2" value="true"/>
@@ -899,7 +931,7 @@
         <makeCustomizationEnableLongLines>false</makeCustomizationEnableLongLines>
         <makeCustomizationNormalizeHexFile>false</makeCustomizationNormalizeHexFile>
       </makeCustomizationType>
-      <item path="../sim_dma.c" ex="true" overriding="false">
+      <item path="../src/sim/sim_dma.c" ex="true" overriding="false">
         <C30>
         </C30>
         <C30-AR>
@@ -914,6 +946,8 @@
         </C30Global>
       </item>
       <C30>
+        <property key="extra-include-directories"
+                  value="../src/drivers;../src/app;../src/cli;../src/tests;../src/lib;../src/diag;../src/sim"/>
         <property key="preprocessor-macros" value="BOARD=2"/>
       </C30>
       <Tool>
@@ -1565,7 +1599,7 @@
         <makeCustomizationEnableLongLines>false</makeCustomizationEnableLongLines>
         <makeCustomizationNormalizeHexFile>false</makeCustomizationNormalizeHexFile>
       </makeCustomizationType>
-      <item path="../dma.c" ex="true" overriding="false">
+      <item path="../src/drivers/dma.c" ex="true" overriding="false">
         <C30>
         </C30>
         <C30-AR>
@@ -1580,6 +1614,8 @@
         </C30Global>
       </item>
       <C30>
+        <property key="extra-include-directories"
+                  value="../src/drivers;../src/app;../src/cli;../src/tests;../src/lib;../src/diag;../src/sim"/>
         <property key="preprocessor-macros" value="__MPLAB_DEBUGGER_SIMULATOR=1"/>
       </C30>
       <Simulator>

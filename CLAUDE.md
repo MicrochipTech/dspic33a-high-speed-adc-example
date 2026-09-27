@@ -26,6 +26,22 @@ come from. That convention is kept.
 
 ## Modules and who may touch what
 
+Since P1.1 (27.09.2026) the sources live under `src/`, one folder per role; the file
+names below are unique across the tree, and every folder is on the include path of
+every build (`-I` in `tools/build.bat`, `tools/Makefile`, `extra-include-directories`
+in all three MPLAB X configurations, `tools/trace_build.py`, `tools/hosttest.bat`), so
+the sources still include each other as `"name.h"` without a folder prefix:
+
+| Folder | Files |
+|---|---|
+| `src/drivers/` | `adc`, `dma`, `sccp`, `dac`, `clock`, `timebase`, `led` (`.c/.h`) |
+| `src/app/` | `main.c`, `capture.c/.h`, `config_bits.c`, `board.h` (and the generated `version.h`) |
+| `src/cli/` | `cli.c`, `console.h`, `cmd_parser.c/.h` |
+| `src/tests/` | `chaintest.c/.h`, `dactest.c/.h` |
+| `src/lib/` | `crc16.c/.h` |
+| `src/diag/` | `diag.c/.h` |
+| `src/sim/` | `sim.h`, `sim_dma.c` |
+
 | File | Owns | May call |
 |---|---|---|
 | `main.c` | start-up order, main loop | everything below |
@@ -65,11 +81,14 @@ tools\build.bat        hardware  -> build\adc_dma_40msps.elf/.hex   (must be -Wa
 tools\build.bat sim    simulator -> build\adc_dma_40msps_sim.elf    (same)
 ```
 
-`version.h` (git-ignored) carries the git revision for the banner. `tools/version.bat`
-writes it before every build: called by `build.bat`, by the `.build-pre` hook in
-`adc_dma_40msps.X/Makefile` (which the IDE runs, so a colleague's build gets it too)
-and, for `tools/Makefile`, by `tools/version.sh`. `board.h` includes it through
-`__has_include` and falls back to "unknown". Two pitfalls, both hit on 23.09.2026 with
+`src/app/version.h` (git-ignored) carries the git revision for the banner.
+`tools/version.bat` writes it before every build: called by `build.bat`, by the
+`.build-pre` hook in `adc_dma_40msps.X/Makefile` (which the IDE runs, so a colleague's
+build gets it too) and, for `tools/Makefile`, by `tools/version.sh`. `board.h` includes
+it through `__has_include` and falls back to "unknown"; it sits next to `board.h` so
+that `"version.h"` resolves through the including file's own directory and no build
+needs an extra include path for it (P1.1 moved it there from the repository root). Two
+pitfalls, both hit on 23.09.2026 with
 MPLAB X 6.35: do **not** put the step into `configurations.xml`
 (`makeCustomizationPreStep`) - the headless makefile generator then silently writes no
 `Makefile-*.mk` at all; and in the hook use exactly

@@ -55,7 +55,7 @@ build: .build-post
 
 .build-pre:
 # Add your pre 'build' code here...
-# Git revision for the firmware banner -> ../version.h (tools/version.bat; writes
+# Git revision for the firmware banner -> ../src/app/version.h (tools/version.bat; writes
 # "unknown" without git, never fails the build). Runs for every configuration,
 # from the IDE and from tools/_test_mplabx.bat alike. Absolute path with
 # backslashes, quoted: MPLAB X's make reports SHELL=sh.exe without having one,

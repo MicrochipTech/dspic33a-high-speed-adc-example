@@ -21,15 +21,19 @@ OBJDUMP  = $(XC_DSC)/bin/xc-dsc-objdump.exe
 BIN2HEX  = $(XC_DSC)/bin/xc-dsc-bin2hex.exe
 
 TARGET   = adc_dma_40msps
-SRC      = ../main.c ../config_bits.c ../clock.c ../adc.c ../dma.c ../capture.c ../crc16.c ../sccp.c ../led.c ../diag.c ../timebase.c ../dac.c ../dactest.c ../chaintest.c ../cli.c ../cmd_parser.c
-HDR      = ../board.h ../clock.h ../adc.h ../dma.h ../capture.h ../crc16.h ../sccp.h ../led.h ../diag.h ../console.h ../sim.h ../timebase.h ../dac.h ../dactest.h ../chaintest.h ../cmd_parser.h
-SRC_SIM  = $(subst ../dma.c,../sim_dma.c,$(SRC))
+# The sources live under ../src/<folder>/ (P1.1, 27.09.2026); every folder is
+# on the include path (INC), so the sources include each other as "name.h".
+SRCDIR   = ../src
+INC      = -I$(SRCDIR)/drivers -I$(SRCDIR)/app -I$(SRCDIR)/cli -I$(SRCDIR)/tests -I$(SRCDIR)/lib -I$(SRCDIR)/diag -I$(SRCDIR)/sim
+SRC      = $(SRCDIR)/app/main.c $(SRCDIR)/app/config_bits.c $(SRCDIR)/drivers/clock.c $(SRCDIR)/drivers/adc.c $(SRCDIR)/drivers/dma.c $(SRCDIR)/app/capture.c $(SRCDIR)/lib/crc16.c $(SRCDIR)/drivers/sccp.c $(SRCDIR)/drivers/led.c $(SRCDIR)/diag/diag.c $(SRCDIR)/drivers/timebase.c $(SRCDIR)/drivers/dac.c $(SRCDIR)/tests/dactest.c $(SRCDIR)/tests/chaintest.c $(SRCDIR)/cli/cli.c $(SRCDIR)/cli/cmd_parser.c
+HDR      = $(SRCDIR)/app/board.h $(SRCDIR)/drivers/clock.h $(SRCDIR)/drivers/adc.h $(SRCDIR)/drivers/dma.h $(SRCDIR)/app/capture.h $(SRCDIR)/lib/crc16.h $(SRCDIR)/drivers/sccp.h $(SRCDIR)/drivers/led.h $(SRCDIR)/diag/diag.h $(SRCDIR)/cli/console.h $(SRCDIR)/sim/sim.h $(SRCDIR)/drivers/timebase.h $(SRCDIR)/drivers/dac.h $(SRCDIR)/tests/dactest.h $(SRCDIR)/tests/chaintest.h $(SRCDIR)/cli/cmd_parser.h
+SRC_SIM  = $(subst $(SRCDIR)/drivers/dma.c,$(SRCDIR)/sim/sim_dma.c,$(SRC))
 OUTDIR   = ../build
 
 # -mdfp must point at the xc16 SUBDIRECTORY of the pack, not the pack root.
 # Pointing at the root gives "does not seem to support the selected device",
 # because c30_device.info lives one level down.
-CFLAGS   = -mcpu=$(MCU) -mdfp="$(DFP)" -O1 -Wall -Wextra
+CFLAGS   = -mcpu=$(MCU) -mdfp="$(DFP)" -O1 -Wall -Wextra $(INC)
 LDFLAGS  = -T"$(GLD)"
 
 .PHONY: all hex sim size clean version
@@ -39,7 +43,7 @@ all: $(OUTDIR)/$(TARGET).elf
 $(OUTDIR):
 	mkdir -p $(OUTDIR)
 
-# Git revision for the banner -> ../version.h, rewritten only when it changes.
+# Git revision for the banner -> ../src/app/version.h, rewritten only when it changes.
 version:
 	sh $(dir $(lastword $(MAKEFILE_LIST)))version.sh
 
@@ -53,7 +57,7 @@ GLD_NANO = $(DFP)/support/dsPIC33A/gld/p$(MCU_NANO).gld
 nano: $(OUTDIR)/$(TARGET)_nano.elf
 
 $(OUTDIR)/$(TARGET)_nano.elf: $(SRC) $(HDR) | $(OUTDIR)
-	"$(CC)" -mcpu=$(MCU_NANO) -mdfp="$(DFP)" -O1 -Wall -Wextra -DBOARD=2 -T"$(GLD_NANO)" $(SRC) -o $@
+	"$(CC)" -mcpu=$(MCU_NANO) -mdfp="$(DFP)" -O1 -Wall -Wextra $(INC) -DBOARD=2 -T"$(GLD_NANO)" $(SRC) -o $@
 
 sim: $(OUTDIR)/$(TARGET)_sim.elf
 

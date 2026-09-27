@@ -5,9 +5,11 @@ rem  built with the installed MinGW gcc. No MPLAB X / xc-dsc needed, and
 rem  no external test framework: tests\host\check.h is the whole harness.
 rem
 rem  A test_NAME.c that needs firmware source files to link against (e.g.
-rem  test_crc16.c needs ..\crc16.c) lists them, one per line, relative to
-rem  the repo root, in a companion tests\host\test_NAME.sources file. A
-rem  test with no such file is just compiled and linked on its own.
+rem  test_crc16.c needs src\lib\crc16.c) lists them, one per line, relative
+rem  to the repo root, in a companion tests\host\test_NAME.sources file. A
+rem  test with no such file is just compiled and linked on its own. Every
+rem  src\<folder> is on the include path, so "name.h" resolves as it does
+rem  in the firmware build.
 rem
 rem  Uses %~dp0 to find the repo root, so it works from any cwd.
 rem ---------------------------------------------------------------------
@@ -16,6 +18,8 @@ setlocal enabledelayedexpansion
 set ROOT=%~dp0..
 set TESTDIR=%ROOT%\tests\host
 set OUTDIR=%ROOT%\build\host
+set SRC=%ROOT%\src
+set INC=-I"%SRC%\drivers" -I"%SRC%\app" -I"%SRC%\cli" -I"%SRC%\tests" -I"%SRC%\lib" -I"%SRC%\diag" -I"%SRC%\sim"
 
 where gcc >nul 2>nul
 if errorlevel 1 (
@@ -37,7 +41,7 @@ for %%F in ("%TESTDIR%\test_*.c") do (
       set "EXTRA=!EXTRA! "%ROOT%\%%S""
     )
   )
-  gcc -std=c11 -Wall -Wextra -Werror -I"%ROOT%" -I"%TESTDIR%" "%%F" !EXTRA! -o "%OUTDIR%\!NAME!.exe"
+  gcc -std=c11 -Wall -Wextra -Werror %INC% -I"%TESTDIR%" "%%F" !EXTRA! -o "%OUTDIR%\!NAME!.exe"
   if errorlevel 1 (
     echo !NAME!: BUILD FAILED
   ) else (

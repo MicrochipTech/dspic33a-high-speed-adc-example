@@ -24,11 +24,16 @@ from pathlib import Path
 
 MCU = "33AK512MPS512"
 PACK_NAME = "dsPIC33AK-MP_DFP"
-SOURCES = ["main.c", "config_bits.c", "clock.c", "adc.c", "dma.c", "capture.c", "led.c", "diag.c",
-           "timebase.c", "sccp.c", "cli.c", "cmd_parser.c"]   # one level up, next to the .X project (hardware build)
+# The hardware build's source list, relative to the repo root (src/<folder>/,
+# P1.1); the same files build.bat compiles. SRC_DIRS go on the include path.
+SRC_DIRS = ["drivers", "app", "cli", "tests", "lib", "diag", "sim"]
+SOURCES = ["app/main.c", "app/config_bits.c", "drivers/clock.c", "drivers/adc.c", "drivers/dma.c",
+           "app/capture.c", "lib/crc16.c", "drivers/sccp.c", "drivers/led.c", "diag/diag.c",
+           "drivers/timebase.c", "drivers/dac.c", "tests/dactest.c", "tests/chaintest.c",
+           "cli/cli.c", "cli/cmd_parser.c"]
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parent              # repo root: holds the single .c file
+ROOT = HERE.parent              # repo root: holds src/, tools/, the .X project
 
 
 # --------------------------------------------------------------------------
@@ -213,7 +218,7 @@ def find_make():
 # Test build - proves the selected combination really works.
 # --------------------------------------------------------------------------
 def verify(compiler, pack):
-    srcs = [ROOT / s for s in SOURCES]
+    srcs = [ROOT / "src" / s for s in SOURCES]
     missing = [s.name for s in srcs if not s.is_file()]
     if missing:
         print(f"  ! {missing} not found, test build skipped")
@@ -225,6 +230,7 @@ def verify(compiler, pack):
         f"-mcpu={MCU}",
         f'-mdfp={pack["dfp"]}',
         "-O1", "-Wall",
+        *[f"-I{ROOT / 'src' / d}" for d in SRC_DIRS],
         f'-T{pack["gld"]}',
         *[str(s) for s in srcs], "-o", str(out),
     ]

@@ -1,2 +1,2 @@
-clock.c
-timebase.c
+src/drivers/clock.c
+src/drivers/timebase.c

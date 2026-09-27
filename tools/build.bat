@@ -19,13 +19,17 @@ rem  The simulator builds compile sim_dma.c instead of dma.c, define
 rem  __MPLAB_DEBUGGER_SIMULATOR (as MPLAB X does for a Simulator
 rem  configuration) and keep debug symbols for tools\sim_trap.py.
 rem
+rem  The sources live under ..\src\<folder>\ (P1.1, 27.09.2026). Every
+rem  folder is on the include path (INC below), so the sources keep
+rem  including each other as "name.h" without a folder prefix.
+rem
 rem  Verified with the versions below on 2026-09-22. Adjust the two paths
 rem  if your installation differs; nothing else needs to change.
 rem ---------------------------------------------------------------------
 
 setlocal
 
-rem Git revision for the banner -> ..ersion.h (writes "unknown" without git)
+rem Git revision for the banner -> ..\src\app\version.h (writes "unknown" without git)
 call "%~dp0version.bat"
 
 set XC_DSC=C:\Program Files\Microchip\xc-dsc\v3.31
@@ -33,12 +37,12 @@ set DFP=C:\Program Files\Microchip\MPLABX\v6.35\packs\Microchip\dsPIC33AK-MP_DFP
 
 set MCU=33AK512MPS512
 set TARGET=adc_dma_40msps
-set DMA=..\dma.c
+set DMA=..\src\drivers\dma.c
 set EXTRA=
 set OUT=..\build\%TARGET%
 
 if /i "%1"=="sim" (
-  set DMA=..\sim_dma.c
+  set DMA=..\src\sim\sim_dma.c
   set EXTRA=-D__MPLAB_DEBUGGER_SIMULATOR=1 -g
   set OUT=..\build\%TARGET%_sim
   rem build.bat sim <n>: run the ping-pong check at n samples per half
@@ -48,7 +52,7 @@ if /i "%1"=="sim" (
   )
 )
 if /i "%1"=="smoke" (
-  set DMA=..\sim_dma.c
+  set DMA=..\src\sim\sim_dma.c
   set EXTRA=-D__MPLAB_DEBUGGER_SIMULATOR=1 -g -DSIM_SMOKE=1
   set OUT=..\build\%TARGET%_smoke
   rem build.bat smoke fault [n]: fault case n (1..4, main.c). Default 3, the
@@ -71,7 +75,9 @@ if /i "%1"=="nano" (
   set EXTRA=-DBOARD=2
   set OUT=..\build\%TARGET%_nano
 )
-set SOURCES=..\main.c ..\config_bits.c ..\clock.c ..\adc.c %DMA% ..\capture.c ..\crc16.c ..\sccp.c ..\led.c ..\diag.c ..\timebase.c ..\dac.c ..\dactest.c ..\chaintest.c ..\cli.c ..\cmd_parser.c
+set SRC=..\src
+set INC=-I%SRC%\drivers -I%SRC%\app -I%SRC%\cli -I%SRC%\tests -I%SRC%\lib -I%SRC%\diag -I%SRC%\sim
+set SOURCES=%SRC%\app\main.c %SRC%\app\config_bits.c %SRC%\drivers\clock.c %SRC%\drivers\adc.c %DMA% %SRC%\app\capture.c %SRC%\lib\crc16.c %SRC%\drivers\sccp.c %SRC%\drivers\led.c %SRC%\diag\diag.c %SRC%\drivers\timebase.c %SRC%\drivers\dac.c %SRC%\tests\dactest.c %SRC%\tests\chaintest.c %SRC%\cli\cli.c %SRC%\cli\cmd_parser.c
 
 if not exist ..\build mkdir ..\build
 
@@ -82,7 +88,7 @@ rem device" because c30_device.info lives one level down.
 "%XC_DSC%\bin\xc-dsc-gcc.exe" ^
   -mcpu=%MCU% ^
   -mdfp="%DFP%" ^
-  -O1 -Wall -Wextra %EXTRA% ^
+  -O1 -Wall -Wextra %EXTRA% %INC% ^
   -T"%DFP%\support\dsPIC33A\gld\p%MCU%.gld" ^
   %SOURCES% -o %OUT%.elf
 

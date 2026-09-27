@@ -27,7 +27,7 @@ What this script does that the old trace.bat did not:
   - compiles each firmware/harness .c file to one .o under
     build\\trace\\obj\\<flavor>\\, and reuses that .o for every scenario
     that needs the same file compiled the same way, only recompiling when
-    the source (or any header in the repo root / tests/trace/harness, or
+    the source (or any header under src/*/ or tests/trace/harness, or
     the flavor's own generated xc.h) is newer than the .o already there;
   - compiles and links scenarios in parallel (ThreadPoolExecutor - each
     gcc invocation is its own OS process, so the GIL is not a bottleneck).
@@ -61,6 +61,10 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+# The firmware sources live under src/<folder>/ (P1.1); the .sources files name
+# them relative to ROOT, and every folder is on the include path so the sources
+# keep including each other as "name.h".
+SRC_DIRS = [ROOT / "src" / d for d in ("drivers", "app", "cli", "tests", "lib", "diag", "sim")]
 TRACEDIR = ROOT / "tests" / "trace"
 SCEN = TRACEDIR / "scenarios"
 HARNESS = TRACEDIR / "harness"
@@ -136,7 +140,7 @@ def gen_dir_epoch(gen_dir, cache={}):
 
 def global_header_epoch(cache=[]):
     if not cache:
-        hdrs = list(ROOT.glob("*.h")) + list(HARNESS.glob("*.h"))
+        hdrs = [h for d in SRC_DIRS for h in d.glob("*.h")] + list(HARNESS.glob("*.h"))
         cache.append(newest_mtime(hdrs))
     return cache[0]
 
@@ -192,7 +196,7 @@ def plan_scenario(name, mcu_of_gendir):
     nonhave = [f for f in xflags if "HAVE" not in f]
     tierA = sanitize(gen_dir.name + ("_" + "_".join(nonhave) if nonhave else ""))
     tierB = sanitize(gen_dir.name + "__" + "_".join(xflags))
-    incdirs = [f"-I{HARNESS}", f"-I{gen_dir}", f"-I{ROOT}"]
+    incdirs = [f"-I{HARNESS}", f"-I{gen_dir}"] + [f"-I{d}" for d in SRC_DIRS]
 
     objs = {}  # obj path -> Job (local to this scenario; merged into the global plan)
 

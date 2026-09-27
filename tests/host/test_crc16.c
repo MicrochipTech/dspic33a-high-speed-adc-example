@@ -2,7 +2,7 @@
  * test_crc16.c - host-side test for crc16.c (CRC-16/CCITT-FALSE)
  *
  * Built by tools\hosttest.bat with the installed MinGW gcc, against the
- * real crc16.c from the repo root - not a reimplementation.
+ * real src/lib/crc16.c - not a reimplementation.
  */
 #include <stdint.h>
 #include <stddef.h>

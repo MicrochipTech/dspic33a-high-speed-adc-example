@@ -230,11 +230,14 @@ board user guide DS70005562D:
 AD1AN0 of this device sits on RA2, which the board routes to a capacitive touch pad
 (P38) — that is why the example uses ADC3 here and not ADC1.
 
-The sources sit in the repository root — `main.c`, one `.c/.h` pair per module (`clock`,
-`adc`, `dma`, `capture`, `led`, `diag`, `cli`/`console`), `board.h` and the parser pair
-`cmd_parser.c/.h` — and the MPLAB X project references them there; nothing is duplicated.
-`main.c` is the place to read first: it is the start-up order and the main loop, and
-nothing else.
+The sources sit under `src/`, one folder per role — `src/drivers/` (`clock`, `adc`,
+`dma`, `sccp`, `dac`, `timebase`, `led`, one `.c/.h` pair each), `src/app/` (`main.c`,
+`capture.c/.h`, `config_bits.c`, `board.h`), `src/cli/` (`cli.c`, `console.h` and the
+parser pair `cmd_parser.c/.h`), `src/tests/` (`chaintest`, `dactest`), `src/lib/`
+(`crc16`), `src/diag/` (`diag`) and `src/sim/` (`sim.h`, `sim_dma.c`) — and the MPLAB X
+project references them there; nothing is duplicated. Every folder is on the include
+path, so the files include each other as `"name.h"`. `src/app/main.c` is the place to
+read first: it is the start-up order and the main loop, and nothing else.
 
 **This needs real hardware.** The clock generators, the PLLs, the ADC and the DMA are
 the four things this example is about, and all four only exist on silicon. The number

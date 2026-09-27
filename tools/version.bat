@@ -1,7 +1,8 @@
 @echo off
 rem ---------------------------------------------------------------------
-rem  Writes version.h in the repository root with the git revision of the
-rem  working tree, so that the firmware's banner says which commit it is.
+rem  Writes src\app\version.h (next to board.h, which includes it through
+rem  __has_include, so no include path is needed) with the git revision of
+rem  the working tree, so that the firmware's banner says which commit it is.
 rem
 rem  Runs before every build: MPLAB X pre-build step (both configurations),
 rem  tools\build.bat, and tools\Makefile (through version.sh). Without git
@@ -11,8 +12,8 @@ rem  tree does not recompile main.c and cli.c on every build.
 rem ---------------------------------------------------------------------
 setlocal
 set "ROOT=%~dp0.."
-set "OUT=%ROOT%\version.h"
-set "TMP=%ROOT%\version.h.tmp"
+set "OUT=%ROOT%\src\app\version.h"
+set "TMP=%ROOT%\src\app\version.h.tmp"
 set REV=unknown
 set BRANCH=unknown
 set DIRTY=0
