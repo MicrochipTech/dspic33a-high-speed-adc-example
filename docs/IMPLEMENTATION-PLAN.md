@@ -23,7 +23,7 @@ commit message stays the detailed record; this table is the one place to see whe
 work stands. `done` = committed and re-checked by the lead session (builds, `trace.bat`,
 `hosttest.bat`, goldens, no trailer).
 
-As of 27.09.2026. Done: 32 of 52 tasks in the N+1 scope (63 planned plus P0.9 = 64; P8 and P10, 12
+As of 27.09.2026, 18:30. Done: 39 of 52 tasks in the N+1 scope (63 planned plus P0.9 = 64; P8 and P10, 12
 tasks, moved to N+2 on 27.09.2026); P0.5b and P4.6a were added along the way and are
 not counted.
 
@@ -68,9 +68,11 @@ not counted.
 | P6.3 `src/lib/frame.c` | done | `e52c234` | Sonnet | `frame_send()`: header (caller-built) + chunked payload with the CRC folded in + CRC tail, or the bare `CRC 0000` shape for n=0 - byte-for-byte what `cmd_blk_fn()`/`cmd_stream_grab()` build today, not yet wired in (cli.c untouched); `tests/host/test_frame_xcheck.py` cross-checks a dumped frame against `tools/protocol.py`'s `parse_grab_frame()` and a small local BIN-header parser, CRC and payload identical |
 | P6.4 `src/link/gui_link.c` | done | `475462e` | Sonnet | `cmd_blk_fn`/`cmd_stream_grab`(`->gui_link_stream_grab`)/`link_register` moved, `blk`/`stream grab` rewritten over `frame_send()` - wire bytes proven identical by P6.3's host cross-check plus fncmp showing only the moved/renamed functions differ; `cli.c`'s `cmd_stream_fn()` keeps "stream on\|off\|grab" dispatch, restart-always rule untouched; `_DMA0Interrupt` 42/0, `_U2RXInterrupt` 55/0 unchanged |
 | P6.5 `tools/protocol.py` | done | `88b00d6`, merge `aa1498c` | Sonnet | built in a worktree alongside P5; GUI `--selftest` 15/15 before and after; `eval_chain.py` had no copy to redirect; `gui_ui_test.py` not run (Playwright not installed in any Python on this machine) |
-| P7.1 Board config as data | done (reduced) | this commit | Sonnet | only the boot PLL dividers moved; ADC core/input, LED, UART PPS stay board.h macros (compile-time uses, hot path led_toggle, PPS unverifiable without a board run) - `grep board.h src/drivers/` still finds hits; revisit in N+2 with P8 |
+| P7.1 Board config as data | done (reduced) | `b708584` (ported from `ea93510`) | Sonnet | only the boot PLL dividers moved; ADC core/input, LED, UART PPS stay board.h macros (compile-time uses, hot path led_toggle, PPS unverifiable without a board run) - `grep board.h src/drivers/` still finds hits; revisit in N+2 with P8 |
 | P8.1-P8.8 Drivers with instances | moved to N+2 | | | user decision 27.09.2026, see Decisions; `ROUTE_STREAM` works with today's single instances |
-| P9.1-P9.5 Split `capture.c` | open | | | P9.5 = [SIM], runs without asking since 27.09.2026 |
+| P9.1 `src/app/pingpong.c` | done | `4d40f82`, merge `12d2383` | Sonnet | `pingpong_on_half()` static inline; `dma0_event` 124 instructions before and after, `_DMA0Interrupt` 42/0; `late`/`overrun` stay capture.c globals (two literal designs measured slower) |
+| P9.2 Simulator hooks out of pingpong.c | done | `d868bbb`, merge `12d2383` | Sonnet | pingpong.c had none to move; [SIM] run once already: `[simtest] PASS`, 100 halves, 0 mismatches |
+| P9.3-P9.5 meter.c, acquisition.c, [SIM] | open | | | P9.5 = [SIM], runs without asking since 27.09.2026 |
 | P10.1-P10.4 Split `clock.c` | moved to N+2 | | | user decision 27.09.2026; when it is done: needs `trace_point()` between clock steps (approach (a)) |
 | P11.1-P11.5 Routing core | open | | | P11.4 is the central proof |
 | P12.1-P12.4 Close-out | open | | | P12.4 = [SIM], runs without asking since 27.09.2026 |
@@ -88,6 +90,54 @@ not counted.
 | 27.09. | The simulator, including the ~7-minute [SIM] acceptance run, runs without asking; one run at a time | `CLAUDE.md` |
 | 27.09. | Goertzel: damped textbook form `q0 = s + 2D·cos·q1 − D²·q2` (the literal reading of the design is undamped) | `docs/DESIGN-MULTICHANNEL.md` 4.3 |
 | 27.09. | Detector counts once per pulse: re-arm only below threshold × hysteresis | `docs/DESIGN-MULTICHANNEL.md` 4.3 |
+
+### Handover to the next lead session (27.09.2026, 18:30)
+
+The lead session that ran P0 to P9.2 was cleared to save tokens. To continue: read
+`CLAUDE.md`, this "Status" section, and the rules below; then hand out the next card.
+
+**Next cards, in this order** (model as decided 27.09.: Sonnet for mechanical cards,
+Fable only for P11.3/P11.4):
+
+| Card | Model | Note |
+|---|---|---|
+| P9.3 `src/meter/meter.c` | Sonnet | traces `b2b`, `variants` unchanged |
+| P9.4 `src/app/acquisition.c` (incl. `chain_stream_*` out of chaintest.c) | Sonnet | traces `stream_on`, `stream_on_input` unchanged |
+| P9.5 [SIM] acceptance run | Sonnet (or the lead itself) | default, 256 per half, `--fault`; ~7 min each, one at a time |
+| P11.1 + P11.2 routing types + host tests of all conflict rules | Sonnet | host-only |
+| P11.3 `routing_apply()` for `ROUTE_STREAM` | Fable | |
+| P11.4 `stream on` through the routing | Fable | the central proof: `stream_on`/`stream_on_input` traces identical |
+| P11.5 `route list` | Sonnet | one parser slot (27 + help = 28 of 32); [SMOKE] with `route list` added to the smoke script and `expected.log` updated on purpose |
+| P12.1-P12.4 close-out | Sonnet | P12.3: HARDWARE-LOG entry "N+1 restructured, not run on silicon" + the board-run checklist; P12.4 [SIM] |
+
+**How the lead checks every card** (do not trust the agent's report; it once named
+the wrong branch): `git status` clean; `git log -N --format=%B | grep -ic co-authored`
+= 0; `tools\trace.bat` 13/13 PASS; `tools\hosttest.bat` all PASS; `git diff <before>
+--stat -- tests/trace/golden tests/smoke` empty unless the card says why;
+`python tools\fncmp.py --count _DMA0Interrupt build\adc_dma_40msps.elf` = 42 and
+`--indirect` 0; `_U2RXInterrupt` 55/0; the card's row in this table updated.
+
+**Brief building blocks that proved necessary** in every agent brief: read CLAUDE.md,
+this Status section and the task; builds via
+`MSYS_NO_PATHCONV=1 cmd /c "cd /d C:\work\Claas\ADC\tools & C:\work\Claas\ADC\tools\build.bat nano" < /dev/null`;
+never write files with backslashes through a Bash heredoc or sed (use Write/Edit);
+`console_*/fail()` inside a C comment closes it; file lists for a new .c = build.bat
+(all variants), tools/Makefile SRC+HDR, configurations.xml (never touch
+`languageToolchainVersion`, never `git checkout` it; delete stale
+`nbproject/Makefile-*.mk` before `_test_mplabx.bat`, delete `.X/build` and `dist`
+after), tools/setup.py SOURCES, trace `.sources`; stop after two failures of the same
+command; keep context small (grep/sed -n, never cat cli.c/capture.c whole); explicit,
+exhaustive stop conditions; no attribution trailer; update the Status row.
+
+**Parallel work:** only cards whose files stay disjoint for their whole run go into a
+worktree (`isolation: worktree`). P7 beside P6 cost an extra card because P6 moved the
+code P7 changed; every card touching build file lists conflicts there (union merge by
+hand is easy). The remaining cards are largely sequential (P9.3 -> P9.4 -> P11); P11.1 +
+P11.2 (host-only, new files) could run in a worktree beside P9.3/P9.4.
+
+**Usage at the time of handover** (`/usage`, 27.09. afternoon): weekly 26 %, Fable
+34 %, reset Friday 02.10. Agent tokens so far about 400 M (mostly cache reads); a
+card of 30-60 calls costs 2-6 M, a card of 300+ calls 150 M+ - keep cards small.
 
 ### Open points found along the way
 
