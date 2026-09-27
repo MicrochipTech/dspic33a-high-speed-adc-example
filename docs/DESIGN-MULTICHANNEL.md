@@ -226,6 +226,29 @@ remains available as an alternative. The compute time per block is measured once
 the Goertzel filter enters the data path: in the simulator (stopwatch), if it
 models FPU instructions cycle-accurately, otherwise on the board.
 
+**User decisions of 27.09.2026 (P3.1, binding):**
+
+1. **Recurrence = the textbook damped Goertzel:** `q0 = s + 2·D·cos(ω)·q1 − D²·q2`,
+   `q2 = q1`, `q1 = q0`. Poles at `D·e^(±jω)`: radius D, centre frequency exactly ω.
+   Reason: the decision above ("only the factor in the feedback term, shift stage
+   dropped"), applied literally to the integer template, gives `z² − 2D·cos·z + 1`,
+   whose roots have product 1 - the poles sit on the unit circle and nothing decays,
+   D only detunes. The float template's form (`q2 = D·q1`, `q1 = D·q0`) does damp but
+   detunes the centre to `cos θ = D·cos ω`. The textbook form damps and keeps the
+   centre; it costs the fixed-point variant one more Q16 constant (`D²`). Both
+   `lib/goertzel_f` and `lib/goertzel_i` implement this form; the reference is
+   `tests/ref/goertzel_ref.py` (its `damped` form, the only one used).
+2. **The detector fires once per pulse, with hysteresis:** on an emitted low-pass
+   value crossing above `threshold` while armed it counts and disarms; it re-arms
+   only once the value has fallen below `threshold × hyst` (parameter, default 0.5).
+   Reason: the template resets the resonator and the low-pass on every detection and
+   then counts again as soon as they have refilled - with the damped form that is
+   two counts per 128-sample pulse at fixed offsets (samples 23 and 67), with the
+   undamped form an irregular number. Nothing is reset on a detection any more;
+   `detect_reset()` stays for the caller. The re-arm level sets the minimum gap
+   between pulses: the magnitude decays with `D^n`, so with D = 0.995 (time constant
+   200 samples) the gap must be long enough for `peak × D^gap < threshold × hyst`.
+
 **Processing chain `dsp_run/`:** Each channel gets a chain of stages (none,
 average/statistics, Goertzel + detector). `capture_service()` resp.
 `acq_service()` calls the channel's chain for every finished half. The previous
