@@ -68,7 +68,7 @@ int main(void)
     timebase_init();
     trace_point("timebase_init()");
 
-    adc_init(ADC_PINSEL, ADC_SAMC);
+    adc_init(ADC_PINSEL, ADC_SAMC, SAMPLES_PER_BUF_MAX);
     trace_point("adc_init()");
 
     capture_init();

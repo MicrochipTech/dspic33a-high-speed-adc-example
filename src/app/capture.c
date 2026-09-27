@@ -519,7 +519,7 @@ bool capture_select_core(uint8_t core, uint8_t pinsel, uint8_t samc)
     if (powered) { adc_deinit(); }
     else         { (void)clock_adc_on(); }   /* the new core needs its clock */
     (void)adc_select(core);
-    adc_init(pinsel, samc);                  /* core on, ADRDY, or fail(5) */
+    adc_init(pinsel, samc, SAMPLES_PER_BUF_MAX); /* core on, ADRDY, or fail(5) */
     capture_init();                          /* DMA on this core's trigger */
     switch_pending = false;
     pinsel_next    = pinsel;

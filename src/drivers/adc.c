@@ -11,8 +11,8 @@
 #include <stdbool.h>
 #include "board.h"
 #include "adc.h"
-#include "capture.h"
-#include "console.h"
+#include "log.h"        /* port layer (src/port): port_log(), port_log_kv(), port_trace*() */
+#include "panic.h"      /* port layer: port_panic()                                       */
 
 /* One row per core: its registers, its interrupt words and CH0 bit, its
  * DMA trigger code (adc.h explains the numbers). Address constants, so
@@ -47,7 +47,28 @@ void adc_clear_events(void)
     (void)ADCREG(CH0DATA);
     *adc_cur->IFS = 0u;
 }
-#include "diag.h"
+
+/* Bound for the driver's two hardware waits (ADRDY), in loop iterations,
+ * and the wait itself. The values are diag.h's WAIT_LIMIT and WAIT_WHILE
+ * of this project, copied here unchanged on 27.09.2026 (P4.5) so that
+ * the driver includes no diag.h: the same 2 000 000 iterations on
+ * silicon, 20 000 in the simulator, and in the simulator no wait at all
+ * (the condition is evaluated once, so the register read still happens),
+ * exactly as before. A step that needs longer has failed; the stop code
+ * is fail()'s 5 (docs/TROUBLESHOOTING.md), now through port_panic(). */
+#ifdef __MPLAB_DEBUGGER_SIMULATOR
+#define ADC_WAIT_LIMIT        20000u     /* simulator runs at ~1/80 real time */
+#define ADC_WAIT_WHILE(cond, code)  do { (void)(cond); } while (0)
+#else
+#define ADC_WAIT_LIMIT        2000000u
+#define ADC_WAIT_WHILE(cond, code)                          \
+    do {                                                    \
+        uint32_t n_ = ADC_WAIT_LIMIT;                       \
+        while (cond) {                                      \
+            if (--n_ == 0u) { port_panic(code); }           \
+        }                                                   \
+    } while (0)
+#endif
 
 /* ------------------------------------------------------------------ *
  * ADC setup - one channel, Integration mode, conversions back-to-back
@@ -83,7 +104,7 @@ void adc_clear_events(void)
  * "200MHz CPU : 40MSPS = 5 instructions per sample", for 800 samples.
  * That is the budget one sample has at 40 MSPS.
  * ------------------------------------------------------------------ */
-void adc_init(uint8_t pinsel, uint8_t samc)
+void adc_init(uint8_t pinsel, uint8_t samc, uint32_t burst_len)
 {
     ADCBITS(CON).ON = 0;
 
@@ -102,8 +123,11 @@ void adc_init(uint8_t pinsel, uint8_t samc)
 
     /* Conversions per burst. One burst fills the whole DMA buffer, so
      * the DMA DONE interrupt is also the moment to start the next one.
-     * CNT[15:0] in ADxCH0CNT (p1272), max 65535. */
-    ADCREG(CH0CNT) = SAMPLES_PER_BUF_MAX;      /* capture_init() sets the length in use */
+     * CNT[15:0] in ADxCH0CNT (p1272), max 65535. The caller passes the
+     * buffer's full length (capture.h's SAMPLES_PER_BUF_MAX, 2048 - the
+     * driver does not know the buffer, P4.5); capture_init() sets the
+     * length in use before every start (adc_set_burst_len()). */
+    ADCREG(CH0CNT) = burst_len;
 
     /* The channel-done event of this core is the DMA trigger. It must not
      * also reach the CPU: there is no handler for it, and with IRQSEL = 0
@@ -128,10 +152,10 @@ void adc_init(uint8_t pinsel, uint8_t samc)
     }
 
     ADCBITS(CON).ON = 1;
-    WAIT_WHILE(!ADCBITS(CON).ADRDY, 5u);    /* wait for the core     */
-    console_trace("[adc] core ready, Integration mode, CNT 2048, back-to-back\r\n");
-    console_trace_kv("[adc] pinsel", pinsel);
-    console_trace_kv("[adc] samc", samc);
+    ADC_WAIT_WHILE(!ADCBITS(CON).ADRDY, 5u);  /* wait for the core   */
+    port_trace("[adc] core ready, Integration mode, CNT 2048, back-to-back\r\n");
+    port_trace_kv("[adc] pinsel", pinsel, false);
+    port_trace_kv("[adc] samc", samc, false);
 }
 
 /* Input pin and sample time of channel 0. Only safe while no burst is
@@ -283,7 +307,7 @@ bool adc_reinit(void)
 #ifdef __MPLAB_DEBUGGER_SIMULATOR
     return true;                       /* no core to wait for              */
 #else
-    uint32_t n = WAIT_LIMIT;
+    uint32_t n = ADC_WAIT_LIMIT;
     while (!ADCBITS(CON).ADRDY && (--n != 0u)) { }
     return n != 0u;
 #endif
@@ -303,18 +327,18 @@ void adc_start_burst(void)
 
 void adc_regs_dump(void)
 {
-    console_puts("[regs] adc\r\n");
-    console_kv("core", adc_core());
-    console_kv_hex("ADxCON", ADCREG(CON));
-    console_kv_hex("ADxSTAT", ADCREG(STAT));
-    console_kv_hex("ADxCH0CON1", ADCREG(CH0CON1));
-    console_kv_hex("ADxCH0CNT", ADCREG(CH0CNT));
-    console_kv_hex("ADxCH0RES", ADCREG(CH0RES));
-    console_kv_hex("ADxCH0DATA", ADCREG(CH0DATA));
+    port_log("[regs] adc\r\n");
+    port_log_kv("core", adc_core(), false);
+    port_log_kv("ADxCON", ADCREG(CON), true);
+    port_log_kv("ADxSTAT", ADCREG(STAT), true);
+    port_log_kv("ADxCH0CON1", ADCREG(CH0CON1), true);
+    port_log_kv("ADxCH0CNT", ADCREG(CH0CNT), true);
+    port_log_kv("ADxCH0RES", ADCREG(CH0RES), true);
+    port_log_kv("ADxCH0DATA", ADCREG(CH0DATA), true);
     /* The IEC/IFS word that holds the core's channel-0 event. */
-    console_kv("ch0 irq", adc_cur->ch0_irq);
-    console_kv_hex("cal bits (ACALEN|CALREQ|CALRATE)", adc_cal_bits());
-    console_kv_hex("IECx (this core's word)", *adc_cur->IEC);
-    console_kv_hex("IFSx (this core's word)", *adc_cur->IFS);
-    console_kv_hex("CH0 IRQ mask in it", adc_cur->ch0_mask);
+    port_log_kv("ch0 irq", adc_cur->ch0_irq, false);
+    port_log_kv("cal bits (ACALEN|CALREQ|CALRATE)", adc_cal_bits(), true);
+    port_log_kv("IECx (this core's word)", *adc_cur->IEC, true);
+    port_log_kv("IFSx (this core's word)", *adc_cur->IFS, true);
+    port_log_kv("CH0 IRQ mask in it", adc_cur->ch0_mask, true);
 }

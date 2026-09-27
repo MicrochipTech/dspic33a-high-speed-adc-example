@@ -224,7 +224,7 @@ int main(void)
     console_puts(crc16_selfcheck()
                  ? "[boot] crc16/ccitt-false self-check: ok (0x29B1)\r\n"
                  : "[boot] crc16/ccitt-false self-check: FAILED\r\n");
-    adc_init(ADC_PINSEL, ADC_SAMC);
+    adc_init(ADC_PINSEL, ADC_SAMC, SAMPLES_PER_BUF_MAX);
     boot_mark(6u);
     capture_init();
     boot_mark(7u);

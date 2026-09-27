@@ -57,11 +57,13 @@ bool     adc_ch0_flag(void);                 /* its CH0 interrupt flag          
  * the core's event flags. Between tests, with the core idle. */
 void     adc_clear_events(void);
 
-/* ADC core ADC_INSTANCE, channel 0, Integration mode, CNT = the DMA block
- * length, conversions back-to-back (TRG2SRC = 2) - the only mechanism
- * this silicon honours. The rate comes from the ADC clock alone, see
- * clock_adc_set_div(). Stops in fail(5) if the core never reports ready. */
-void adc_init(uint8_t pinsel, uint8_t samc);
+/* ADC core ADC_INSTANCE, channel 0, Integration mode, CNT = burst_len (the
+ * DMA buffer's full length, capture.h's SAMPLES_PER_BUF_MAX - the driver
+ * does not know the buffer), conversions back-to-back (TRG2SRC = 2) - the
+ * only mechanism this silicon honours. The rate comes from the ADC clock
+ * alone, see clock_adc_set_div(). Stops in port_panic(5) (fail()'s code 5)
+ * if the core never reports ready. */
+void adc_init(uint8_t pinsel, uint8_t samc, uint32_t burst_len);
 
 /* Trigger one burst of CNT conversions. */
 void adc_start_burst(void);

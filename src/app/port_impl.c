@@ -36,6 +36,23 @@ void port_log_kv(const char *key, uint32_t v, bool hex)
     }
 }
 
+/* The start-up trace: console_trace*() in cli.c print with BOOT_VERBOSE
+ * 1 (board.h) and are empty functions with it 0, so the gate stays where
+ * it always was and no driver carries it (P4.5). */
+void port_trace(const char *s)
+{
+    console_trace(s);
+}
+
+void port_trace_kv(const char *key, uint32_t v, bool hex)
+{
+    if (hex) {
+        console_trace_kv_hex(key, v);
+    } else {
+        console_trace_kv(key, v);
+    }
+}
+
 void port_panic(uint32_t code)
 {
     fail(code);
