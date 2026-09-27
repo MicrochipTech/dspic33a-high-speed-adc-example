@@ -231,13 +231,33 @@ AD1AN0 of this device sits on RA2, which the board routes to a capacitive touch 
 (P38) — that is why the example uses ADC3 here and not ADC1.
 
 The sources sit under `src/`, one folder per role — `src/drivers/` (`clock`, `adc`,
-`dma`, `sccp`, `dac`, `timebase`, `led`, one `.c/.h` pair each), `src/app/` (`main.c`,
-`capture.c/.h`, `config_bits.c`, `board.h`), `src/cli/` (`cli.c`, `console.h` and the
-parser pair `cmd_parser.c/.h`), `src/tests/` (`chaintest`, `dactest`), `src/lib/`
-(`crc16`), `src/diag/` (`diag`) and `src/sim/` (`sim.h`, `sim_dma.c`) — and the MPLAB X
-project references them there; nothing is duplicated. Every folder is on the include
-path, so the files include each other as `"name.h"`. `src/app/main.c` is the place to
-read first: it is the start-up order and the main loop, and nothing else.
+`dma`, `sccp`, `dac`, `timebase`, `led`, `uart`, one `.c/.h` pair each), `src/app/`
+(`main.c`, `capture.c/.h`, `config_bits.c`, `board.h`, `port_impl.c` — this project's
+implementation of the port layer — `pingpong.c/.h` — the ping-pong buffer's bookkeeping
+— `acquisition.c/.h` — the rate setters, the variant matrix and the standing chain
+stream — and `routing.c/.h` — the routing core, below), `src/boards/` (`board_cfg.h`
+and one `const board_cfg_t` per board, `ev74h48a.c`/`ev17p63a.c`, exactly one linked per
+build), `src/meter/` (`meter.c/.h`: the counters, processing cost and rate measurement,
+out of `capture.c`), `src/cli/` (`cli.c`, `console.h` and the parser pair
+`cmd_parser.c/.h`), `src/link/` (`gui_link.c/.h`, the GUI's binary transport — `blk`,
+`stream grab`), `src/tests/` (`chaintest`, `dactest`, `bench` — the back-to-back test
+suite), `src/lib/` (`crc16`, `fmt`, `stats`, `tri_eval`, `frame` — the hardware-free
+algorithms and the GUI frame writer, all with host tests under `tests/host/` — plus,
+included in every build but not yet called from anywhere, `iir1`, `goertzel_f`,
+`goertzel_i`, `detect`, `wavegen`, the building blocks for a future multi-channel
+signal chain), `src/port/` (`log.h`, `panic.h`, `wait.h`, `regs.h` — headers only: the
+one path by which a driver may log, wait or stop, implemented by `src/app/port_impl.c`),
+`src/diag/` (`diag`) and `src/sim/` (`sim.h`, `sim_dma.c`) — and the MPLAB X project
+references them there; nothing is duplicated. Every folder is on the include path, so
+the files include each other as `"name.h"`. `src/app/main.c` is the place to read
+first: it is the start-up order and the main loop, and nothing else.
+
+A **routing core** (`src/app/routing.c/.h`) tracks which resources — DMA channel, SCCP,
+DAC output, UREF, RAM — a route such as `ROUTE_STREAM` needs, refuses a conflict or an
+unreachable pin before any driver call, and is what `stream on` goes through; `route
+list` prints the active route and the resource table. `CLAUDE.md`'s module table is the
+complete, authoritative file list and who may call what; `docs/FIRMWARE-STRUCTURE.md`
+and `docs/REFACTORING-PROPOSAL.md` are the analysis and the plan that led here.
 
 **This needs real hardware.** The clock generators, the PLLs, the ADC and the DMA are
 the four things this example is about, and all four only exist on silicon. The number
@@ -410,6 +430,9 @@ wait for "[boot] READY", then type:   chain all
 wait for "@END" (under a minute), send the log file back
 ```
 
+(The scripted way to run this, both boards' firmware in one session, with the log
+archived automatically: `board_run/README.md`.)
+
 If it stops without `@END`, reset the board and send the log including the new
 boot banner: the next boot prints the stage the run was in
 (`[boot] WARNING the last 'chain' run ended without @END, in stage S...`), and
@@ -570,7 +593,8 @@ the cause of the next overrun.
 UART2 on the board's MCP2221A USB-UART channel, 115200 8N1, no flow control. The parser
 is [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser), copied unchanged except for
 one line (the command table is 32 entries instead of 16 — `CMD_PARSER_MAX_COMMANDS`,
-`cmd_parser.h`; 27 commands plus the built-in `help` are registered, `nano-board`). It
+`cmd_parser.h`; 27 commands, including `route`, plus the built-in `help` are
+registered — 28 of 32 slots, 4 free, `nano-board`). It
 runs in the UART receive interrupt, below the DMA interrupt — which is why a rate that
 overruns makes the console unresponsive, and why the firmware boots idle.
 
@@ -578,7 +602,7 @@ overruns makes the console unresponsive, and why the firmware boots idle.
 |---|---|
 | `help` | the command list |
 | `version` | build id, git revision, board, configuration |
-| `status` | run state, counters, the clock, the receive diagnostics |
+| `status` | run state, counters, the clock, the receive diagnostics, and — since the board-run preparation (BR.6) — the stack high-water mark and its margin to `SPLIM`, the sample buffer's address/alignment/guard-word check, and the boot stage/trap/`chain all` stage of the current run |
 | `regs` | clock, ADC, DMA, DAC, UREF and UART registers |
 | `route list` | the active route (source, core, pinsel, DAC, sink) and the resource table — which DMA channel, SCCP, DAC output and UREF are in use, RAM used vs. budget (`docs/DESIGN-MULTICHANNEL.md`'s routing core) |
 | `test [part] [halves]` | run a part of the measurement, or `all` — see below |
@@ -916,33 +940,53 @@ simulator run takes about 2.5 minutes for the 100 halves.
 
 ## Files
 
+Since the N+1 restructuring (27.09.2026) the sources sit under `src/`, one folder per
+role — see "The board" above for the folder list and `CLAUDE.md`'s module table for
+which file may call which. The table below is the reading order, not the full list:
+
 | Path | Contents |
 |---|---|
-| `main.c` | start-up sequence and the main loop — the order of the inits, and why |
-| `board.h` | everything board-specific: the compile-time choices (`ADC_INSTANCE`, `ADC_PINSEL`, `ADC_SAMC`, the boot sample rate `ADC_PLL_POSTDIV1/2`), where the DAC reaches the ADC, the LED pin, the console pins |
-| `config_bits.c` | every configuration word of the device, with the reason for each value — and why two of them are written as numbers |
-| `clock.c`, `clock.h` | FRC → PLL1 320 MHz (ADC) and PLL2 200 MHz (CPU), the switching order, the clock-fail interrupt, the ADC clock's rate control (`clock_adc_set_pll()`, PLL1's output dividers — the knob that works) and `clock_adc_set_div()` (the CLKGEN6 divider, which does not change the rate on this silicon and is kept only so the behaviour can be reproduced) |
-| `adc.c`, `adc.h` | the ADC core: channel 0 in Integration mode, burst trigger, input/sample-time register |
-| `dma.c`, `dma.h` | DMA channel 0: address window, Repeated One-Shot mode, HALF/DONE interrupt, status flags — knows no ADC and no buffer |
-| `sim_dma.c`, `sim.h` | **simulator build only:** stand-in for `dma.c` that produces buffer halves (1 MHz sine) and the ping-pong check; see "In the MPLAB X simulator" |
-| `capture.c`, `capture.h` | the measurement: wires ADC and DMA together, handles the DMA events with every error counter and the burst restart, start/stop/input, self-test, per-half processing, the triggered stream the chain test uses, and `capture_chain_halt`/`_resume` — pausing and restarting that stream's trigger in place, for the GUI's grab cycle — what the console may read and control |
-| `crc16.c`, `crc16.h` | CRC-16 over a sample block, for the `blk` binary transfer command |
-| `sccp.c`, `sccp.h` | SCCP1 as the chain test's trigger source (clock, mode, event), its timer and compare interrupts as event counters |
-| `chaintest.c`, `chaintest.h` | the chain test itself — `chain all`, its triangle evaluator, the `@` log line format, and `chain_stream_grab_begin`/`_end` — one halt/grab/restart cycle for `stream grab`; see "The chain test" below |
-| `led.c`, `led.h` | LED0 |
-| `diag.c`, `diag.h` | stop codes (`fail()`), trap and unhandled-interrupt handler, boot-stage record, reset cause, register dump |
-| `timebase.c`, `timebase.h` | Timer1 as a 12.5 MHz stopwatch — the independent clock the delivered sample rate is measured against (`test rate`, `test sweep`, and the window length of the DAC test). It does **not** pace the ADC |
-| `dac.c`, `dac.h` | DAC1 and DAC2 in Triangle Wave mode on their pins DACOUT1 = RA1 and DACOUT2 = RA8 (CLKGEN7 as their shared clock), one table for both units. The DAC test itself instead routes DAC2 through `UREFCON` onto the chip's internal UREF line, where every ADC core can sample it as `ANn7` — no pin, no wire, no core switch |
-| `dactest.c`, `dactest.h` | captures one contiguous buffer with the stream stopped from the DMA interrupt, then judges whichever DAC is running (`dac_active()` picks DAC2 first if both run): a changing signal, even steps, no jump, and the triangle period measured from the data. `[dactest]` lines, PASS/FAIL |
-| `cli.c`, `console.h` | the console: UART2 on the MCP2221A channel, the receive interrupt, the commands |
-| `cmd_parser.c`, `cmd_parser.h` | the command parser, unchanged from [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser) (Apache 2.0) |
+| `src/app/main.c` | start-up sequence and the main loop — the order of the inits, and why |
+| `src/app/board.h`, `src/boards/board_cfg.h`, `src/boards/ev74h48a.c`/`ev17p63a.c` | board-specific choices: `board.h` for the compile-time ones (`ADC_INSTANCE`, `ADC_PINSEL`, `ADC_SAMC`, the LED and console pins), `board_cfg.h`/the two `.c` files for the one that turned out safe as run-time data — the boot sample rate as PLL1's output dividers |
+| `src/app/config_bits.c` | every configuration word of the device, with the reason for each value — and why two of them are written as numbers |
+| `src/drivers/clock.c/.h` | FRC → PLL1 320 MHz (ADC) and PLL2 200 MHz (CPU), the switching order, the clock-fail interrupt, the ADC clock's rate control (`clock_adc_set_pll()`, PLL1's output dividers — the knob that works) and `clock_adc_set_div()` (the CLKGEN6 divider, which does not change the rate on this silicon and is kept only so the behaviour can be reproduced) |
+| `src/drivers/adc.c/.h` | the ADC core: channel 0 in Integration mode, burst trigger, input/sample-time register |
+| `src/drivers/dma.c/.h` | DMA channel 0: address window, Repeated One-Shot mode, HALF/DONE interrupt, status flags — knows no ADC and no buffer |
+| `src/sim/sim_dma.c`, `src/sim/sim.h` | **simulator build only:** stand-in for `dma.c` that produces buffer halves (1 MHz sine) and the ping-pong check; see "In the MPLAB X simulator" |
+| `src/app/pingpong.c/.h` | the two-half buffer's bookkeeping on its own since P9.1: which half just completed, the guard-word check, the main-loop service counters — no driver include, the buffer is passed in |
+| `src/app/capture.c/.h` | the measurement: wires ADC and DMA together, the DMA event handler and the burst restart, start/stop/input, the buffer itself (with guard words), and `capture_chain_halt`/`_resume` — pausing and restarting the chain stream's trigger in place, for the GUI's grab cycle — what the console may read and control |
+| `src/meter/meter.c/.h` | the counters, processing cost and rate measurement, out of `capture.c` on P9.3 |
+| `src/app/acquisition.c/.h` | the rate setters, the variant matrix, and the standing chain stream `chain_stream_*()` (out of `chaintest.c` on P9.4) |
+| `src/app/routing.c/.h` | the routing core: which resources (DMA, SCCP, DAC output, UREF, RAM) a route needs, checked and refused before any driver call; `route list`'s data source |
+| `src/lib/crc16.c/.h` | CRC-16 over a sample block, for the `blk`/`stream grab` binary transfer |
+| `src/lib/fmt.c/.h`, `src/lib/stats.c/.h`, `src/lib/tri_eval.c/.h` | the printf-free formatting helpers, min/max/mean over a completed half, and the chain test's triangle evaluator — hardware-free, each with a host test under `tests/host/` |
+| `src/lib/frame.c/.h` | the binary frame writer `blk`/`stream grab` share: header, chunked payload with the CRC folded in, CRC tail |
+| `src/lib/iir1.c/.h`, `goertzel_f.c/.h`, `goertzel_i.c/.h`, `detect.c/.h`, `wavegen.c/.h` | a first-order IIR filter, damped Goertzel in float and in Q16 fixed point, a hysteresis pulse detector, and a signal-generator table — included in every build, cross-checked against a Python reference on the host, and not yet called from anywhere: the building blocks for the multi-channel signal chain planned for N+4 |
+| `src/drivers/sccp.c/.h` | SCCP1 as the chain test's trigger source (clock, mode, event), its timer and compare interrupts as event counters |
+| `src/tests/chaintest.c/.h` | the chain test itself — `chain all`, the `@` log line format, and `chain_stream_grab_begin`/`_end` — one halt/grab/restart cycle for `stream grab`; see "The chain test" below |
+| `src/tests/bench.c/.h` | the back-to-back test suite (`test ...`, `sweep`, `matrix`), out of `cli.c` |
+| `src/drivers/led.c/.h` | LED0 |
+| `src/diag/diag.c/.h` | stop codes (`fail()`), trap and unhandled-interrupt handler, boot-stage record, reset cause, the register-dump visitor |
+| `src/port/log.h`, `panic.h`, `wait.h`, `regs.h` | the port layer: the one path (`port_log*()`, `port_panic()`, `PORT_WAIT_WHILE`, a register visitor) by which a driver under `src/drivers/` may log, wait, stop or dump its registers, without including the console — implemented by `src/app/port_impl.c` |
+| `src/drivers/timebase.c/.h` | Timer1 as a 12.5 MHz stopwatch — the independent clock the delivered sample rate is measured against (`test rate`, `test sweep`, and the window length of the DAC test). It does **not** pace the ADC |
+| `src/drivers/dac.c/.h` | DAC1 and DAC2 in Triangle Wave mode on their pins DACOUT1 = RA1 and DACOUT2 = RA8 (CLKGEN7 as their shared clock), one table for both units. The DAC test itself instead routes DAC2 through `UREFCON` onto the chip's internal UREF line, where every ADC core can sample it as `ANn7` — no pin, no wire, no core switch |
+| `src/tests/dactest.c/.h` | captures one contiguous buffer with the stream stopped from the DMA interrupt, then judges whichever DAC is running (`dac_active()` picks DAC2 first if both run): a changing signal, even steps, no jump, and the triangle period measured from the data. `[dactest]` lines, PASS/FAIL |
+| `src/link/gui_link.c/.h` | the GUI's binary transport: `blk`/`snap`/`rate` and `stream grab`'s body, built on `frame.c`, out of `cli.c` |
+| `src/cli/cli.c`, `console.h` | the console: on top of `src/drivers/uart.c`, the receive callback, the commands and their reply framing |
+| `src/drivers/uart.c/.h` | UART2 on the MCP2221A channel: pins/PPS, the baud generator, the non-blocking transmit and bounded flush, the receive interrupt — out of `cli.c` on P5.1 |
+| `src/cli/cmd_parser.c/.h` | the command parser, unchanged from [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser) (Apache 2.0) |
 | `adc_dma_40msps.X/` | MPLAB X project — build, program and debug from here |
+| `tests/host/` | host-side (gcc) unit tests for every module in `src/lib/` plus `pingpong`/`routing`, run by `tools\hosttest.bat` |
+| `tests/trace/` | the register-trace harness: golden logs of every register write a driver makes, reproduced bit-for-bit after each change (`tools\trace.bat`) |
 | `docs/TROUBLESHOOTING.md` | **what to do when it does not work** — including where we doubt our own code |
 | `docs/HARDWARE-LOG.md` | every run on the board, dated: what the log said, what was changed because of it |
+| `docs/FIRMWARE-STRUCTURE.md`, `docs/REFACTORING-PROPOSAL.md` | the analysis of the pre-N+1 structure and the plan that led to the layout above; kept as the record of why it looks like this |
+| `docs/IMPLEMENTATION-PLAN.md` | the N+1 restructuring plan and its task-by-task status; where "done" is checked against, for every task |
 | `CLAUDE.md` | working notes for continuing with Claude Code: module rules, build and verification steps, open questions |
 | `docs/*.png`, `docs/*.mmd` | the block diagrams above, with their Mermaid sources |
-| `tools/sim_trap.py` | drives the simulator build in MDB and reports the verdict ("In the MPLAB X simulator" above) |
-| `tools/` | command-line build without the IDE; **ignore this unless you want it** |
+| `tools/sim_trap.py` | drives the simulator build in MDB: `--smoke` for the short boot/console check (**[SMOKE]**, under a minute), the default for the ~7-minute ping-pong acceptance run (**[SIM]**); see "In the MPLAB X simulator" |
+| `tools/board_run.py`, `board_run/` | the scripted board run — one script drives the console against the pre- and post-restructuring firmware and writes one archive; see "The chain test" above and `board_run/README.md` |
+| `tools/` | command-line build without the IDE, the host test/trace runners, the GUI; **ignore this unless you want it** |
 
 ### The GUI: capture, plot, FFT (`tools/adc_gui.py`)
 

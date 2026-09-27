@@ -3,6 +3,11 @@
 As of: 26.09.2026, revision `28e88fa`. Based on: `docs/FIRMWARE-STRUCTURE.md` and
 a dependency analysis of the drivers. None of this has been implemented yet.
 
+**Status (27.09.2026, P12.2):** N+1 (`docs/IMPLEMENTATION-PLAN.md`) carried out V1,
+V2, V4, V7, V9 and V10 in full, V8 reduced, and moved V3 and V5 (bundled as P8) and V6
+(as P10) to N+2 — each `### VN` section below has a one-line status with its P-task(s)
+and commit(s); `CLAUDE.md`'s module table is the resulting, authoritative file list.
+
 **Goal:** Every module can be copied into another project without dragging along
 files it does not functionally need. A driver brings only its port header, an
 algorithm nothing but `<stdint.h>`.
@@ -71,6 +76,9 @@ host/
 
 ### V1: Hardware-free algorithms into `lib/`
 
+**Status: done** — P2.1-P2.4 (`59e48d4`, `28a5c13`, `cacc592`, `009ba51`); host tests
+under `tests/host/`.
+
 `crc16.c` (already clean), `tri_eval()` and `fit_line()` from chaintest.c,
 `u32_to_str()`/`u32_to_hex()` from cli.c as `fmt.c`, `half_stats()`/`half_mean()`
 as `stats.c`. Interface only with `const uint16_t *`, length and a result
@@ -83,6 +91,10 @@ original file.
 *Risk:* none. Pure move, no register change, no board run needed.
 
 ### V2: Port layer for output and abort
+
+**Status: done** — P4.1-P4.8 (`2f4c2cd` .. `6e8d4b6`, plus the added `port/wait.h` card
+P4.6a `529c6a3`); `src/port/log.h`/`panic.h`/`wait.h`/`regs.h`, one register visitor
+per driver, implemented by `src/app/port_impl.c`.
 
 ```c
 /* port/log.h - implemented by the project; a driver only calls these */
@@ -112,6 +124,10 @@ the driver no longer contains any text code.
 
 ### V3: Callbacks instead of fixed calls upward
 
+**Status: deferred to N+2** — bundled with V5 as P8 (user decision 27.09.2026, see
+`docs/IMPLEMENTATION-PLAN.md` "Decisions taken during the work"); this section's own
+"defer" call (section 7 below) stands.
+
 ```c
 typedef void (*dma_event_cb_t)(void *ctx, uint32_t status);
 void dma_set_callback(dma_ch_t *ch, dma_event_cb_t cb, void *ctx);
@@ -135,6 +151,10 @@ implementation in the driver.
 
 ### V4: Extract the UART driver from cli.c
 
+**Status: done** — P5.1/P5.2 (`1b82b9f`, `8c77890`); `src/drivers/uart.c/.h`, the one
+exception to the port-layer rule by design (it is what `port_log*()` ends up writing
+through).
+
 `drivers/uart.c`: init with instance, baud rate, pin configuration from the
 board, transmit FIFO loop, receive callback. `cli/` builds a character-wise
 input/output (`putc`, `write`, `rx_cb`) on top of it and no longer knows any
@@ -146,6 +166,10 @@ breaks it, the board run is lost. Therefore check it in the simulator, where
 the UART runs.
 
 ### V5: Instances as parameters instead of in the name
+
+**Status: deferred to N+2** — bundled with V3 as P8 (user decision 27.09.2026); today's
+firmware still has one DMA channel and one instance of each peripheral, which
+`ROUTE_STREAM` works with as is.
 
 ```c
 typedef struct {
@@ -172,6 +196,10 @@ Therefore as the last step.
 
 ### V6: Split `clock.c` into generic drivers and a clock plan
 
+**Status: deferred to N+2** — as P10 (user decision 27.09.2026); needs a `trace_point()`
+between clock steps (approach (a) of the register trace) when it is picked up, per the
+plan's P10 note.
+
 | New | Content | Portable? |
 |---|---|---|
 | `drivers/pll.c` | Set PLL feedback, pre-divider, output divider and wait for lock | yes |
@@ -189,6 +217,10 @@ after the change.
 
 ### V7: Split `capture.c` into three parts
 
+**Status: done** — P9.1/P9.2/P9.3/P9.4/P9.4b (`4d40f82`, `d868bbb`, `37e9484`,
+`911cdb9`, `93c485f`); `src/app/pingpong.c`, `src/meter/meter.c`,
+`src/app/acquisition.c`. [SIM] acceptance run at P9.5: PASS, 100 halves, 0 mismatches.
+
 | New | Content |
 |---|---|
 | `pingpong/pingpong.c` | Half logic: `on_half(idx)` from the DMA callback, `service()` with `missed`/`late`, guard words. **No driver include.** The buffer is passed in from outside |
@@ -205,6 +237,13 @@ runs when the user says so.
 
 ### V8: Board configuration as data
 
+**Status: done, reduced** — P7.1 (`b708584`, ported from `ea93510`): only the boot PLL
+dividers moved into `board_cfg_t`. ADC core/input, LED port/polarity and the console's
+PPS/TRIS pins stay `board.h` macros — each reverted for its own measured or checked
+reason (broken golden traces, a slower hot path, a bitfield layout no runtime pointer
+reproduces); see `src/boards/board_cfg.h`'s own comment and `CLAUDE.md`'s `board.h`
+row for the full account. Revisit in N+2 with P8.
+
 `boards/ev74h48a.h` and `boards/ev17p63a.h`, each with one `const board_cfg_t`
 (UART pins and PPS, LED port, ADC instance and input, DAC route). Drivers no
 longer include `board.h`. They get their configuration at init. Only `app/`
@@ -217,6 +256,9 @@ not drift apart.
 *Risk:* low, if the macros are initially just moved into the structure.
 
 ### V9: GUI transport as its own protocol module
+
+**Status: done** — P6.3/P6.4/P6.5 (`e52c234`, `475462e`, `88b00d6` merge `aa1498c`);
+`src/lib/frame.c`, `src/link/gui_link.c`, `tools/protocol.py`.
 
 - `link/frame.c` (hardware-free, movable into `lib/`): header line, payload in
   chunks, CRC line. Writes via `size_t (*write)(const uint8_t *, size_t)`.
@@ -233,6 +275,9 @@ keeps the GUI compatible.
 `FakeTarget`).
 
 ### V10: Separate CLI and tests
+
+**Status: done** — P6.1/P6.2 (`e7826bf`, `9408731`); `src/tests/bench.c`, per-module
+command registration (`bench_register()`, `link_register()`, `chain_register()`).
 
 - `tests/bench.c`: `test_*`, `matrix_*`, `sweep_*` from cli.c (about 700
   lines).

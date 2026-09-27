@@ -3,6 +3,19 @@
 As of 26.09.2026, revision `28e88fa`. Pure code analysis: nothing built, nothing
 run on silicon. Line counts rounded.
 
+**Status (27.09.2026, P12.2):** the target structure this document proposes (below)
+has since been implemented — `docs/REFACTORING-PROPOSAL.md` carries the V1..V10
+done/deferred list with the commit for each, and `CLAUDE.md`'s module table is now
+the authoritative, current file-by-file description (who owns which register, who may
+call what). What follows is kept as it was written: the analysis of the *pre-N+1*
+state (`28e88fa`) that the restructuring was measured against, and the reasoning for
+the target layout. Two categories the analysis did not anticipate and that the actual
+work added: the **routing core** (`src/app/routing.c`, tracking resource conflicts
+across DMA/SCCP/DAC/UREF/RAM for a route such as `ROUTE_STREAM`) and **board
+configuration as data reduced to one field** (`src/boards/board_cfg.h` carries only
+the boot PLL dividers — P7.1 tried the wider move this document's V8 describes and
+reverted most of it; the reasons are in `CLAUDE.md`'s `board.h` row).
+
 The firmware comprises about 10,500 lines of C in 17 modules, plus about 5,000 lines
 of Python under `tools/`. This document assigns each module to a category, shows
 where modules mix several categories, and proposes a target structure.
@@ -220,6 +233,9 @@ the dependencies in the project.
 ---
 
 ## Proposal for a target structure
+
+**Implemented as of P12 (27.09.2026)** — see `docs/REFACTORING-PROPOSAL.md` for which
+P-task did which part and which commit, and `CLAUDE.md` for the resulting file list.
 
 | Layer | Modules (**bold** = new or extracted) |
 |---|---|
