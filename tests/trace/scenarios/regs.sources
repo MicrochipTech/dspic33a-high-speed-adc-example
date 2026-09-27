@@ -2,6 +2,7 @@ src/diag/diag.c
 src/drivers/clock.c
 src/drivers/adc.c
 src/drivers/dma.c
+src/app/pingpong.c
 src/app/capture.c
 src/drivers/dac.c
 src/drivers/sccp.c

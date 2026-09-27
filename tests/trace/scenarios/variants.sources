@@ -1,3 +1,4 @@
+src/app/pingpong.c
 src/app/capture.c
 src/drivers/adc.c
 src/drivers/dma.c

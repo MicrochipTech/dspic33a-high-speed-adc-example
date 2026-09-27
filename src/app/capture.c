@@ -48,6 +48,7 @@
 #include "clock.h"
 #include "sccp.h"
 #include "stats.h"
+#include "pingpong.h"
 
 /* Self-test input and window. ADxAN6 is the internal 15/16 * VDD
  * reference on every core and package (Table 16-2, p1224), which the
@@ -103,6 +104,16 @@ static volatile struct {
     uint32_t guard[BUF_GUARD_WORDS];
 } dma_buffer __attribute__((section(".dma_buffer"), aligned(4)));
 #define buf (dma_buffer.data)
+
+/* pingpong.c's own state (P9.1): proc_missed's computation and the
+ * main-loop service bookmark - see pingpong.h for why late_service/
+ * dma_overrun stay capture.c's own globals instead. The buffer, the
+ * guard words and blocks_done/ready_half/last_sample below are NOT
+ * cached here either - every call passes them in fresh (pingpong.h: it
+ * is what keeps dma0_event() cheap). Zero-initialised by C's rule for
+ * static storage, exactly the state pingpong_counters_clear() would
+ * otherwise have to produce. */
+static pingpong_t pp;
 
 /* ------------------------------------------------------------------ *
  * Measurement counters - the actual point of this program
@@ -268,8 +279,6 @@ bool capture_settle(void)
 }
 static bool quiesce(void) { return capture_settle(); }
 
-static uint32_t         seen_blocks    = 0;
-
 /* A burst is in flight from here until the DMA DONE interrupt. */
 static void start_burst(void)
 {
@@ -330,18 +339,23 @@ bool capture_set_half_len(uint32_t n)
     return true;
 }
 
-/* The same check without stopping, for a test that reports it. */
+/* The same check without stopping, for a test that reports it. Delegated
+ * to pingpong.c (P9.1); guard_word() still gives it the base pointer, in
+ * capture_init(), because where the guard words are is capture.c's own
+ * buffer layout decision. */
 bool capture_guard_ok(void)
 {
-    for (uint32_t i = 0; i < BUF_GUARD_WORDS; i++) {
-        if (*guard_word(i) != BUF_GUARD_PATTERN(i)) { return false; }
-    }
-    return true;
+    return pingpong_guard_ok(guard_word(0), BUF_GUARD_WORDS, BUF_GUARD_PATTERN(0));
 }
 
-/* Stop with code 11 if anything wrote past the end of the buffer. */
+/* Stop with code 11 if anything wrote past the end of the buffer. The
+ * check itself is pingpong_guard_ok(); the per-index report on the first
+ * mismatch stays here, unchanged, since it prints. */
 static void guard_check(void)
 {
+    if (pingpong_guard_ok(guard_word(0), BUF_GUARD_WORDS, BUF_GUARD_PATTERN(0))) {
+        return;
+    }
     for (uint32_t i = 0; i < BUF_GUARD_WORDS; i++) {
         if (*guard_word(i) != BUF_GUARD_PATTERN(i)) {
             console_kv("[guard] word behind the buffer changed, index", i);
@@ -406,7 +420,11 @@ void dma0_event(uint32_t st)
 
     /* Both halves pending at once means this handler arrived more than
      * one half (25.6 us) late and the first half has already been
-     * overwritten by the DMA reload. */
+     * overwritten by the DMA reload. Kept as the same two raw tests of
+     * `st` the code below tests again per branch - not a shared boolean -
+     * so that each branch below stays the single, self-contained `if`
+     * it was before this task; pingpong.h's design note says why that
+     * matters here. */
     if ((st & DMA0_HALF) && (st & DMA0_DONE)) {
         late_service++;
     }
@@ -414,16 +432,17 @@ void dma0_event(uint32_t st)
     if (st & DMA0_HALF) {
         half_events++;
         dma0_clear(DMA0_HALF);
-        ready_half  = 0u;
-        last_sample = buf[half_len - 1u];
-        blocks_done++;
+        /* Which half is ready, the last sample, blocks_done - now
+         * pingpong.c's pingpong_on_half() (P9.1), `static inline` so
+         * this stays the same handful of instructions it always was. */
+        pingpong_on_half(buf, half_len, &blocks_done, &ready_half, &last_sample,
+                         false);
     }
     if (st & DMA0_DONE) {
         done_events++;
         dma0_clear(DMA0_DONE);
-        ready_half  = 1u;
-        last_sample = buf[2u * half_len - 1u];
-        blocks_done++;
+        pingpong_on_half(buf, half_len, &blocks_done, &ready_half, &last_sample,
+                         true);
 
         /* The channel is idle between bursts: this is the only safe
          * moment to change its input or sample time. */
@@ -691,7 +710,7 @@ const struct pll_step *capture_sweep_steps(uint32_t *count)
 
 const volatile uint16_t *capture_completed_half(void)
 {
-    return &buf[ready_half ? half_len : 0u];
+    return pingpong_completed_half(buf, half_len, ready_half);
 }
 
 void counters_clear(void)
@@ -701,12 +720,15 @@ void counters_clear(void)
     isr_entries = 0; half_events = 0; done_events = 0; burst_starts = 0;
     proc_ticks_max = 0; proc_ticks_sum = 0; proc_count = 0;
     dma_overrun = 0; dma_addr_err = 0; dma_bus_err = 0;
-    late_service = 0; proc_missed = 0;
-    /* Halves completed up to now are not "missed" from here on. Without
-     * this the first capture_service() after the self-test books its
-     * 12 unserviced halves as proc_missed, and the heartbeat goes to the
-     * error rate before the measurement has even started. */
-    seen_blocks = blocks_done;
+    late_service = 0;
+    /* proc_missed and pingpong's own service bookmark: pingpong.c's
+     * pingpong_counters_clear() (P9.1). Halves completed up to now are not
+     * "missed" from here on - without that, the first capture_service()
+     * after the self-test books its 12 unserviced halves as proc_missed,
+     * and the heartbeat goes to the error rate before the measurement has
+     * even started. */
+    pingpong_counters_clear(&pp, blocks_done);
+    proc_missed = pp.missed;
 }
 
 /* ------------------------------------------------------------------ *
@@ -762,14 +784,10 @@ uint32_t capture_process_bench(void)
 
 bool capture_service(void)
 {
-    const uint32_t done = blocks_done;
-    if (done == seen_blocks) {
+    if (!pingpong_service(&pp, blocks_done)) {
         return false;
     }
-    if ((done - seen_blocks) > 1u) {
-        proc_missed += (done - seen_blocks) - 1u;
-    }
-    seen_blocks = done;
+    proc_missed = pp.missed;
     const uint32_t t0 = timebase_ticks();
     process_buffer(capture_completed_half(), half_len);
     const uint32_t dt = timebase_ticks() - t0;
@@ -778,11 +796,14 @@ bool capture_service(void)
     proc_count++;
     guard_check();                    /* did the DMA stay inside buf?    */
 
-    /* Heartbeat: slow while clean, fast once any error counter moved. */
+    /* Heartbeat: slow while clean, fast once any error counter moved.
+     * pp.seen_blocks is the blocks_done snapshot pingpong_service() just
+     * took - the same single, consistent reading capture_service() used
+     * to keep in its own local `done` for this. */
     if (led_get_mode() == 2u) {
         const bool clean = (dma_overrun | dma_addr_err | dma_bus_err |
                             late_service | proc_missed) == 0u;
-        if ((done % (clean ? HEARTBEAT_OK : HEARTBEAT_ERR)) == 0u) {
+        if ((pp.seen_blocks % (clean ? HEARTBEAT_OK : HEARTBEAT_ERR)) == 0u) {
             led_toggle();
         }
     }
