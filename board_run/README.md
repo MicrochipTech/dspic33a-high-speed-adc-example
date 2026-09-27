@@ -37,13 +37,9 @@ the PC clock, and your answer about a signal generator on the R5 input).
 | File | Revision | What it is |
 |---|---|---|
 | `A-EV74H48A-b41af3b.hex` | `b41af3b` | "A" in the A/B board run: the parent of P0.1, the state of this repository from a clean checkout before the N+1 restructuring began (BR decision 1 - run 19's actual firmware, `fbfd883` plus local changes committed only as `c3bc644`, cannot be rebuilt, so `b41af3b` stands in for "before"). |
+| `B-EV74H48A-dead53c.hex` | `dead53c` | "B" in the A/B board run, added in BR.8: the P12 close-out revision - N+1 restructured, not yet run on silicon (`docs/HARDWARE-LOG.md`'s 2026-09-27 entry). |
 
-**"B" (the NEW firmware, after P12) is added later, in BR.8 - it is not here
-yet.** Until then, this folder holds `A` only, and the runner knows it: it
-tells you clearly that B is not available, programs and runs `A` alone, and
-`summary.txt` says "B not run" instead of comparing two firmwares. Re-run
-`git pull` once BR.8 has landed to get `B-EV74H48A-<rev>.hex` and the ability
-to do the full A/B run.
+**Both A and B are present now** - the runner does the full A/B run.
 
 `SHA256SUMS.txt` (sha256sum format, `sha256sum -c SHA256SUMS.txt` from inside
 this folder checks it by hand) pins every file above byte for byte -
@@ -60,6 +56,9 @@ one build, because `__TIME__` is per translation unit"); the git revision and
 "dirty" flag baked into the banner were identical both times. Nothing else
 differs - the committed file's SHA-256 above is what actually runs on the
 board, whichever of the two timestamp strings a future rebuild would embed.
+`B-EV74H48A-dead53c.hex` was checked the same way before committing (BR.8):
+two independent clean worktree builds of `dead53c`, 4 differing `__TIME__`
+records, git revision and dirty flag identical.
 
 ## Hardware set-up (EV74H48A only - BR decision 3; the Nano/EV17P63A gets its own first run later)
 

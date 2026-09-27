@@ -1636,6 +1636,14 @@ that firmware does.
   (`tools/board_run.py`), an evaluator against expectations tagged by source
   (`tools/eval_board.py`, `tests/board/expected.json`), and firmware fields `status`
   needed for it (stack high-water mark, buffer placement, boot/trap state - see below).
+  **Added 28.09.2026 (BR.8):** the two firmware images for the first A/B board run are
+  now committed in `board_run/` -
+  `A-EV74H48A-b41af3b.hex` (SHA-256
+  `7068aa0998744621bb4acbc37d26ddf8522bd71961a62f44f69d68682197c0c0`, the pre-restructuring
+  "before") and `B-EV74H48A-dead53c.hex` (SHA-256
+  `1e1a27d414a2b7af0d1ba4ecc488fe4b4d7fca10e2826b8127324f659a8eac9b`, this entry's own
+  P12 close-out HEAD, `dead53c` - the "after" this entry describes, still not run on
+  silicon).
   **P8** (drivers with instances) and **P10** (split `clock.c`) were moved to N+2 on
   27.09.2026 to keep this restructuring to about a week of agent time.
 
