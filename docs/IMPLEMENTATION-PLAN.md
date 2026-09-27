@@ -1,6 +1,7 @@
 # Implementation plan: version N+1
 
-As of 26.09.2026, revision `28e88fa`. Plan only; no task below has started.
+Written 26.09.2026 at revision `28e88fa`. Work started the same day; the progress is
+tracked in "Status" below. Nothing of N+1 has run on silicon.
 
 Scope and decisions: `docs/DESIGN-MULTICHANNEL.md` (section 7, decisions; section 8,
 version plan) and `docs/REFACTORING-PROPOSAL.md` (V1..V10, section 7, working without
@@ -14,6 +15,81 @@ does for the user is exactly what it does today:** `stream on`, `stream grab`, `
 **Constraint:** no board. Every task has to be verified as behaviour-preserving
 without silicon. N+1 as a whole stays "not run on silicon" until the first board run
 reproduces today's `chain all`.
+
+## Status
+
+**Every task updates its own row here in the same commit that does the task.** The
+commit message stays the detailed record; this table is the one place to see where the
+work stands. `done` = committed and re-checked by the lead session (builds, `trace.bat`,
+`hosttest.bat`, goldens, no trailer).
+
+As of 27.09.2026. Done: 27 of 64 tasks (63 planned plus P0.9); P0.5b and P4.6a were
+added along the way and are not counted.
+
+| Task | Status | Commit | Model | Note |
+|---|---|---|---|---|
+| P0.1 Baseline | done | `6224d6d` | Sonnet | hw 83.4 KB flash / 14.8 KB RAM; figures from the map file (no size tool in xc-dsc 3.31) |
+| P0.2 Host test harness | done | `0a84aa6` | Sonnet | MinGW gcc 16.1; `tools\hosttest.bat` |
+| P0.3 Trace spike | done | `f1c5ad5` | Opus | recommended the page guard; the user chose (a), see Decisions |
+| P0.4 Trace harness | done | `a9218be` | Sonnet | snapshot diff in C |
+| P0.5 Golden traces | done | `51e0181`, `f294834` | Sonnet | 13 scenarios; cost 169 M tokens, a card cut too large |
+| P0.5b Read hook, fast `trace.bat` | done | `8089b6d`, `49dae4d` | Sonnet | race and retries gone; `trace.bat` 5 min 19 s -> ~7 s; goldens byte-identical |
+| P0.6 `fncmp.py` | done | `c25c07e`, `07b6763` | Fable | `_DMA0Interrupt` 42 instructions, 0 indirect calls |
+| P0.7 Smoke build | done | `e777678` | Fable | 82-99 s per run; the simulator does NOT trap a misaligned read - the fault case is a stack overflow |
+| P0.8 Header cross-check | done | `3f43aa2` | Fable | ATDF check in every `trace.bat` run, 0 errors both devices; simulator: 0 disagreements |
+| P0.9 ATDF reset values | done | `3adafc9` | Fable | added task; 89 golden lines changed, all explained; `PR1` write now invisible (equals reset value) |
+| P1.1 Move into `src/` | done | `2c4a6f9` | Fable | fncmp: 0 functions differ in hw, sim, nano, smoke |
+| P2.1 `lib/fmt` | done | `59e48d4` | Fable | |
+| P2.2 `lib/stats` | done | `28a5c13` | Fable | no volatile; all callers read the completed half; `n = 0` still unguarded (as before) |
+| P2.3 `lib/tri_eval` | done | `cacc592` | Fable | 0 false alarms in 2100 clean windows, 100 % detection with the fault in the middle half (95.4 % anywhere) |
+| P2.4 C/Python cross-check | done | `009ba51` | Fable | 306 windows identical |
+| P3.1 Reference models | done | `de0120e`, `dd7951f` | Fable | damped form and hysteresis, see Decisions |
+| P3.2 `lib/iir1` | done | `dee0638` | Fable | exact against the reference |
+| P3.3 `lib/goertzel_f` | done | `796408d` | Fable | max. deviation 1 LSB |
+| P3.4 `lib/goertzel_i` | done | `c015270` | Fable | max. deviation 1 LSB |
+| P3.5 `lib/detect` | done | `355f237` | Fable | exact counts 4/4/0/3, two channels independent |
+| P3.6 `lib/wavegen` | done | `c926a69` | Fable | 0 of 1536 values differ from the reference |
+| P3.7 Libraries into the builds | committed, not yet re-checked | `8376a5b` | Fable | |
+| P3.8 Cycle count (optional) | open | | | |
+| P4.1 Port layer | done | `2f4c2cd` | Fable | |
+| P4.2 timebase, led | done | `7725dce` | Fable | nothing to move |
+| P4.3 sccp | done | `702fe95` | Fable | |
+| P4.4 dac | done | `c8d17f7` | Fable | |
+| P4.5 adc | done | `0ccdd74` | Fable | `port_trace*` added (keeps the `BOOT_VERBOSE` gate); `adc_init(.., burst_len)` |
+| P4.6a `port/wait.h` | done | `529c6a3` | Fable | added task: one bounded-wait macro instead of per-driver copies |
+| P4.6 dma | done | `49497b0` | Fable | ISR unchanged, 42 instructions |
+| P4.7 clock | done | `6acd0fa` | Fable | `clock_fail_hook()` returns the boot stage; strong version in `port_impl.c` |
+| P4.8 Register visitor | in progress | | Fable | |
+| P5.1-P5.2 UART driver | open | | | |
+| P6.1-P6.5 Split `cli.c` | open | | | |
+| P7.1 Board config as data | open | | | |
+| P8.1-P8.8 Drivers with instances | open | | | P8.1 is the only timing risk |
+| P9.1-P9.5 Split `capture.c` | open | | | P9.5 = [SIM], ask the user first |
+| P10.1-P10.4 Split `clock.c` | open | | | needs `trace_point()` between clock steps (approach (a)) |
+| P11.1-P11.5 Routing core | open | | | P11.4 is the central proof |
+| P12.1-P12.4 Close-out | open | | | P12.4 = [SIM], ask the user first |
+
+### Decisions taken during the work
+
+| Date | Decision | Where recorded |
+|---|---|---|
+| 26.09. | Register trace: snapshot diff in C (approach (a)), not the page-guard trace the spike recommended; `console_*` stubbed; ISR-driven waits left out; goldens compare writes, console, stubs, `fail()`, no reads | `tests/trace/README.md` |
+| 27.09. | Hybrid: a page-guarded read hook serves only the polled registers; the model thread and all retries removed | `tests/trace/README.md` |
+| 27.09. | [SMOKE] runs without asking, one run at a time; the ~7-minute [SIM] run stays on request | `CLAUDE.md` |
+| 27.09. | Trace starts from the ATDF reset values (P0.9) | `tests/trace/README.md` |
+| 27.09. | Goertzel: damped textbook form `q0 = s + 2D·cos·q1 − D²·q2` (the literal reading of the design is undamped) | `docs/DESIGN-MULTICHANNEL.md` 4.3 |
+| 27.09. | Detector counts once per pulse: re-arm only below threshold × hysteresis | `docs/DESIGN-MULTICHANNEL.md` 4.3 |
+
+### Open points found along the way
+
+- MPS506 ATDF gives `CLK1CON` reset value 0x28180, the MPS512's 0x101 (the simulator
+  confirms 0x101); probably an ATDF error. A smoke run for the MPS506 or the Nano board
+  would settle it. No effect on N+1: `clock_init()` writes the whole word.
+- diag.h's `WAIT_WHILE` has no user left after P4.7; `WAIT_LIMIT` is still used by
+  `capture.c` and `main.c`.
+- The trace cannot see a write of a register's reset value (approach (a)), e.g. `PR1`.
+- A clean simulator run does not prove the absence of misaligned accesses; only
+  silicon traps them.
 
 ## Rules for every task
 
