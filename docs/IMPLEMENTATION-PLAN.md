@@ -23,7 +23,7 @@ commit message stays the detailed record; this table is the one place to see whe
 work stands. `done` = committed and re-checked by the lead session (builds, `trace.bat`,
 `hosttest.bat`, goldens, no trailer).
 
-As of 27.09.2026, 23:10. Done: 49 of 52 tasks in the N+1 scope (63 planned plus P0.9 = 64; P8 and P10, 12
+As of 27.09.2026, 23:10. Done: 50 of 52 tasks in the N+1 scope (63 planned plus P0.9 = 64; P8 and P10, 12
 tasks, moved to N+2 on 27.09.2026); P0.5b and P4.6a were added along the way and are
 not counted.
 
@@ -85,7 +85,7 @@ not counted.
 | P12.1 `CLAUDE.md` close-out | open | | | held: `CLAUDE.md` has an uncommitted foreign change (bench_client section), waits for the user |
 | P12.2 README/FIRMWARE-STRUCTURE/REFACTORING-PROPOSAL | done | `70d377c` | Sonnet | `README.md`: the `src/` folder list, the parser slot count (28/32), the `status` row, the whole `Files` table rebuilt on the current tree (port layer, `pingpong`/`meter`/`acquisition` split, `lib/` incl. the unused N+4 building blocks, `routing.c`/`route list`, `tests/host`/`tests/trace`, `[SMOKE]`/`[SIM]`), one pointer line to `board_run/README.md` (BR.7 writes the rest). `docs/FIRMWARE-STRUCTURE.md`: kept as the pre-N+1 analysis, a status note added pointing at the V1..V10 list and at `CLAUDE.md`. `docs/REFACTORING-PROPOSAL.md`: each of V1..V10 marked done/done reduced/deferred to N+2 with its P-task and commit |
 | P12.3 `docs/HARDWARE-LOG.md` entry | done | this commit | Sonnet | dated entry "N+1 restructured, not run on silicon": what changed by phase, what was verified without a board (trace 14/14, hosttest 17/17, [SMOKE], [SIM] P9.5 incl. the repaired `--fault` case, fncmp 42/55), the one console behaviour change (`stream on` custom-pinsel refusal, P11.4), the open points only silicon answers, phase BR (A = `b41af3b` vs. B, BR.9's pass criterion), and predictions for R2/R4 on B |
-| P12.4 [SIM] close-out | open | | | [SIM], `_test_mplabx.bat`, GUI self-test |
+| P12.4 [SIM] close-out | done | this commit | lead | at `ba75ff8` (firmware final: BR.6 included): [SIM] default PASS (0 mismatches), 256 per half PASS, `--fault 65536` FAIL with one mismatch at index 0 (written at 27 s); `_test_mplabx.bat` builds the EV74H48A configuration through MPLAB X's generator (all 34 objects incl. routing/acquisition/meter/pingpong; the generator picked xc-dsc 3.21 and rewrote `languageToolchainVersion`, restored to 3.31; stale `Makefile-*.mk`, `.X/build`, `dist` deleted); `adc_gui.py --selftest` PASS |
 | BR.1 `tools/board_run.py` | done | `175b20c` | Sonnet | phase BR added 27.09.2026 (not counted in the 52); blocks R0..R7 over `protocol.Target`, log `<ms> <TX|RX|EV> <block> <text>`, RUNNER_VERSION 1; `sim_trap.py` cannot serve as a transport (the simulated UART takes no bytes at run time) |
 | BR.2 `tools/eval_board.py` + `expected.json` | done | `0fa9607` | Sonnet | one evaluator: `board_run.py`'s summary calls it; 7 expectations tagged run19/prediction, all citing HARDWARE-LOG 25.09.2026 |
 | BR.3 Python environment | done | `1a6bbaa` | Sonnet | `requirements-board.txt`; `gui_setup.bat/.sh` install both and run all three self-tests; no offline path (decision 5) |
