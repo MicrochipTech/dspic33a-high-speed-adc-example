@@ -64,7 +64,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # The firmware sources live under src/<folder>/ (P1.1); the .sources files name
 # them relative to ROOT, and every folder is on the include path so the sources
 # keep including each other as "name.h".
-SRC_DIRS = [ROOT / "src" / d for d in ("drivers", "app", "cli", "tests", "lib", "diag", "sim")]
+SRC_DIRS = [ROOT / "src" / d for d in ("drivers", "app", "cli", "tests", "lib", "diag", "sim", "port")]
 TRACEDIR = ROOT / "tests" / "trace"
 SCEN = TRACEDIR / "scenarios"
 HARNESS = TRACEDIR / "harness"

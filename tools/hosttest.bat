@@ -25,7 +25,7 @@ set ROOT=%~dp0..
 set TESTDIR=%ROOT%\tests\host
 set OUTDIR=%ROOT%\build\host
 set SRC=%ROOT%\src
-set INC=-I"%SRC%\drivers" -I"%SRC%\app" -I"%SRC%\cli" -I"%SRC%\tests" -I"%SRC%\lib" -I"%SRC%\diag" -I"%SRC%\sim"
+set INC=-I"%SRC%\drivers" -I"%SRC%\app" -I"%SRC%\cli" -I"%SRC%\tests" -I"%SRC%\lib" -I"%SRC%\diag" -I"%SRC%\sim" -I"%SRC%\port"
 
 where gcc >nul 2>nul
 if errorlevel 1 (

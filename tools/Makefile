@@ -24,9 +24,9 @@ TARGET   = adc_dma_40msps
 # The sources live under ../src/<folder>/ (P1.1, 27.09.2026); every folder is
 # on the include path (INC), so the sources include each other as "name.h".
 SRCDIR   = ../src
-INC      = -I$(SRCDIR)/drivers -I$(SRCDIR)/app -I$(SRCDIR)/cli -I$(SRCDIR)/tests -I$(SRCDIR)/lib -I$(SRCDIR)/diag -I$(SRCDIR)/sim
-SRC      = $(SRCDIR)/app/main.c $(SRCDIR)/app/config_bits.c $(SRCDIR)/drivers/clock.c $(SRCDIR)/drivers/adc.c $(SRCDIR)/drivers/dma.c $(SRCDIR)/app/capture.c $(SRCDIR)/lib/crc16.c $(SRCDIR)/lib/fmt.c $(SRCDIR)/lib/stats.c $(SRCDIR)/lib/tri_eval.c $(SRCDIR)/drivers/sccp.c $(SRCDIR)/drivers/led.c $(SRCDIR)/diag/diag.c $(SRCDIR)/drivers/timebase.c $(SRCDIR)/drivers/dac.c $(SRCDIR)/tests/dactest.c $(SRCDIR)/tests/chaintest.c $(SRCDIR)/cli/cli.c $(SRCDIR)/cli/cmd_parser.c
-HDR      = $(SRCDIR)/app/board.h $(SRCDIR)/drivers/clock.h $(SRCDIR)/drivers/adc.h $(SRCDIR)/drivers/dma.h $(SRCDIR)/app/capture.h $(SRCDIR)/lib/crc16.h $(SRCDIR)/lib/fmt.h $(SRCDIR)/lib/stats.h $(SRCDIR)/lib/tri_eval.h $(SRCDIR)/drivers/sccp.h $(SRCDIR)/drivers/led.h $(SRCDIR)/diag/diag.h $(SRCDIR)/cli/console.h $(SRCDIR)/sim/sim.h $(SRCDIR)/drivers/timebase.h $(SRCDIR)/drivers/dac.h $(SRCDIR)/tests/dactest.h $(SRCDIR)/tests/chaintest.h $(SRCDIR)/cli/cmd_parser.h
+INC      = -I$(SRCDIR)/drivers -I$(SRCDIR)/app -I$(SRCDIR)/cli -I$(SRCDIR)/tests -I$(SRCDIR)/lib -I$(SRCDIR)/diag -I$(SRCDIR)/sim -I$(SRCDIR)/port
+SRC      = $(SRCDIR)/app/main.c $(SRCDIR)/app/config_bits.c $(SRCDIR)/app/port_impl.c $(SRCDIR)/drivers/clock.c $(SRCDIR)/drivers/adc.c $(SRCDIR)/drivers/dma.c $(SRCDIR)/app/capture.c $(SRCDIR)/lib/crc16.c $(SRCDIR)/lib/fmt.c $(SRCDIR)/lib/stats.c $(SRCDIR)/lib/tri_eval.c $(SRCDIR)/drivers/sccp.c $(SRCDIR)/drivers/led.c $(SRCDIR)/diag/diag.c $(SRCDIR)/drivers/timebase.c $(SRCDIR)/drivers/dac.c $(SRCDIR)/tests/dactest.c $(SRCDIR)/tests/chaintest.c $(SRCDIR)/cli/cli.c $(SRCDIR)/cli/cmd_parser.c
+HDR      = $(SRCDIR)/app/board.h $(SRCDIR)/drivers/clock.h $(SRCDIR)/drivers/adc.h $(SRCDIR)/drivers/dma.h $(SRCDIR)/app/capture.h $(SRCDIR)/lib/crc16.h $(SRCDIR)/lib/fmt.h $(SRCDIR)/lib/stats.h $(SRCDIR)/lib/tri_eval.h $(SRCDIR)/port/log.h $(SRCDIR)/port/panic.h $(SRCDIR)/drivers/sccp.h $(SRCDIR)/drivers/led.h $(SRCDIR)/diag/diag.h $(SRCDIR)/cli/console.h $(SRCDIR)/sim/sim.h $(SRCDIR)/drivers/timebase.h $(SRCDIR)/drivers/dac.h $(SRCDIR)/tests/dactest.h $(SRCDIR)/tests/chaintest.h $(SRCDIR)/cli/cmd_parser.h
 SRC_SIM  = $(subst $(SRCDIR)/drivers/dma.c,$(SRCDIR)/sim/sim_dma.c,$(SRC))
 OUTDIR   = ../build
 

@@ -35,11 +35,12 @@ the sources still include each other as `"name.h"` without a folder prefix:
 | Folder | Files |
 |---|---|
 | `src/drivers/` | `adc`, `dma`, `sccp`, `dac`, `clock`, `timebase`, `led` (`.c/.h`) |
-| `src/app/` | `main.c`, `capture.c/.h`, `config_bits.c`, `board.h` (and the generated `version.h`) |
+| `src/app/` | `main.c`, `capture.c/.h`, `config_bits.c`, `port_impl.c`, `board.h` (and the generated `version.h`) |
 | `src/cli/` | `cli.c`, `console.h`, `cmd_parser.c/.h` |
 | `src/tests/` | `chaintest.c/.h`, `dactest.c/.h` |
 | `src/lib/` | `crc16.c/.h`, `fmt.c/.h`, `stats.c/.h`, `tri_eval.c/.h` |
 | `src/diag/` | `diag.c/.h` |
+| `src/port/` | `log.h`, `panic.h` - the port layer (V2), headers only: what a driver may call outside itself; implemented by `src/app/port_impl.c` |
 | `src/sim/` | `sim.h`, `sim_dma.c` |
 
 | File | Owns | May call |
@@ -63,6 +64,8 @@ the sources still include each other as `"name.h"` without a folder prefix:
 | `dactest.c/.h` | judges captured halves against the DAC settings (min/max, reversals vs period, jumps); works with either DAC unit via `dac_active()` | capture, dac |
 | `chaintest.c/.h` | the chain test `chain all` (S0..S9), the triangle evaluator (turning points by line fits, "slip"), the `@` log format, `chain run`, `chain_stream_on/off`, and `chain_stream_grab_begin()`/`_end()` - one halt/grab/restart cycle of the standing stream for `stream grab` (cli.c), the counters reported as the delta since the previous grab - builds and links unchanged for both boards (`tools\build.bat nano`, 25.09.2026); not yet run on Nano hardware, and the GUI cycle not yet run on either board | capture, adc, sccp, dac, clock, dma (register dumps), diag |
 | `diag.c/.h` | `fail()` codes, trap handler, boot record in persistent RAM (including `chain_mark`, the chain test's stage), `RCON` report, `regs_dump()` | every module's `*_regs_dump()` |
+| `port/log.h`, `port/panic.h` | the port layer (P4.1, 27.09.2026): `port_log(s)`, `port_log_kv(key, v, hex)`, `port_panic(code)` (noreturn) - the only way a driver under `src/drivers/` may print or stop. Headers only; nothing under `src/port/` is compiled | - |
+| `port_impl.c` (app) | this project's implementation of the port layer: `port_log*()` onto `console_puts()`/`console_kv()`/`console_kv_hex()`, `port_panic()` onto `fail()`. A trace scenario (`tests/trace`) that links a driver using `port_*` lists this file in its `.sources` too; the harness's console/`fail()` stubs then turn the text into `C` lines exactly as before - no port stubs of its own | console, diag |
 | `cli.c`, `console.h` | UART2, the commands, the `sweep`, the `test` suite, the variant matrix, the chain/stream commands (`stream grab`'s `GRAB` frame builder among them), the binary block transfer (`snap`, `rate`, `blk`) | clock, capture, dactest, led, diag |
 | `sim.h` | the hooks the simulator build needs; all empty on silicon | - |
 | `tools/adc_gui.py` | NiceGUI front end for the triggered chain only (25.09.2026 on - back-to-back retired from this tool, owner's decision): one acquisition card drives `stream on <ksps> [core pinsel [samc]]` / `off` / `grab` in a loop, plots the time signal and FFT from each grab, and evaluates the test signal's triangle with `tools/eval_chain.py`'s `tri_eval`/`grid_ok` (imported, not re-implemented) when the frame's own `slp > 0`; `--fake` uses a built-in stand-in (the same triangle for the test signal, a configured sine with harmonics for any other input), `--selftest` runs the pipeline without GUI. On connect it reads the board from the `version` reply (`[build] board: EV...`) and switches profile and default input; `--fake --fake-board EV17P63A` makes the stand-in report the Curiosity Nano. `tools/gui_ui_test.py` drives the page itself with a headless browser (Playwright) against `--fake`, both board profiles, on free ports. `tools/gui_setup.bat` makes its venv (`tools/.venv`, ignored). `tools/boards.py`, `tools/pins64.py`, `tools/pins128.py` hold the board/pin tables the GUI's board tile reads | the console protocol only |
@@ -70,7 +73,10 @@ the sources still include each other as `"name.h"` without a folder prefix:
 | `cmd_parser.c/.h` | the command parser, unchanged from github.com/zabooh/cmd_parser (Apache 2.0) - do not edit | - |
 
 Nobody outside `dma.c` touches a DMA register, nobody outside `adc.c` an ADC register,
-nobody outside `clock.c` reads `CLK1CON`. The console never reads the buffer directly;
+nobody outside `clock.c` reads `CLK1CON`. A driver under `src/drivers/` logs and panics
+only through `port/` (`port_log()`, `port_log_kv()`, `port_panic()`) - never `console_*`
+or `fail()` directly, and it includes none of `console.h`, `diag.h`, `capture.h` (P4.2
+to P4.7 move the drivers over one by one). The console never reads the buffer directly;
 it uses `capture_completed_half()`, or `capture_oneshot_n()` when it needs a window that
 nothing is writing.
 
