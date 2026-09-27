@@ -63,7 +63,8 @@ not counted.
 | P4.8 Register visitor | done | `6e8d4b6` | Fable | `port/regs.h`: one visitor `(name, v, fmt)` with `REG_HEX/REG_DEC/REG_TITLE` reproduces the old dumps character for character (`regs` golden unchanged); the drivers keep no print call, only the three callers and the six dump functions change |
 | P5.1 `src/drivers/uart.c` | done | `1b82b9f` | Sonnet | `_U2RXInterrupt` moved out of cli.c, 65 -> 55 instructions (the byte-counting/CR-LF/parser-feed body became `uart_rx_hook()`, a direct `rcall`, still 0 indirect calls); uart.c reports through neither `port/log.h` nor `port/wait.h` - it is what `console_puts()` writes through |
 | P5.2 `cli.c` on top of `uart.c` | done | `8c77890` | Sonnet | P5.1 already finished the switch (the plan allows that order); this task is the check: `grep -E "U2\|RPCON\|RPOR\|RPINR\|IPC" src/cli/` empty, **[SMOKE]** log identical to `tests/smoke/expected.log` (110 lines) |
-| P6.1-P6.4 Split `cli.c` | open | | | |
+| P6.1 Per-module command registration | done | this commit | Sonnet | `bench_register()` (sweep, clk, pll, test - contiguous in the old order, clk/pll stay in cli.c after P6.2), `link_register()` (snap, rate, blk), `chain_register()` (chain, stream); `cli_init()` calls them in the old position, `help` order unchanged (**[SMOKE]** matches `tests/smoke/expected.log`) |
+| P6.2-P6.4 Split `cli.c` | open | | | |
 | P6.5 `tools/protocol.py` | done | `88b00d6`, merge `aa1498c` | Sonnet | built in a worktree alongside P5; GUI `--selftest` 15/15 before and after; `eval_chain.py` had no copy to redirect; `gui_ui_test.py` not run (Playwright not installed in any Python on this machine) |
 | P7.1 Board config as data | open | | | |
 | P8.1-P8.8 Drivers with instances | moved to N+2 | | | user decision 27.09.2026, see Decisions; `ROUTE_STREAM` works with today's single instances |

@@ -1830,6 +1830,44 @@ static void cmd_reset_fn(int argc, char **argv)
 CMD_DEFINE(reset, "reset", cmd_reset_fn, "reset - software reset");
 
 /* ------------------------------------------------------------------ */
+
+/* P6.1: per-module registration, so cli_init() reads as a list of who owns
+ * what instead of one flat block. Each function registers exactly the
+ * commands its module owns, in their old relative order; cli_init() calls
+ * the functions in the position their first command used to have, so the
+ * overall registration order - and therefore "help"'s order - is unchanged.
+ * The command bodies stay in cli.c for now; only P6.2 moves the
+ * test/matrix/sweep bodies into src/tests/bench.c. */
+
+/* The back-to-back bench group: the rate ladder (sweep), the manual clock
+ * knobs used only while measuring it (clk, pll), and the test/matrix suite
+ * (test) that drives them. Grouped together because they were already
+ * contiguous in the old registration order and clk/pll exist for no other
+ * purpose than this bench work, even though their bodies stay in cli.c
+ * after P6.2 (only the test, matrix and sweep bodies move to bench.c). */
+static void bench_register(void)
+{
+    (void)cmd_register(&cmd_sweep);
+    (void)cmd_register(&cmd_clk);
+    (void)cmd_register(&cmd_pll);
+    (void)cmd_register(&cmd_test);
+}
+
+/* The binary block transfer (docs/PLAN-BINARY-TRANSFER.md): snap/rate/blk. */
+static void link_register(void)
+{
+    (void)cmd_register(&cmd_snap);
+    (void)cmd_register(&cmd_rate);
+    (void)cmd_register(&cmd_blk);
+}
+
+/* The triggered chain test and its streaming/GUI grab cycle. */
+static void chain_register(void)
+{
+    (void)cmd_register(&cmd_chain);
+    (void)cmd_register(&cmd_stream);
+}
+
 void cli_init(void)
 {
     /* The clocks have changed under the baud generator: re-set it for
@@ -1857,19 +1895,13 @@ void cli_init(void)
     (void)cmd_register(&cmd_dump);
     (void)cmd_register(&cmd_clear);
     (void)cmd_register(&cmd_led);
-    (void)cmd_register(&cmd_sweep);
-    (void)cmd_register(&cmd_clk);
-    (void)cmd_register(&cmd_pll);
-    (void)cmd_register(&cmd_test);
+    bench_register();
     (void)cmd_register(&cmd_core);
     (void)cmd_register(&cmd_buf);
     (void)cmd_register(&cmd_dac);
     (void)cmd_register(&cmd_dactest);
-    (void)cmd_register(&cmd_snap);
-    (void)cmd_register(&cmd_rate);
-    (void)cmd_register(&cmd_blk);
-    (void)cmd_register(&cmd_chain);
-    (void)cmd_register(&cmd_stream);
+    link_register();
+    chain_register();
     (void)cmd_register(&cmd_reset);
 
     /* Banner, once at start-up. A human sees what is talking and which
