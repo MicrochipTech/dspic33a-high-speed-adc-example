@@ -38,7 +38,7 @@ the sources still include each other as `"name.h"` without a folder prefix:
 | `src/app/` | `main.c`, `capture.c/.h`, `config_bits.c`, `board.h` (and the generated `version.h`) |
 | `src/cli/` | `cli.c`, `console.h`, `cmd_parser.c/.h` |
 | `src/tests/` | `chaintest.c/.h`, `dactest.c/.h` |
-| `src/lib/` | `crc16.c/.h`, `fmt.c/.h`, `stats.c/.h` |
+| `src/lib/` | `crc16.c/.h`, `fmt.c/.h`, `stats.c/.h`, `tri_eval.c/.h` |
 | `src/diag/` | `diag.c/.h` |
 | `src/sim/` | `sim.h`, `sim_dma.c` |
 
@@ -55,6 +55,7 @@ the sources still include each other as `"name.h"` without a folder prefix:
 | `crc16.c/.h` | CRC-16 over a sample block, for the `blk` binary transfer | cli |
 | `fmt.c/.h` | `u32_to_str()`, `u32_to_hex()`, `copy_str()` - the printf-free formatting helpers, moved out of cli.c on 27.09.2026 (P2.1); hardware-free, tested on the host by `tests/host/test_fmt.c` | - |
 | `stats.c/.h` | `half_stats()` (min/max/mean) and `half_mean()` over `const uint16_t *` samples - no `volatile`, no knowledge of the DMA: the callers (cli.c's `completed_half_stats()`, `capture_selftest()`) pass the completed half and cast the volatile away there, with the reason in the comment. Moved out of cli.c/capture.c on 27.09.2026 (P2.2); the mean truncates (`acc / n`), pinned by `tests/host/test_stats.c` | - |
+| `tri_eval.c/.h` | the chain test's triangle evaluator: `fit_line()`, `tri_eval()` (fills a `tri_t`: min/max, turning points, slope lengths, `step`, `zero`/`dbl`, `slip`) and the grid verdict `tri_grid_ok()`, with `TP_MAX`, `STEP_CHECK_LSB`, `GRID_SLIP_MAX`. Moved verbatim out of chaintest.c on 27.09.2026 (P2.3); the sample pointer keeps its `volatile` because the chain test evaluates the DMA buffer in place. No register, no DMA. `tests/host/test_tri_eval.c` repeats the 25.09.2026 host test on synthetic windows (DNL, noise, DAC filter; 2100 clean windows, 0 false alarms; a single lost/repeated sample in the middle half of the window found in 100 % of 4200 windows) and, as `--eval`, evaluates windows from stdin, for the P2.4 cross-check against `tools/eval_chain.py`'s port | - |
 | `sccp.c/.h` | SCCP1 as a trigger source, with clock source, mode and event as parameters; its timer and compare interrupts as event counters - same registers and vectors on both boards, see `adc.c/.h` above | capture, chaintest |
 | `led.c/.h` | LED0 | - |
 | `timebase.c/.h` | Timer1 as a stopwatch (12.5 MHz) for measuring the delivered rate. It sits on the CPU branch (PLL2) while the ADC is on PLL1, so it cannot flatter the ADC. Not involved in producing the rate. | - |

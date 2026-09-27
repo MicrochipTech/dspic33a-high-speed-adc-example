@@ -28,6 +28,7 @@
         <itemPath>../src/lib/crc16.h</itemPath>
         <itemPath>../src/lib/fmt.h</itemPath>
         <itemPath>../src/lib/stats.h</itemPath>
+        <itemPath>../src/lib/tri_eval.h</itemPath>
       </logicalFolder>
       <logicalFolder name="sim" displayName="sim" projectFiles="true">
         <itemPath>../src/sim/sim.h</itemPath>
@@ -74,6 +75,7 @@
         <itemPath>../src/lib/crc16.c</itemPath>
         <itemPath>../src/lib/fmt.c</itemPath>
         <itemPath>../src/lib/stats.c</itemPath>
+        <itemPath>../src/lib/tri_eval.c</itemPath>
       </logicalFolder>
       <logicalFolder name="sim" displayName="sim" projectFiles="true">
         <itemPath>../src/sim/sim_dma.c</itemPath>
