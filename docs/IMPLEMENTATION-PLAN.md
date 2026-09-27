@@ -23,7 +23,7 @@ commit message stays the detailed record; this table is the one place to see whe
 work stands. `done` = committed and re-checked by the lead session (builds, `trace.bat`,
 `hosttest.bat`, goldens, no trailer).
 
-As of 27.09.2026. Done: 29 of 64 tasks (63 planned plus P0.9); P0.5b and P4.6a were
+As of 27.09.2026. Done: 30 of 64 tasks (63 planned plus P0.9); P0.5b and P4.6a were
 added along the way and are not counted.
 
 | Task | Status | Commit | Model | Note |
@@ -60,7 +60,8 @@ added along the way and are not counted.
 | P4.6 dma | done | `49497b0` | Fable | ISR unchanged, 42 instructions |
 | P4.7 clock | done | `6acd0fa` | Fable | `clock_fail_hook()` returns the boot stage; strong version in `port_impl.c` |
 | P4.8 Register visitor | done | `6e8d4b6` | Fable | `port/regs.h`: one visitor `(name, v, fmt)` with `REG_HEX/REG_DEC/REG_TITLE` reproduces the old dumps character for character (`regs` golden unchanged); the drivers keep no print call, only the three callers and the six dump functions change |
-| P5.1-P5.2 UART driver | open | | | |
+| P5.1 `src/drivers/uart.c` | done | this commit | Sonnet | `_U2RXInterrupt` moved out of cli.c, 65 -> 55 instructions (the byte-counting/CR-LF/parser-feed body became `uart_rx_hook()`, a direct `rcall`, still 0 indirect calls); uart.c reports through neither `port/log.h` nor `port/wait.h` - it is what `console_puts()` writes through |
+| P5.2 `cli.c` on top of `uart.c` | open | | | |
 | P6.1-P6.5 Split `cli.c` | open | | | |
 | P7.1 Board config as data | open | | | |
 | P8.1-P8.8 Drivers with instances | open | | | P8.1 is the only timing risk |

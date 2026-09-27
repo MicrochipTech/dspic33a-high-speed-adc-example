@@ -1,20 +1,16 @@
 /*
  * cli.c
  *
- * Console for the ADC/DMA example: the UART, a trace channel for the
- * start-up sequence, and the command parser from
- * https://github.com/zabooh/cmd_parser (Apache 2.0). This file owns the
- * transport and the commands; the parser itself knows no hardware.
- *
- * Transport on the EV74H48A
- *   UART2 on the MCP2221A USB-UART channel: U2TX -> RH1 (RP114, DIM pin
- *   P98 "UART_USB_TX"), U2RX <- RD1 (RP50, DIM pin P96
- *   "UART_USB_RX"), 115200 8N1 (pins in board.h). The MCP2221A implements standard USB CDC
- *   and shows up on the PC as its own COM port (user guide DS70005562D
- *   2.1.1). The PPS code is the one Microchip's own example uses on
- *   this board (U2TX = 21, Table "Output Selection for Remappable
- *   Pins", p613). The board's other USB-UART channel (the PKOB4's) is
- *   not used by this console.
+ * Console for the ADC/DMA example: the command parser from
+ * https://github.com/zabooh/cmd_parser (Apache 2.0), the commands, and
+ * the console's three output framings, all built on the UART transport
+ * driver (uart.c, since P5.1/P5.2, 27.09.2026) - blocking trace output
+ * (console_puts()), the parser's own non-blocking sink (console_write()),
+ * and the binary block transfer's abortable one (console_write_raw()).
+ * This file touches no UART register any more; uart.c owns the pins, the
+ * PPS routing, the baud generator and the receive interrupt - see its
+ * header comment for the wiring and why 115200 8N1. The parser itself
+ * knows no hardware.
  *
  * Two phases
  *   console_early_init() runs before the clocks are touched, on the
@@ -25,14 +21,15 @@
  *   the banner and enables the receive interrupt.
  *
  * The parser as its own thread
- *   Received bytes are handled in the UART2 receive interrupt, which
- *   runs at priority 1. A command executes inside that interrupt,
- *   including its output; the DMA interrupt (priority 4) preempts it, so
- *   the measurement keeps running while a long reply drains. main() is
- *   the one that waits during a long reply - it only processes buffer
- *   halves and blinks, and it reports that with proc_missed if it
- *   matters. Ctrl+C aborts a long reply: the yield hook, which runs
- *   while the transmit buffer is full, peeks at the receiver for it.
+ *   Received bytes are handled in uart.c's receive interrupt, which
+ *   calls uart_rx_hook() (below) at priority 1. A command executes
+ *   inside that interrupt, including its output; the DMA interrupt
+ *   (priority 4) preempts it, so the measurement keeps running while a
+ *   long reply drains. main() is the one that waits during a long reply -
+ *   it only processes buffer halves and blinks, and it reports that with
+ *   proc_missed if it matters. Ctrl+C aborts a long reply: the yield
+ *   hook, which runs while the transmit buffer is full, peeks at the
+ *   receiver for it.
  *
  * Commands
  *   help                       list of commands (built into the parser)
@@ -61,7 +58,6 @@
  * (see cmd_parser.h, "Prompt as a protocol element").
  */
 
-#include <xc.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -84,14 +80,18 @@
 #include "crc16.h"
 #include "fmt.h"
 #include "stats.h"
+#include "uart.h"
 
 /* ------------------------------------------------------------------ *
- * UART2 transport
+ * UART transport - uart.c owns every register; this file only decides
+ * WHICH baud divisor is right for the clock the CPU happens to be on
+ * (clock_cpu_on_pll(), clock.h) and wires uart.c's primitives into the
+ * console's three output framings and the parser's receive callback.
+ * See uart.h for the pins, the PPS routing and why 115200 8N1.
  * ------------------------------------------------------------------ */
 
-/* Baud rate generator, fractional mode (CLKMOD = 1): BRG = F_clk / baud,
- * no -1 (the value MCC generates for this board is 868 at 100 MHz).
- * F_clk is the Standard Speed Peripheral Clock = CPU clock / 2:
+/* The two baud-rate-generator divisors this console ever asks uart.c
+ * for; see uart.h's uart_cfg_t comment for how a divisor is computed.
  *   after reset, on the 8 MHz FRC:        4 MHz  -> BRG 35, 114 286 baud
  *   after clock_init(), PLL2 at 200 MHz: 100 MHz -> BRG 868, 115 207 baud
  * Both are within 1 % of 115 200. */
@@ -104,75 +104,38 @@
 
 #define UART_RX_PRIORITY  1u      /* below the DMA interrupt (4)        */
 
-static void uart2_setup(uint32_t brg)
-{
-    U2CON = 0u;                       /* off while reconfiguring        */
-    U2CONbits.CLKMOD = 1u;            /* fractional baud generator      */
-    U2CONbits.CLKSEL = 0u;            /* standard speed peripheral clock*/
-    U2CONbits.MODE   = 0u;            /* 8-bit, no parity               */
-    U2CONbits.STP    = 0u;            /* one stop bit                   */
-    U2BRG = brg;
-    U2STAT = 0u;                      /* RXWM = 0: IRQ on one byte      */
-    U2CONbits.ON   = 1u;
-    U2CONbits.TXEN = 1u;
-    U2CONbits.RXEN = 1u;
-}
-
 void console_early_init(void)
 {
-    /* Pins: TX output, RX input (board.h). Peripheral pin select needs
-     * IOLOCK cleared. */
-    CONSOLE_TX_TRIS  = 0u;
-    CONSOLE_RX_TRIS  = 1u;
-    RPCONbits.IOLOCK = 0u;
-    CONSOLE_RX_RPINR = CONSOLE_RX_RP;
-    CONSOLE_TX_RPOR  = CONSOLE_TX_FN;
-    RPCONbits.IOLOCK = 1u;
-
-    uart2_setup(UART_BRG_FRC);
+    const uart_cfg_t cfg = { .brg = UART_BRG_FRC };
+    uart_init(&cfg);
     console_puts("\r\n[boot] uart up on FRC, 115200 8N1\r\n");
 }
-
-/* How long to wait for the transmitter, in polling iterations. One
- * character takes 87 us at 115200 baud; on the 8 MHz FRC that is a few
- * hundred cycles, at 200 MHz about 17 000. 200 000 is far more than
- * either and still finite - which is the whole point: console_puts() is
- * called from _DefaultInterrupt() to report a trap, and if the UART is
- * not actually transmitting (wrong baud divider, ON bit cleared, clock
- * gone) an unbounded wait would silently swallow the one message that
- * explains the fault. Better a garbled line than none. */
-#define TX_WAIT_LIMIT     200000u
 
 /* Blocking output, usable at any time after console_early_init(): from
  * main(), from fail(), from _DefaultInterrupt() and from the receive
  * interrupt (the parser's own output goes through console_write()
- * below instead). Never blocks forever - see TX_WAIT_LIMIT. */
+ * below instead). Never blocks forever - see uart.h's
+ * UART_TX_WAIT_LIMIT: console_puts() is called from _DefaultInterrupt()
+ * to report a trap, and if the UART is not actually transmitting (wrong
+ * baud divider, ON bit cleared, clock gone) an unbounded wait would
+ * silently swallow the one message that explains the fault. Better a
+ * garbled line than none. */
 void console_puts(const char *s)
 {
     while (*s) {
-        uint32_t n = TX_WAIT_LIMIT;
-        while (U2STATbits.TXBF && (--n != 0u)) { }
-        U2TXB = (uint8_t)*s++;
+        uint32_t n = UART_TX_WAIT_LIMIT;
+        while (uart_tx_full() && (--n != 0u)) { }
+        uart_putc((uint8_t)*s++);
     }
-}
-
-static void console_drain(void)
-{
-#ifdef __MPLAB_DEBUGGER_SIMULATOR
-    return;     /* the simulator never sets TXMTIF: the bounded wait below
-                 * would take about a minute per call and look like a hang */
-#endif
-    uint32_t n = TX_WAIT_LIMIT;
-    while (!U2STATbits.TXMTIF && (--n != 0u)) { }   /* shift reg empty too */
 }
 
 void console_flush(void)
 {
-    console_drain();
+    uart_flush();
 }
 
 /* Bring the console back up from scratch, assuming nothing about the
- * current state of the pins, the PPS mapping or the UART.
+ * current state of the pins, the PPS mapping or the UART (uart_reinit()).
  *
  * This is what _DefaultInterrupt() calls before it reports a trap. A trap
  * can have happened anywhere, including inside clock_init() or after some
@@ -181,23 +144,11 @@ void console_flush(void)
  * it trusts clock.c to say what the clock is. Here the routing is written
  * again and the baud rate is picked from the clock the CPU is actually
  * on, so the one message that explains the fault has the best chance of
- * getting out.
- *
- * Safe to call when the console is already up - it re-writes the same
- * values - and safe from interrupt context: no waiting except the bounded
- * drain. */
+ * getting out. Safe to call when the console is already up, and from
+ * interrupt context (uart_reinit() only waits bounded). */
 void console_force_up(void)
 {
-    console_drain();                   /* bounded; keep a partial line    */
-
-    CONSOLE_TX_TRIS  = 0u;
-    CONSOLE_RX_TRIS  = 1u;
-    RPCONbits.IOLOCK = 0u;
-    CONSOLE_RX_RPINR = CONSOLE_RX_RP;
-    CONSOLE_TX_RPOR  = CONSOLE_TX_FN;
-    RPCONbits.IOLOCK = 1u;
-
-    uart2_setup(clock_cpu_on_pll() ? UART_BRG_PLL : UART_BRG_FRC);
+    uart_reinit(clock_cpu_on_pll() ? UART_BRG_PLL : UART_BRG_FRC);
 }
 
 /* Make the baud generator match whatever clock the CPU is on right now.
@@ -205,11 +156,7 @@ void console_force_up(void)
  * cli_init() would otherwise print at the wrong rate. */
 void console_sync_baud(void)
 {
-    const uint32_t want = clock_cpu_on_pll() ? UART_BRG_PLL : UART_BRG_FRC;
-    if (U2BRG != want) {
-        console_drain();
-        uart2_setup(want);
-    }
+    (void)uart_set_baud(clock_cpu_on_pll() ? UART_BRG_PLL : UART_BRG_FRC);
 }
 
 /* Output sink for the parser: take what fits into the transmit FIFO and
@@ -219,11 +166,7 @@ static void console_yield(void);
 
 static size_t console_write(const char *data, size_t len)
 {
-    size_t n = 0;
-    while ((n < len) && !U2STATbits.TXBF) {
-        U2TXB = (uint8_t)data[n++];
-    }
-    return n;
+    return uart_write((const uint8_t *)data, len);
 }
 
 /* Bytes that are not a string (console.h). The wait for FIFO space is
@@ -235,12 +178,12 @@ size_t console_write_raw(const uint8_t *data, size_t len)
 {
     size_t n = 0;
     while (n < len) {
-        if (U2STATbits.TXBF) {
+        if (uart_tx_full()) {
             console_yield();          /* FIFO full: drain, watch Ctrl+C */
             if (cmd_parser_aborted()) { break; }
             continue;
         }
-        U2TXB = data[n++];
+        uart_putc(data[n++]);
     }
     return n;
 }
@@ -255,8 +198,8 @@ static void console_yield(void)
 #ifdef __MPLAB_DEBUGGER_SIMULATOR
     return;     /* the simulator has no UART receiver: RXBE never rises */
 #endif
-    while (!U2STATbits.RXBE) {
-        if ((uint8_t)U2RXB == 0x03u) {
+    while (!uart_rx_empty()) {
+        if (uart_getc() == 0x03u) {
             cmd_parser_abort();
         }
     }
@@ -265,28 +208,26 @@ static void console_yield(void)
 /* Receive diagnostics, shown in the [stat] line and by "status": how many
  * bytes the interrupt took from the UART, the last one, and how many
  * CR / LF among them. "I type and nothing happens" is then one of three
- * things: rx stays 0 (nothing reaches RD1, the echo was the terminal's),
- * rx counts but cr stays 0 (the terminal sends LF only - the parser ends
- * a line on CR), or cr counts and still no reply (the parser or the
- * transmit path). */
+ * things: rx stays 0 (nothing reaches the console's RX pin, the echo was
+ * the terminal's), rx counts but cr stays 0 (the terminal sends LF only -
+ * the parser ends a line on CR), or cr counts and still no reply (the
+ * parser or the transmit path). */
 static volatile uint32_t rx_count = 0;
 static volatile uint32_t rx_cr    = 0;
 static volatile uint32_t rx_lf    = 0;
 static volatile uint8_t  rx_last  = 0;
 
-/* The parser thread: every received byte goes to the line editor, and
- * a completed line is dispatched right here, in interrupt context. */
-void __attribute__((interrupt, no_auto_psv)) _U2RXInterrupt(void)
+/* The parser thread: every received byte goes to the line editor, and a
+ * completed line is dispatched right here - called from uart.c's receive
+ * interrupt (moved there in P5.1), in interrupt context, with the flag
+ * already cleared for the byte that follows. */
+void uart_rx_hook(uint8_t b)
 {
-    IFS3bits.U2RXIF = 0u;             /* first: a byte arriving meanwhile re-raises it */
-    while (!U2STATbits.RXBE) {
-        const uint8_t b = (uint8_t)U2RXB;
-        rx_count++;
-        rx_last = b;
-        if (b == 0x0Du)      { rx_cr++; }
-        else if (b == 0x0Au) { rx_lf++; }
-        cmd_parser_feed_char((char)b);
-    }
+    rx_count++;
+    rx_last = b;
+    if (b == 0x0Du)      { rx_cr++; }
+    else if (b == 0x0Au) { rx_lf++; }
+    cmd_parser_feed_char((char)b);
 }
 
 /* The small formatting helpers u32_to_str(), u32_to_hex() and copy_str()
@@ -329,26 +270,17 @@ void console_kv_hex(const char *key, uint32_t v)
     console_puts(num);
 }
 
+/* diag.c's regs_dump() calls this, not uart_regs_visit() directly: cli.c
+ * (and with it uart.c's caller) is not linked into the register-trace
+ * harness (tests/trace/README.md, decision 1 of 26.09.2026), so keeping
+ * the indirection here means the "regs" golden trace still gets the
+ * harness's stub line for this section, unchanged, exactly as before
+ * P5.1/P5.2 - diag.c and its .sources are untouched. reg_print (diag.h)
+ * reproduces console_kv_hex()/console_puts() character for character
+ * (port/regs.h, P4.8). */
 void console_regs_dump(void)
 {
-    console_puts("[regs] uart\r\n");
-    console_kv_hex("IEC3", IEC3);           /* U2RX enable,  bit 6       */
-    console_kv_hex("IFS3", IFS3);           /* U2RX flag,    bit 6       */
-    console_kv_hex("IPC12", IPC12);         /* U2RX priority, bits 26:24 */
-    console_kv_hex("U2CON", U2CON);
-    console_kv_hex("U2STAT", U2STAT);
-    console_kv_hex("U2BRG", U2BRG);
-    /* Pin routing of the console itself: with a silent terminal these say
-     * whether console_early_init() took effect. Expected: IOLOCK set, the
-     * TX pin's byte in its RPOR word = 21 = 0x15 (U2TX), U2RXR (bits 23:16
-     * of RPINR13) = the RX pin's remap number (board.h: 50 = 0x32 on the
-     * EV74H48A, 44 = 0x2C on the Nano), the TX pin's TRIS bit clear, the
-     * RX pin's TRIS bit set. */
-    console_kv_hex("RPCON", RPCON);
-    console_kv_hex("RPORn (TX pin's word)", CONSOLE_TX_RPOR_WORD);
-    console_kv_hex("RPINRn (U2RXR's word)", CONSOLE_RX_RPINR_WORD);
-    console_kv_hex("TRISx (TX pin's port)", CONSOLE_TX_TRIS_WORD);
-    console_kv_hex("TRISx (RX pin's port)", CONSOLE_RX_TRIS_WORD);
+    uart_regs_visit(reg_print);
 }
 
 #if BOOT_VERBOSE
@@ -766,9 +698,9 @@ CMD_DEFINE(led, "led", cmd_led_fn, "led on|off|auto - LED0");
  *   idle     the CPU polls blocks_done, a RAM variable, nothing else
  *   process  the CPU runs capture_service(), i.e. process_buffer() on
  *            every completed half - what the application would do
- *   sfr      the CPU reads U2STAT in a tight loop - the worst case, a
- *            CPU that hammers the peripheral bus (the console does this
- *            while it prints)
+ *   sfr      the CPU probes the UART's status register in a tight loop
+ *            (uart_stat_probe()) - the worst case, a CPU that hammers
+ *            the peripheral bus (the console does this while it prints)
  *
  * One line per rate. overrun must be 0 for a rate to be usable. The
  * whole sweep runs inside the receive interrupt, like every command;
@@ -801,7 +733,7 @@ static bool sweep_point(uint32_t halves, enum sweep_load load, uint32_t *ticks)
     while (blocks_done < target) {
         SIM_DMA_TICK();
         if (load == SWEEP_PROCESS)      { (void)capture_service(); }
-        else if (load == SWEEP_SFR)     { (void)U2STAT; }
+        else if (load == SWEEP_SFR)     { uart_stat_probe(); }
         /* The brake fired: this rate floods the CPU with overrun
          * interrupts and is unusable. Not an error of the point. */
         if (capture_overrun_aborted()) { (void)capture_settle(); return false; }
@@ -1892,7 +1824,7 @@ static void cmd_reset_fn(int argc, char **argv)
 {
     (void)argc; (void)argv;
     put_line("resetting");
-    console_drain();                    /* let the reply leave first */
+    console_flush();                    /* let the reply leave first */
     __asm__ volatile ("reset");
 }
 CMD_DEFINE(reset, "reset", cmd_reset_fn, "reset - software reset");
@@ -1905,10 +1837,9 @@ void cli_init(void)
      * Only when the divider really changes: in the simulator build the
      * CPU never leaves the FRC, and toggling ON while the simulator's
      * UART model is still transmitting leaves its transmitter dead
-     * (TXWRE set, nothing gets out any more). */
-    if (U2BRG != UART_BRG_PLL) {
-        console_drain();
-        uart2_setup(UART_BRG_PLL);
+     * (TXWRE set, nothing gets out any more) - uart_set_baud() makes
+     * that check and reports back whether it did anything. */
+    if (uart_set_baud(UART_BRG_PLL)) {
         console_trace("[boot] uart reclocked to PLL2, 115200 8N1\r\n");
     }
 
@@ -1952,12 +1883,9 @@ void cli_init(void)
                  "type 'help' for the commands\r\n"
                  "please log this terminal from power-up and send it back\r\n");
 
-    /* Receive interrupt: IRQ 102, IEC3/IFS3 bit 6, priority in IPC12.
-     * Enabled last, so that nothing typed early runs a command before
-     * the measurement is set up. */
-    IPC12bits.U2RXIP = UART_RX_PRIORITY;
-    IFS3bits.U2RXIF  = 0u;
-    IEC3bits.U2RXIE  = 1u;
+    /* Receive interrupt: enabled last, so that nothing typed early runs a
+     * command before the measurement is set up (uart_enable_rx_irq()). */
+    uart_enable_rx_irq(UART_RX_PRIORITY);
 
     cmd_parser_prompt();                     /* sync point for a reader */
 }

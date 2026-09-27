@@ -34,7 +34,7 @@ the sources still include each other as `"name.h"` without a folder prefix:
 
 | Folder | Files |
 |---|---|
-| `src/drivers/` | `adc`, `dma`, `sccp`, `dac`, `clock`, `timebase`, `led` (`.c/.h`) |
+| `src/drivers/` | `adc`, `dma`, `sccp`, `dac`, `clock`, `timebase`, `led`, and since P5.1 (27.09.2026) `uart` (`.c/.h`) |
 | `src/app/` | `main.c`, `capture.c/.h`, `config_bits.c`, `port_impl.c`, `board.h` (and the generated `version.h`) |
 | `src/cli/` | `cli.c`, `console.h`, `cmd_parser.c/.h` |
 | `src/tests/` | `chaintest.c/.h`, `dactest.c/.h` |
@@ -71,14 +71,16 @@ the sources still include each other as `"name.h"` without a folder prefix:
 | `diag.c/.h` | `fail()` codes, trap handler, boot record in persistent RAM (including `chain_mark`, the chain test's stage), `RCON` report, `regs_dump()`, and since P4.8 (27.09.2026) `reg_print()` - the printing register visitor (`port/regs.h`: `REG_HEX` -> `console_kv_hex()`, `REG_DEC` -> `console_kv()`, `REG_TITLE` -> `console_puts()` of the whole line), which `regs_dump()` hands to every driver's `*_regs_visit()` and chaintest.c/capture.c hand to theirs; the trace harness's `stubs.c` carries the same function under `#ifndef HAVE_DIAG` | every driver's `*_regs_visit()`, `capture_regs_dump()`, `console_regs_dump()` |
 | `port/log.h`, `port/panic.h`, `port/wait.h`, `port/regs.h` | the port layer (P4.1, 27.09.2026): `port_log(s)`, `port_log_kv(key, v, hex)`, `port_panic(code)` (noreturn), since P4.8 `regs.h`'s `reg_visit_t` = `void (*)(const char *name, uint32_t v, reg_fmt_t fmt)` with `REG_HEX`/`REG_DEC`/`REG_TITLE` - the one callback a driver's `xxx_regs_visit()` hands each register to (a title is the whole line, `"\r\n"` included, so it reaches the console in one call; three forms because the old dumps had exactly three kinds of line; the title stays with the driver because `dma.c` and `sim_dma.c` title the same interface differently), since P4.5 the start-up trace pair `port_trace(s)`, `port_trace_kv(key, v, hex)` (printed only when the project says so - the `BOOT_VERBOSE` gate stays in cli.c's `console_trace*()`, no driver carries it), and since P4.6a `PORT_WAIT_WHILE(cond, code)`/`PORT_WAIT_LIMIT` (`wait.h`: diag.h's `WAIT_WHILE`/`WAIT_LIMIT` with the same values - 2 000 000 iterations on silicon, no loop in the simulator - stopping through `port_panic(code)`; the one bounded wait for every driver) and since P4.7 `port_flush()` (block until the text handed over so far has left - clock.c before the CPU clock changes) - the only way a driver under `src/drivers/` may print, wait or stop. Headers only; nothing under `src/port/` is compiled | - |
 | `port_impl.c` (app) | this project's implementation of the port layer: `port_log*()` onto `console_puts()`/`console_kv()`/`console_kv_hex()`, `port_trace*()` onto `console_trace()`/`console_trace_kv()`/`console_trace_kv_hex()`, `port_flush()` onto `console_flush()`, `port_panic()` onto `fail()`; and the clock driver's one upward call `clock_fail_hook()` (P4.7): `capture_halt()`, then `console_force_up()`, returns `boot_stage` - kept here rather than in a hooks file of its own until P8 adds the DMA/ADC hooks, so that no file list changed. A trace scenario (`tests/trace`) that links a driver using `port_*` lists this file in its `.sources` too (since P4.7 every scenario that links clock.c, `fail` and `clock` included); the harness's console/`fail()` stubs then turn the text into `C` lines exactly as before - no port stubs of its own, and the strong `clock_fail_hook()` here overrides clock.c's weak default in the MinGW link too (the `fail` golden proves it: `D capture_halt()`, `C <force_up>` in the same order) | console, diag, capture, clock |
-| `cli.c`, `console.h` | UART2, the commands, the `sweep`, the `test` suite, the variant matrix, the chain/stream commands (`stream grab`'s `GRAB` frame builder among them), the binary block transfer (`snap`, `rate`, `blk`) | clock, capture, dactest, led, diag |
+| `uart.c/.h` | UART2 transport: pins/PPS routing (board.h, until P7), the fractional baud generator, `uart_init/reinit/set_baud`, the non-blocking `uart_write()`, the bounded `uart_flush()`, the raw `uart_tx_full/putc/rx_empty/getc` accessors cli.c's own send/receive loops are built from, `uart_stat_probe()` (cli.c's "sweep" bus-load benchmark), `uart_enable_rx_irq()`, and the receive interrupt `_U2RXInterrupt` (moved out of cli.c in P5.1, 27.09.2026) calling the weak `uart_rx_hook(byte)` cli.c overrides strongly. Its register dump is `uart_regs_visit(visit)`, called from cli.c's `console_regs_dump()` rather than from diag.c directly - cli.c is not linked into the register-trace harness (`tests/trace/README.md`, decision 1), so the "regs" golden keeps the harness's stub line unchanged. Unlike the other drivers on the port layer, it reports through none of `port/log.h` (it IS what `console_puts()`/`console_kv()` write through - going through `port_log()` here would call back into itself) and panics through none of `port/wait.h` (none of its polling loops stop; "better a garbled line than none", cli.c's `console_puts()`); it still includes none of `console.h`, `diag.h`, `capture.h` or `cmd_parser.h` | cli (console_*), port_impl.c (none - see above) |
+| `cli.c`, `console.h` | the commands, the `sweep`, the `test` suite, the variant matrix, the chain/stream commands (`stream grab`'s `GRAB` frame builder among them), the binary block transfer (`snap`, `rate`, `blk`), and since P5.1/P5.2 (27.09.2026) the console's three output framings built on `uart.c` (`console_puts()` blocking, `console_write()` the parser's non-blocking sink, `console_write_raw()` the binary transfer's abortable one) plus the receive callback `uart_rx_hook()` - UART2 itself moved to `uart.c`, no register left here (`grep -E "U2|RPCON|RPOR|RPINR|IPC" src/cli/` finds nothing) | clock, capture, dactest, led, diag, uart |
 | `sim.h` | the hooks the simulator build needs; all empty on silicon | - |
 | `tools/adc_gui.py` | NiceGUI front end for the triggered chain only (25.09.2026 on - back-to-back retired from this tool, owner's decision): one acquisition card drives `stream on <ksps> [core pinsel [samc]]` / `off` / `grab` in a loop, plots the time signal and FFT from each grab, and evaluates the test signal's triangle with `tools/eval_chain.py`'s `tri_eval`/`grid_ok` (imported, not re-implemented) when the frame's own `slp > 0`; `--fake` uses a built-in stand-in (the same triangle for the test signal, a configured sine with harmonics for any other input), `--selftest` runs the pipeline without GUI. On connect it reads the board from the `version` reply (`[build] board: EV...`) and switches profile and default input; `--fake --fake-board EV17P63A` makes the stand-in report the Curiosity Nano. `tools/gui_ui_test.py` drives the page itself with a headless browser (Playwright) against `--fake`, both board profiles, on free ports. `tools/gui_setup.bat` makes its venv (`tools/.venv`, ignored). `tools/boards.py`, `tools/pins64.py`, `tools/pins128.py` hold the board/pin tables the GUI's board tile reads | the console protocol only |
 | `tools/eval_chain.py` | `chain all` log evaluator (`tri_eval`, `grid_ok`, `synth`) and CLI report; imported by `adc_gui.py` for the chain tile and by `FakeTarget.grab()` for its synthetic frames, so there is one triangle evaluator and one synthetic-triangle generator, not two | - |
 | `cmd_parser.c/.h` | the command parser, unchanged from github.com/zabooh/cmd_parser (Apache 2.0) - do not edit | - |
 
 Nobody outside `dma.c` touches a DMA register, nobody outside `adc.c` an ADC register,
-nobody outside `clock.c` reads `CLK1CON`. A driver under `src/drivers/` logs, waits and
+nobody outside `clock.c` reads `CLK1CON`, nobody outside `uart.c` touches a UART
+register. A driver under `src/drivers/` logs, waits and
 panics only through `port/` (`port_log()`, `port_log_kv()`, `port_trace*()`, `port_flush()`,
 `PORT_WAIT_WHILE()`, `port_panic()`) - never `console_*`, `WAIT_WHILE()` or `fail()`
 directly, and it includes none of `console.h`, `diag.h`, `capture.h`. Its register dump
@@ -106,7 +108,21 @@ and `SAMPLES_PER_BUF_MAX` as `adc_init()`'s third parameter; every scenario link
 register dump, `_CLKFInterrupt`'s five report lines and `fail(10)` -> `port_panic(10)`,
 `capture_halt()` + `console_force_up()` + `boot_stage` -> `clock_fail_hook()`; `<stddef.h>`
 for `NULL`, which had come in through the removed headers; `fail.sources` and
-`clock.sources` gained `port_impl.c`).
+`clock.sources` gained `port_impl.c`). `uart.c` is the one exception to the port-layer
+paragraph above, by design, not by omission: it moved out of cli.c in P5.1 (27.09.2026)
+with every UART/PPS/interrupt-controller register cli.c used to touch, but it reports
+through none of `port/log.h` and panics through none of `port/wait.h` - it is what
+`console_puts()`/`console_kv()` end up writing through, so calling `port_log()` from
+inside it would call back into cli.c through port_impl.c, and none of its polling loops
+stop with a panic (`console_puts()`'s "better a garbled line than none", `uart.h`'s
+`UART_TX_WAIT_LIMIT`). What a byte received means is asked through `uart_rx_hook()`
+(weak in uart.c, strong in cli.c, not in port_impl.c: unlike a clock failure, this is
+the console's business specifically, not a generic application concern). Its register
+dump, `uart_regs_visit(visit)`, is called from cli.c's `console_regs_dump()` rather than
+from diag.c directly, because cli.c is still not linked into the register-trace harness
+(decision 1, `tests/trace/README.md`) - keeping the indirection there means the "regs"
+golden keeps the harness's stub line for this section unchanged, and no `.sources` file
+needed `uart.c` added.
 The console never
 reads the buffer directly;
 it uses `capture_completed_half()`, or `capture_oneshot_n()` when it needs a window that

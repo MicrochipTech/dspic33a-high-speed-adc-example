@@ -23,6 +23,7 @@
         <itemPath>../src/drivers/clock.h</itemPath>
         <itemPath>../src/drivers/timebase.h</itemPath>
         <itemPath>../src/drivers/led.h</itemPath>
+        <itemPath>../src/drivers/uart.h</itemPath>
       </logicalFolder>
       <logicalFolder name="lib" displayName="lib" projectFiles="true">
         <itemPath>../src/lib/crc16.h</itemPath>
@@ -82,6 +83,7 @@
         <itemPath>../src/drivers/clock.c</itemPath>
         <itemPath>../src/drivers/timebase.c</itemPath>
         <itemPath>../src/drivers/led.c</itemPath>
+        <itemPath>../src/drivers/uart.c</itemPath>
       </logicalFolder>
       <logicalFolder name="lib" displayName="lib" projectFiles="true">
         <itemPath>../src/lib/crc16.c</itemPath>
