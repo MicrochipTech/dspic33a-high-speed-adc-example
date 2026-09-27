@@ -241,10 +241,27 @@ def dedupe_aliases(funcs):
 
 # --------------------------------------------------------------------- contents
 
+SECTION_LINE = re.compile(r"Contents of section (\S+):")
+# Sections objdump -s prints that are not part of the target's address
+# space: DWARF and the assembler's .comment sit at "VMA" 0 and would shadow
+# the first 90 KB of data memory. Found 27.09.2026 (P0.7): a sim build
+# (-g) reported libc's ___intscan as changed after a comment was edited in
+# main.c, because the literal 0x64ba (its digit table in .data) resolved to
+# byte 0x64ba of .debug_info. Only ALLOC sections belong here.
+NOT_LOADED = (".debug_", ".comment", ".gnu", "__c30_signature")
+
+
 def read_contents(objdump, dfp, elf):
     """address -> bytes for every loaded section (objdump -s), for literal labels."""
     chunks = []  # (start, bytearray)
+    skip = False
     for line in run([objdump, "-mdfp=" + dfp, "-s", elf]).splitlines():
+        s = SECTION_LINE.match(line)
+        if s:
+            skip = s.group(1).startswith(NOT_LOADED)
+            continue
+        if skip:
+            continue
         m = CONTENT_LINE.match(line)
         if not m:
             continue
