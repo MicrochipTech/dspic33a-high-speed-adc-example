@@ -26,6 +26,7 @@
       </logicalFolder>
       <logicalFolder name="lib" displayName="lib" projectFiles="true">
         <itemPath>../src/lib/crc16.h</itemPath>
+        <itemPath>../src/lib/fmt.h</itemPath>
       </logicalFolder>
       <logicalFolder name="sim" displayName="sim" projectFiles="true">
         <itemPath>../src/sim/sim.h</itemPath>
@@ -70,6 +71,7 @@
       </logicalFolder>
       <logicalFolder name="lib" displayName="lib" projectFiles="true">
         <itemPath>../src/lib/crc16.c</itemPath>
+        <itemPath>../src/lib/fmt.c</itemPath>
       </logicalFolder>
       <logicalFolder name="sim" displayName="sim" projectFiles="true">
         <itemPath>../src/sim/sim_dma.c</itemPath>

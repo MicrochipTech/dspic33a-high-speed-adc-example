@@ -82,6 +82,7 @@
 #include "sim.h"
 #include "cmd_parser.h"
 #include "crc16.h"
+#include "fmt.h"
 
 /* ------------------------------------------------------------------ *
  * UART2 transport
@@ -287,36 +288,9 @@ void __attribute__((interrupt, no_auto_psv)) _U2RXInterrupt(void)
     }
 }
 
-/* ------------------------------------------------------------------ *
- * Small formatting helpers - no printf, so the reply cost is predictable
- * ------------------------------------------------------------------ */
-static char *u32_to_str(char *out, uint32_t v)
-{
-    char tmp[11];
-    int i = 0;
-    do { tmp[i++] = (char)('0' + (v % 10u)); v /= 10u; } while (v != 0u);
-    while (i > 0) { *out++ = tmp[--i]; }
-    *out = '\0';
-    return out;
-}
-
-static char *u32_to_hex(char *out, uint32_t v)
-{
-    static const char digits[] = "0123456789ABCDEF";
-    *out++ = '0'; *out++ = 'x';
-    for (int shift = 28; shift >= 0; shift -= 4) {
-        *out++ = digits[(v >> shift) & 0xFu];
-    }
-    *out = '\0';
-    return out;
-}
-
-static char *copy_str(char *out, const char *s)
-{
-    while (*s) { *out++ = *s++; }
-    *out = '\0';
-    return out;
-}
+/* The small formatting helpers u32_to_str(), u32_to_hex() and copy_str()
+ * (no printf, so the reply cost is predictable) live in lib/fmt.c since
+ * P2.1 (27.09.2026), where the host test reaches them. */
 
 /* "key: value" lines.
  *

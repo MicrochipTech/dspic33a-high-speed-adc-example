@@ -77,7 +77,7 @@ if /i "%1"=="nano" (
 )
 set SRC=..\src
 set INC=-I%SRC%\drivers -I%SRC%\app -I%SRC%\cli -I%SRC%\tests -I%SRC%\lib -I%SRC%\diag -I%SRC%\sim
-set SOURCES=%SRC%\app\main.c %SRC%\app\config_bits.c %SRC%\drivers\clock.c %SRC%\drivers\adc.c %DMA% %SRC%\app\capture.c %SRC%\lib\crc16.c %SRC%\drivers\sccp.c %SRC%\drivers\led.c %SRC%\diag\diag.c %SRC%\drivers\timebase.c %SRC%\drivers\dac.c %SRC%\tests\dactest.c %SRC%\tests\chaintest.c %SRC%\cli\cli.c %SRC%\cli\cmd_parser.c
+set SOURCES=%SRC%\app\main.c %SRC%\app\config_bits.c %SRC%\drivers\clock.c %SRC%\drivers\adc.c %DMA% %SRC%\app\capture.c %SRC%\lib\crc16.c %SRC%\lib\fmt.c %SRC%\drivers\sccp.c %SRC%\drivers\led.c %SRC%\diag\diag.c %SRC%\drivers\timebase.c %SRC%\drivers\dac.c %SRC%\tests\dactest.c %SRC%\tests\chaintest.c %SRC%\cli\cli.c %SRC%\cli\cmd_parser.c
 
 if not exist ..\build mkdir ..\build
 
