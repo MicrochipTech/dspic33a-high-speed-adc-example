@@ -13,6 +13,7 @@
 #include "adc.h"
 #include "log.h"        /* port layer (src/port): port_log(), port_log_kv(), port_trace*() */
 #include "panic.h"      /* port layer: port_panic()                                       */
+#include "wait.h"       /* port layer: PORT_WAIT_WHILE(), PORT_WAIT_LIMIT (P4.6a)          */
 
 /* One row per core: its registers, its interrupt words and CH0 bit, its
  * DMA trigger code (adc.h explains the numbers). Address constants, so
@@ -48,27 +49,6 @@ void adc_clear_events(void)
     *adc_cur->IFS = 0u;
 }
 
-/* Bound for the driver's two hardware waits (ADRDY), in loop iterations,
- * and the wait itself. The values are diag.h's WAIT_LIMIT and WAIT_WHILE
- * of this project, copied here unchanged on 27.09.2026 (P4.5) so that
- * the driver includes no diag.h: the same 2 000 000 iterations on
- * silicon, 20 000 in the simulator, and in the simulator no wait at all
- * (the condition is evaluated once, so the register read still happens),
- * exactly as before. A step that needs longer has failed; the stop code
- * is fail()'s 5 (docs/TROUBLESHOOTING.md), now through port_panic(). */
-#ifdef __MPLAB_DEBUGGER_SIMULATOR
-#define ADC_WAIT_LIMIT        20000u     /* simulator runs at ~1/80 real time */
-#define ADC_WAIT_WHILE(cond, code)  do { (void)(cond); } while (0)
-#else
-#define ADC_WAIT_LIMIT        2000000u
-#define ADC_WAIT_WHILE(cond, code)                          \
-    do {                                                    \
-        uint32_t n_ = ADC_WAIT_LIMIT;                       \
-        while (cond) {                                      \
-            if (--n_ == 0u) { port_panic(code); }           \
-        }                                                   \
-    } while (0)
-#endif
 
 /* ------------------------------------------------------------------ *
  * ADC setup - one channel, Integration mode, conversions back-to-back
@@ -152,7 +132,7 @@ void adc_init(uint8_t pinsel, uint8_t samc, uint32_t burst_len)
     }
 
     ADCBITS(CON).ON = 1;
-    ADC_WAIT_WHILE(!ADCBITS(CON).ADRDY, 5u);  /* wait for the core   */
+    PORT_WAIT_WHILE(!ADCBITS(CON).ADRDY, 5u);  /* wait for the core   */
     port_trace("[adc] core ready, Integration mode, CNT 2048, back-to-back\r\n");
     port_trace_kv("[adc] pinsel", pinsel, false);
     port_trace_kv("[adc] samc", samc, false);
@@ -307,7 +287,7 @@ bool adc_reinit(void)
 #ifdef __MPLAB_DEBUGGER_SIMULATOR
     return true;                       /* no core to wait for              */
 #else
-    uint32_t n = ADC_WAIT_LIMIT;
+    uint32_t n = PORT_WAIT_LIMIT;
     while (!ADCBITS(CON).ADRDY && (--n != 0u)) { }
     return n != 0u;
 #endif
