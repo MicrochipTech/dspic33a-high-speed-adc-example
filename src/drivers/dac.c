@@ -32,7 +32,7 @@
 #include <stddef.h>
 #include "dac.h"
 #include "clock.h"
-#include "console.h"
+#include "log.h"        /* port layer (src/port): port_log(), port_log_kv() */
 
 #define DAC_UPDTRG_IMMEDIATE  3u      /* p1409: any write updates at once, binary 11 */
 
@@ -255,16 +255,16 @@ uint32_t uref_insel(void) { return UREFCONbits.INSEL; }
 
 void dac_regs_dump(void)
 {
-    console_puts("[regs] dac\r\n");
-    console_kv_hex("DACCTRL1", DACCTRL1);
-    console_kv_hex("DAC1CON", DAC1CON);
-    console_kv_hex("DAC1DAT", DAC1DAT);
-    console_kv_hex("DAC1SLPCON", DAC1SLPCON);
-    console_kv_hex("DAC1SLPDAT", DAC1SLPDAT);
-    console_kv_hex("DAC2CON", DAC2CON);
-    console_kv_hex("DAC2DAT", DAC2DAT);
-    console_kv_hex("DAC2SLPCON", DAC2SLPCON);
-    console_kv_hex("DAC2SLPDAT", DAC2SLPDAT);
-    console_kv_hex("UREFCON", UREFCON);   /* INSEL 7 = DAC2 on the internal UREF line */
-    console_kv("DAC clock Hz (read back)", clock_dac_hz());
+    port_log("[regs] dac\r\n");
+    port_log_kv("DACCTRL1", DACCTRL1, true);
+    port_log_kv("DAC1CON", DAC1CON, true);
+    port_log_kv("DAC1DAT", DAC1DAT, true);
+    port_log_kv("DAC1SLPCON", DAC1SLPCON, true);
+    port_log_kv("DAC1SLPDAT", DAC1SLPDAT, true);
+    port_log_kv("DAC2CON", DAC2CON, true);
+    port_log_kv("DAC2DAT", DAC2DAT, true);
+    port_log_kv("DAC2SLPCON", DAC2SLPCON, true);
+    port_log_kv("DAC2SLPDAT", DAC2SLPDAT, true);
+    port_log_kv("UREFCON", UREFCON, true);   /* INSEL 7 = DAC2 on the internal UREF line */
+    port_log_kv("DAC clock Hz (read back)", clock_dac_hz(), false);
 }

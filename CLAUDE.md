@@ -60,7 +60,7 @@ the sources still include each other as `"name.h"` without a folder prefix:
 | `sccp.c/.h` | SCCP1 as a trigger source, with clock source, mode and event as parameters; its timer and compare interrupts as event counters - same registers and vectors on both boards, see `adc.c/.h` above. Its register dump prints through `port/log.h` only (P4.3, 27.09.2026); no `console.h` | port, capture, chaintest |
 | `led.c/.h` | LED0 | - |
 | `timebase.c/.h` | Timer1 as a stopwatch (12.5 MHz) for measuring the delivered rate. It sits on the CPU branch (PLL2) while the ADC is on PLL1, so it cannot flatter the ADC. Not involved in producing the rate. | - |
-| `dac.c/.h` | DAC1 and DAC2 in Triangle Wave mode (DACOUT1 = RA1, DACOUT2 = RA8), one unit table, shared CLKGEN7, plus the internal UREF route to any core; the known signal for `test dac`. `dac2_*()` are DAC2-only aliases for the chain test's fixed pin route and its low-latency ISR path (`dac2_set()`) | console, diag, chaintest |
+| `dac.c/.h` | DAC1 and DAC2 in Triangle Wave mode (DACOUT1 = RA1, DACOUT2 = RA8), one unit table, shared CLKGEN7, plus the internal UREF route to any core; the known signal for `test dac`. `dac2_*()` are DAC2-only aliases for the chain test's fixed pin route and its low-latency ISR path (`dac2_set()`). Its register dump prints through `port/log.h` only (P4.4, 27.09.2026); no `console.h` | port, clock (`clock_dac_hz()`); used by console, diag, chaintest |
 | `dactest.c/.h` | judges captured halves against the DAC settings (min/max, reversals vs period, jumps); works with either DAC unit via `dac_active()` | capture, dac |
 | `chaintest.c/.h` | the chain test `chain all` (S0..S9), the triangle evaluator (turning points by line fits, "slip"), the `@` log format, `chain run`, `chain_stream_on/off`, and `chain_stream_grab_begin()`/`_end()` - one halt/grab/restart cycle of the standing stream for `stream grab` (cli.c), the counters reported as the delta since the previous grab - builds and links unchanged for both boards (`tools\build.bat nano`, 25.09.2026); not yet run on Nano hardware, and the GUI cycle not yet run on either board | capture, adc, sccp, dac, clock, dma (register dumps), diag |
 | `diag.c/.h` | `fail()` codes, trap handler, boot record in persistent RAM (including `chain_mark`, the chain test's stage), `RCON` report, `regs_dump()` | every module's `*_regs_dump()` |
@@ -80,8 +80,10 @@ or `fail()` directly, and it includes none of `console.h`, `diag.h`, `capture.h`
 `led.c` mentions `fail()` and `capture_service()` in its header comment only, and keeps
 `board.h` until P7); `sccp.c` moved over in P4.3 (27.09.2026: the 13 `console_*` calls of
 its register dump became `port_log()`/`port_log_kv()`, the `console.h` include went, and
-every trace scenario that links it lists `src/app/port_impl.c` too); `dac.c`, `adc.c`,
-`dma.c`, `clock.c` move over in P4.4 to P4.7. The console never reads the buffer directly;
+every trace scenario that links it lists `src/app/port_impl.c` too); `dac.c` likewise in
+P4.4 (the 12 `console_*` calls of its register dump, `dac.sources` gained
+`port_impl.c`); `adc.c`, `dma.c`, `clock.c` move over in P4.5 to P4.7. The console never
+reads the buffer directly;
 it uses `capture_completed_half()`, or `capture_oneshot_n()` when it needs a window that
 nothing is writing.
 
