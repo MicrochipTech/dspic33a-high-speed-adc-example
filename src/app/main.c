@@ -234,7 +234,7 @@ int main(void)
      * anyone runs is the one most likely to pass - and a failure there is
      * the chain itself, not the rate. "clk" changes it. */
     {
-        const uint32_t rc = capture_set_pll(ADC_PLL_POSTDIV1, ADC_PLL_POSTDIV2);
+        const uint32_t rc = capture_set_pll(board_cfg.adc_pll_postdiv1, board_cfg.adc_pll_postdiv2);
         console_kv("[boot] pll1 postdiv1", clock_adc_pll_postdiv1());
         console_kv("[boot] pll1 postdiv2", clock_adc_pll_postdiv2());
         console_kv("[boot] adc clock Hz", clock_adc_hz());

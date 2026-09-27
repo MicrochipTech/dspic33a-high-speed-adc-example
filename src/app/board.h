@@ -22,6 +22,8 @@
 #ifndef BOARD_H
 #define BOARD_H
 
+#include "board_cfg.h"     /* board_cfg_t, extern board_cfg (P7.1) */
+
 #define BOARD_EV74H48A    1
 #define BOARD_EV17P63A    2
 
@@ -38,7 +40,18 @@
 
 /* ADC core and input: ADC3, AD3AN5 = mikroBUS A pin AN (device pin
  * RA0). The on-board potentiometer is AD5AN0 (RA7): set ADC_INSTANCE 5,
- * ADC_PINSEL 0 and a longer sample time for that. */
+ * ADC_PINSEL 0 and a longer sample time for that.
+ *
+ * Tried as board_cfg data in P7.1 (docs/IMPLEMENTATION-PLAN.md) and
+ * reverted: several trace scenarios (variants.c, b2b.c, clk.c, regs.c)
+ * never call adc_select() themselves and rely on adc_cur's file-scope
+ * default already being this board's core - variants.c's own comment:
+ * "AD3CON.ADRDY: the board's default core (ADC_INSTANCE 3) - this
+ * scenario never switches core." Making the default a plain placeholder
+ * broke all of them (tools\trace.bat 7/13 FAIL); fixing it properly would
+ * mean adding an explicit adc_select() to every one of those scenario
+ * files, well past what P7.1 needs board_cfg for. See
+ * src/boards/board_cfg.h for the other stay-compile-time cases and why. */
 #ifndef ADC_INSTANCE
 #define ADC_INSTANCE      3
 #endif
@@ -146,31 +159,13 @@
 #define ADC_CLKDIV        100u    /* CLKGEN6 divider: straight through       */
 #endif
 
-/* The sample rate at boot, as PLL1's two output dividers: the ADC clock
- * is 1600 MHz / (POSTDIV1 * POSTDIV2), and eight of those clocks make one
- * back-to-back conversion. 7/7 = 32.65 MHz = 4.08 MSPS is the slowest
- * setting that still clears the ADC's 32 MHz minimum; 5/5 = 64 MHz =
- * 8 MSPS is what the customer's application needs; 5/1 = 320 MHz =
- * 40 MSPS is the maximum and what clock_init() starts with.
- *
- * The slowest setting is the default on purpose: it is the one the DMA
- * should manage comfortably, so the first test of a run is the one most
- * likely to pass, and a failure there means the chain itself is broken -
- * not the rate. "pll <p1> <p2>" changes it at run time.
- *
- * Why the PLL and not the CLKGEN6 divider: in runs 8 and 9 the divider
- * seemed to have no effect - but both runs measured under overrun load,
- * an instrument later found void, and every document names CLKGEN6 as
- * the ADC clock (ANALYSIS.md C.3, withdrawn 25.09.2026). The chain test
- * measures it at the generator itself (chaintest.c S8). The chain test
- * does not use this boot rate: it sets PLL1 to 5/1 and paces the ADC
- * with SCCP1. */
-#ifndef ADC_PLL_POSTDIV1
-#define ADC_PLL_POSTDIV1  7u
-#endif
-#ifndef ADC_PLL_POSTDIV2
-#define ADC_PLL_POSTDIV2  7u
-#endif
+/* The sample rate at boot, as PLL1's two output dividers, used to be
+ * ADC_PLL_POSTDIV1/2 here. Since P7.1 (docs/IMPLEMENTATION-PLAN.md) it is
+ * board_cfg.adc_pll_postdiv1/2 (src/boards/ev74h48a.c,
+ * src/boards/ev17p63a.c - both 7/7 today, board-independent) - see
+ * src/boards/ev74h48a.c for the full reasoning (the 1600 MHz / (POSTDIV1 *
+ * POSTDIV2) formula, why 7/7 is the default, why the PLL and not the
+ * CLKGEN6 divider), moved there verbatim. */
 
 /* Boot chatter: with 1 every start-up step reports its registers on the
  * console ([clk] PLL1 locked, [adc] pinsel, [dma] DMALOW ...). With 0 the

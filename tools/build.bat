@@ -19,6 +19,11 @@ rem  The simulator builds compile sim_dma.c instead of dma.c, define
 rem  __MPLAB_DEBUGGER_SIMULATOR (as MPLAB X does for a Simulator
 rem  configuration) and keep debug symbols for tools\sim_trap.py.
 rem
+rem  Board configuration as data (P7.1, 27.09.2026): src\boards\ev74h48a.c
+rem  or src\boards\ev17p63a.c defines the one board_cfg linked into the
+rem  image, picked the same way dma.c vs sim_dma.c is - BOARDFILE below,
+rem  ev17p63a.c only for "nano". Never both in one build.
+rem
 rem  The sources live under ..\src\<folder>\ (P1.1, 27.09.2026). Every
 rem  folder is on the include path (INC below), so the sources keep
 rem  including each other as "name.h" without a folder prefix.
@@ -38,6 +43,7 @@ set DFP=C:\Program Files\Microchip\MPLABX\v6.35\packs\Microchip\dsPIC33AK-MP_DFP
 set MCU=33AK512MPS512
 set TARGET=adc_dma_40msps
 set DMA=..\src\drivers\dma.c
+set BOARDFILE=..\src\boards\ev74h48a.c
 set EXTRA=
 set OUT=..\build\%TARGET%
 
@@ -74,10 +80,11 @@ if /i "%1"=="nano" (
   set MCU=33AK512MPS506
   set EXTRA=-DBOARD=2
   set OUT=..\build\%TARGET%_nano
+  set BOARDFILE=..\src\boards\ev17p63a.c
 )
 set SRC=..\src
-set INC=-I%SRC%\drivers -I%SRC%\app -I%SRC%\cli -I%SRC%\tests -I%SRC%\lib -I%SRC%\diag -I%SRC%\sim -I%SRC%\port -I%SRC%\link
-set SOURCES=%SRC%\app\main.c %SRC%\app\config_bits.c %SRC%\app\port_impl.c %SRC%\drivers\clock.c %SRC%\drivers\adc.c %DMA% %SRC%\app\capture.c %SRC%\lib\crc16.c %SRC%\lib\fmt.c %SRC%\lib\stats.c %SRC%\lib\tri_eval.c %SRC%\lib\iir1.c %SRC%\lib\goertzel_f.c %SRC%\lib\goertzel_i.c %SRC%\lib\detect.c %SRC%\lib\wavegen.c %SRC%\lib\frame.c %SRC%\drivers\sccp.c %SRC%\drivers\led.c %SRC%\diag\diag.c %SRC%\drivers\timebase.c %SRC%\drivers\dac.c %SRC%\drivers\uart.c %SRC%\tests\dactest.c %SRC%\tests\chaintest.c %SRC%\tests\bench.c %SRC%\link\gui_link.c %SRC%\cli\cli.c %SRC%\cli\cmd_parser.c
+set INC=-I%SRC%\drivers -I%SRC%\app -I%SRC%\cli -I%SRC%\tests -I%SRC%\lib -I%SRC%\diag -I%SRC%\sim -I%SRC%\port -I%SRC%\link -I%SRC%\boards
+set SOURCES=%SRC%\app\main.c %SRC%\app\config_bits.c %SRC%\app\port_impl.c %SRC%\drivers\clock.c %SRC%\drivers\adc.c %DMA% %SRC%\app\capture.c %SRC%\lib\crc16.c %SRC%\lib\fmt.c %SRC%\lib\stats.c %SRC%\lib\tri_eval.c %SRC%\lib\iir1.c %SRC%\lib\goertzel_f.c %SRC%\lib\goertzel_i.c %SRC%\lib\detect.c %SRC%\lib\wavegen.c %SRC%\lib\frame.c %SRC%\drivers\sccp.c %SRC%\drivers\led.c %SRC%\diag\diag.c %SRC%\drivers\timebase.c %SRC%\drivers\dac.c %SRC%\drivers\uart.c %SRC%\tests\dactest.c %SRC%\tests\chaintest.c %SRC%\tests\bench.c %SRC%\link\gui_link.c %SRC%\cli\cli.c %SRC%\cli\cmd_parser.c %BOARDFILE%
 
 if not exist ..\build mkdir ..\build
 

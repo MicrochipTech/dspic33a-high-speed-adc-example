@@ -65,10 +65,10 @@ not counted.
 | P5.2 `cli.c` on top of `uart.c` | done | `8c77890` | Sonnet | P5.1 already finished the switch (the plan allows that order); this task is the check: `grep -E "U2\|RPCON\|RPOR\|RPINR\|IPC" src/cli/` empty, **[SMOKE]** log identical to `tests/smoke/expected.log` (110 lines) |
 | P6.1 Per-module command registration | done | `e7826bf` | Sonnet | `bench_register()` (sweep, clk, pll, test - contiguous in the old order, clk/pll stay in cli.c after P6.2), `link_register()` (snap, rate, blk), `chain_register()` (chain, stream); `cli_init()` calls them in the old position, `help` order unchanged (**[SMOKE]** matches `tests/smoke/expected.log`) |
 | P6.2 `src/tests/bench.c` | done | `9408731` | Sonnet | `test_*`/`matrix_*`/`sweep_*` moved verbatim, with `bench_register_sweep()`/`bench_register_test()` (split in two: `clk`/`pll` still sit between "sweep" and "test" in the registration order); `put_kv`/`put_line`/`arg_u32`/`usage`/`run_dactest` stay in cli.c, no longer `static`, called `extern` from bench.c; traces `variants`/`b2b` unchanged, fncmp 379/426 functions identical, the rest explained by the move and the linkage change |
-| P6.3 `src/lib/frame.c` | done | this commit | Sonnet | `frame_send()`: header (caller-built) + chunked payload with the CRC folded in + CRC tail, or the bare `CRC 0000` shape for n=0 - byte-for-byte what `cmd_blk_fn()`/`cmd_stream_grab()` build today, not yet wired in (cli.c untouched); `tests/host/test_frame_xcheck.py` cross-checks a dumped frame against `tools/protocol.py`'s `parse_grab_frame()` and a small local BIN-header parser, CRC and payload identical |
-| P6.4 `src/link/gui_link.c` | done | this commit | Sonnet | `cmd_blk_fn`/`cmd_stream_grab`(`->gui_link_stream_grab`)/`link_register` moved, `blk`/`stream grab` rewritten over `frame_send()` - wire bytes proven identical by P6.3's host cross-check plus fncmp showing only the moved/renamed functions differ; `cli.c`'s `cmd_stream_fn()` keeps "stream on\|off\|grab" dispatch, restart-always rule untouched; `_DMA0Interrupt` 42/0, `_U2RXInterrupt` 55/0 unchanged |
+| P6.3 `src/lib/frame.c` | done | `e52c234` | Sonnet | `frame_send()`: header (caller-built) + chunked payload with the CRC folded in + CRC tail, or the bare `CRC 0000` shape for n=0 - byte-for-byte what `cmd_blk_fn()`/`cmd_stream_grab()` build today, not yet wired in (cli.c untouched); `tests/host/test_frame_xcheck.py` cross-checks a dumped frame against `tools/protocol.py`'s `parse_grab_frame()` and a small local BIN-header parser, CRC and payload identical |
+| P6.4 `src/link/gui_link.c` | done | `475462e` | Sonnet | `cmd_blk_fn`/`cmd_stream_grab`(`->gui_link_stream_grab`)/`link_register` moved, `blk`/`stream grab` rewritten over `frame_send()` - wire bytes proven identical by P6.3's host cross-check plus fncmp showing only the moved/renamed functions differ; `cli.c`'s `cmd_stream_fn()` keeps "stream on\|off\|grab" dispatch, restart-always rule untouched; `_DMA0Interrupt` 42/0, `_U2RXInterrupt` 55/0 unchanged |
 | P6.5 `tools/protocol.py` | done | `88b00d6`, merge `aa1498c` | Sonnet | built in a worktree alongside P5; GUI `--selftest` 15/15 before and after; `eval_chain.py` had no copy to redirect; `gui_ui_test.py` not run (Playwright not installed in any Python on this machine) |
-| P7.1 Board config as data | open | | | |
+| P7.1 Board config as data | done (reduced) | this commit | Sonnet | only the boot PLL dividers moved; ADC core/input, LED, UART PPS stay board.h macros (compile-time uses, hot path led_toggle, PPS unverifiable without a board run) - `grep board.h src/drivers/` still finds hits; revisit in N+2 with P8 |
 | P8.1-P8.8 Drivers with instances | moved to N+2 | | | user decision 27.09.2026, see Decisions; `ROUTE_STREAM` works with today's single instances |
 | P9.1-P9.5 Split `capture.c` | open | | | P9.5 = [SIM], runs without asking since 27.09.2026 |
 | P10.1-P10.4 Split `clock.c` | moved to N+2 | | | user decision 27.09.2026; when it is done: needs `trace_point()` between clock steps (approach (a)) |
@@ -99,6 +99,10 @@ not counted.
 - The trace cannot see a write of a register's reset value (approach (a)), e.g. `PR1`.
 - A clean simulator run does not prove the absence of misaligned accesses; only
   silicon traps them.
+- P7.1 moved only the boot PLL dividers into `board_cfg`; ADC core/input, LED
+  port/polarity and the console's PPS/TRIS pins stay `board.h` macros (compile-time
+  uses, `led_toggle()`'s hot path, and a path no golden trace exercises without a
+  board run) - `grep board.h src/drivers/` still finds hits; revisit in N+2 with P8.
 
 ## Rules for every task
 

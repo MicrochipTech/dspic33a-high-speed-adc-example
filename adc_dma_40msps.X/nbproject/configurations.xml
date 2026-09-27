@@ -8,6 +8,9 @@
         <itemPath>../src/app/capture.h</itemPath>
         <itemPath>../src/app/board.h</itemPath>
       </logicalFolder>
+      <logicalFolder name="boards" displayName="boards" projectFiles="true">
+        <itemPath>../src/boards/board_cfg.h</itemPath>
+      </logicalFolder>
       <logicalFolder name="cli" displayName="cli" projectFiles="true">
         <itemPath>../src/cli/console.h</itemPath>
         <itemPath>../src/cli/cmd_parser.h</itemPath>
@@ -72,6 +75,10 @@
         <itemPath>../src/app/capture.c</itemPath>
         <itemPath>../src/app/config_bits.c</itemPath>
         <itemPath>../src/app/port_impl.c</itemPath>
+      </logicalFolder>
+      <logicalFolder name="boards" displayName="boards" projectFiles="true">
+        <itemPath>../src/boards/ev74h48a.c</itemPath>
+        <itemPath>../src/boards/ev17p63a.c</itemPath>
       </logicalFolder>
       <logicalFolder name="cli" displayName="cli" projectFiles="true">
         <itemPath>../src/cli/cli.c</itemPath>
@@ -158,6 +165,20 @@
         <makeCustomizationEnableLongLines>false</makeCustomizationEnableLongLines>
         <makeCustomizationNormalizeHexFile>false</makeCustomizationNormalizeHexFile>
       </makeCustomizationType>
+      <item path="../src/boards/ev17p63a.c" ex="true" overriding="false">
+        <C30>
+        </C30>
+        <C30-AR>
+        </C30-AR>
+        <C30-AS>
+        </C30-AS>
+        <C30-CO>
+        </C30-CO>
+        <C30-LD>
+        </C30-LD>
+        <C30Global>
+        </C30Global>
+      </item>
       <item path="../src/sim/sim_dma.c" ex="true" overriding="false">
         <C30>
         </C30>
@@ -174,7 +195,7 @@
       </item>
       <C30>
         <property key="extra-include-directories"
-                  value="../src/drivers;../src/app;../src/cli;../src/tests;../src/lib;../src/diag;../src/sim;../src/port;../src/link"/>
+                  value="../src/drivers;../src/app;../src/cli;../src/tests;../src/lib;../src/diag;../src/sim;../src/port;../src/link;../src/boards"/>
       </C30>
       <Tool>
         <property key="ADC1" value="true"/>
@@ -966,6 +987,20 @@
         <makeCustomizationEnableLongLines>false</makeCustomizationEnableLongLines>
         <makeCustomizationNormalizeHexFile>false</makeCustomizationNormalizeHexFile>
       </makeCustomizationType>
+      <item path="../src/boards/ev74h48a.c" ex="true" overriding="false">
+        <C30>
+        </C30>
+        <C30-AR>
+        </C30-AR>
+        <C30-AS>
+        </C30-AS>
+        <C30-CO>
+        </C30-CO>
+        <C30-LD>
+        </C30-LD>
+        <C30Global>
+        </C30Global>
+      </item>
       <item path="../src/sim/sim_dma.c" ex="true" overriding="false">
         <C30>
         </C30>
@@ -982,7 +1017,7 @@
       </item>
       <C30>
         <property key="extra-include-directories"
-                  value="../src/drivers;../src/app;../src/cli;../src/tests;../src/lib;../src/diag;../src/sim;../src/port;../src/link"/>
+                  value="../src/drivers;../src/app;../src/cli;../src/tests;../src/lib;../src/diag;../src/sim;../src/port;../src/link;../src/boards"/>
         <property key="preprocessor-macros" value="BOARD=2"/>
       </C30>
       <Tool>
@@ -1634,6 +1669,20 @@
         <makeCustomizationEnableLongLines>false</makeCustomizationEnableLongLines>
         <makeCustomizationNormalizeHexFile>false</makeCustomizationNormalizeHexFile>
       </makeCustomizationType>
+      <item path="../src/boards/ev17p63a.c" ex="true" overriding="false">
+        <C30>
+        </C30>
+        <C30-AR>
+        </C30-AR>
+        <C30-AS>
+        </C30-AS>
+        <C30-CO>
+        </C30-CO>
+        <C30-LD>
+        </C30-LD>
+        <C30Global>
+        </C30Global>
+      </item>
       <item path="../src/drivers/dma.c" ex="true" overriding="false">
         <C30>
         </C30>
@@ -1650,7 +1699,7 @@
       </item>
       <C30>
         <property key="extra-include-directories"
-                  value="../src/drivers;../src/app;../src/cli;../src/tests;../src/lib;../src/diag;../src/sim;../src/port;../src/link"/>
+                  value="../src/drivers;../src/app;../src/cli;../src/tests;../src/lib;../src/diag;../src/sim;../src/port;../src/link;../src/boards"/>
         <property key="preprocessor-macros" value="__MPLAB_DEBUGGER_SIMULATOR=1"/>
       </C30>
       <Simulator>

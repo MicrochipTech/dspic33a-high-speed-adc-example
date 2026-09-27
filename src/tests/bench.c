@@ -261,7 +261,7 @@ static void console_sweep(uint32_t halves, bool choose)
     } else {
         console_puts("[sweep] NO CLEAN RATE - every row lost samples or halves\r\n");
     }
-    if (!choose) { (void)capture_set_pll(ADC_PLL_POSTDIV1, ADC_PLL_POSTDIV2); }
+    if (!choose) { (void)capture_set_pll(board_cfg.adc_pll_postdiv1, board_cfg.adc_pll_postdiv2); }
     counters_clear();
     if (was_running) { capture_start(); }
     console_puts("[sweep] done: counters cleared\r\n");
@@ -699,7 +699,7 @@ static void cmd_matrix(void)
     }
     /* Back to a known state: the boot setting. */
     (void)capture_select_variant(CAP_VAR_B2B, capture_nominal_ksps(0u));
-    (void)capture_set_pll(ADC_PLL_POSTDIV1, ADC_PLL_POSTDIV2);
+    (void)capture_set_pll(board_cfg.adc_pll_postdiv1, board_cfg.adc_pll_postdiv2);
     console_puts("[matrix] done - back at the boot setting\r\n");
 }
 

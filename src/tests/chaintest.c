@@ -378,7 +378,7 @@ static void restore(void)
     dac2_off();
     clock_dac_select(CLOCK_DAC_PLL1_VCO);
     (void)capture_select_core(ADC_INSTANCE, ADC_PINSEL, ADC_SAMC);  /* burst mode again */
-    (void)capture_set_pll(ADC_PLL_POSTDIV1, ADC_PLL_POSTDIV2);
+    (void)capture_set_pll(board_cfg.adc_pll_postdiv1, board_cfg.adc_pll_postdiv2);
     counters_clear();
 }
 
