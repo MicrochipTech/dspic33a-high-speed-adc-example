@@ -1712,12 +1712,17 @@ figures tagged `source: prediction`):
   conversions, overrun 0; S4 and S6 pass cleanly at 1, 4 and 8 MSPS with overrun/late/missed
   0, the same growing overrun count from 10 MSPS up; S5 slope 1.000 against the model from
   100 kSPS through 8 MSPS; S9 picks 8 or 10 MSPS; the processing load at 8 MSPS stays well
-  below half, as the post-run-19 unrolled loop measured. Nothing P9 or P11 restructured
+  below half - a prediction for the loop rewritten after run 19 (32-bit reads, unrolled),
+  which has never run on silicon; run 19's own loop took 92 %. Nothing P9 or P11 restructured
   touches a register the chain test exercises differently - the prediction is that the
   restructuring is invisible to this block.
 - **R4 (`stream on`/`stream grab` on B, 1/4/8 MSPS, >= 50 grabs each) is expected to show a
   clean CRC and a PASS triangle verdict on every grab, with ov/late/missed deltas 0 at all
-  three rates** - the same behaviour run 19 measured for the standing stream, now reached
-  through `routing_apply()` instead of the old direct call, which the `stream_on`/
-  `stream_on_input` goldens prove writes the identical register sequence.
+  three rates**. This is the least-founded prediction of the run: `stream grab` - the
+  GUI's halt/transfer/restart cycle - has never run on any board, in A or B; run 19 only
+  showed the chain itself streaming cleanly up to 8 MSPS. What the goldens do prove is
+  narrower: `stream on` through `routing_apply()` writes the same register sequence as
+  the old direct call (`stream_on`/`stream_on_input` byte-identical) - except the DAC
+  slope, which no golden covers (`slp=0` in the harness, see the plan's open points).
+  A deviation here that shows in A as well is the grab cycle, not the restructuring.
 
