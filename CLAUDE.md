@@ -154,7 +154,10 @@ commits the new `expected.log` with the change; the diff it prints first is the 
 Measured 27.09.2026 (`tests/baseline.md`): 82-96 s wall clock per run, of which MDB
 start-up and programming are 35-40 s and the run itself 40-49 s (4.3 k UART characters
 at about 10 ms each); the firmware side is under a minute, so under rule 6 the smoke run
-may run without asking. The smoke path is preprocessor-guarded (`SIM_SMOKE`,
+may run without asking - **confirmed by the user on 27.09.2026**: run it without asking
+after tasks that touch boot, console or memory layout, one run at a time (four in
+parallel took 131-136 s each). This covers `--smoke` only, never the ~7-minute
+acceptance run. The smoke path is preprocessor-guarded (`SIM_SMOKE`,
 `SIM_SMOKE_FAULT`) and `tools\fncmp.py --ignore-strings` shows the hardware, sim and nano
 ELFs function-identical with and without it. No MPLAB X configuration exists for it; the
 command line is the way to build it.
