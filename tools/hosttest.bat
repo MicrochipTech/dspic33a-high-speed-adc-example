@@ -11,6 +11,12 @@ rem  test with no such file is just compiled and linked on its own. Every
 rem  src\<folder> is on the include path, so "name.h" resolves as it does
 rem  in the firmware build.
 rem
+rem  After the C tests, every tests\host\test_*.py runs with the `python`
+rem  on the PATH (standard library only - no venv needed; 3.8 or newer).
+rem  They run after the C tests because they may drive a test executable
+rem  just built (test_tri_eval_xcheck.py drives test_tri_eval.exe --eval,
+rem  P2.4). No python on the PATH counts as a failure, like no gcc.
+rem
 rem  Uses %~dp0 to find the repo root, so it works from any cwd.
 rem ---------------------------------------------------------------------
 setlocal enabledelayedexpansion
@@ -46,6 +52,23 @@ for %%F in ("%TESTDIR%\test_*.c") do (
     echo !NAME!: BUILD FAILED
   ) else (
     "%OUTDIR%\!NAME!.exe"
+    if errorlevel 1 (
+      echo !NAME!: FAIL
+    ) else (
+      echo !NAME!: PASS
+      set /a PASSED+=1
+    )
+  )
+)
+
+for %%F in ("%TESTDIR%\test_*.py") do (
+  set /a TOTAL+=1
+  set "NAME=%%~nF"
+  where python >nul 2>nul
+  if errorlevel 1 (
+    echo !NAME!: no python found on PATH - FAIL
+  ) else (
+    python "%%F"
     if errorlevel 1 (
       echo !NAME!: FAIL
     ) else (
