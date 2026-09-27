@@ -15,6 +15,7 @@
 #include <xc.h>
 #include "dma.h"
 #include "log.h"        /* port layer (src/port): port_log(), port_log_kv(), port_trace*() */
+#include "regs.h"       /* port layer (src/port): reg_visit_t for the register dump (P4.8) */
 #include "panic.h"      /* port layer: port_panic()                                       */
 
 /* The device's data RAM, from the device header (0x4000 and 0x10000 for
@@ -204,19 +205,19 @@ void __attribute__((interrupt, no_auto_psv)) _DMA0Interrupt(void)
     dma0_event(DMA0STAT);
 }
 
-void dma0_regs_dump(void)
+void dma0_regs_visit(reg_visit_t visit)
 {
-    port_log("[regs] dma\r\n");
-    port_log_kv("DMACON", DMACON, true);
-    port_log_kv("DMALOW", DMALOW, true);
-    port_log_kv("DMAHIGH", DMAHIGH, true);
-    port_log_kv("DMA0CH", DMA0CH, true);
-    port_log_kv("DMA0SEL", DMA0SEL, true);
-    port_log_kv("DMA0STAT", DMA0STAT, true);
-    port_log_kv("DMA0SRC", DMA0SRC, true);
-    port_log_kv("DMA0DST", DMA0DST, true);
-    port_log_kv("DMA0CNT", DMA0CNT, true);
-    port_log_kv("IEC2", IEC2, true);           /* DMA0 enable,  bit 13      */
-    port_log_kv("IFS2", IFS2, true);           /* DMA0 flag,    bit 13      */
-    port_log_kv("IPC9", IPC9, true);           /* DMA0 priority             */
+    visit("[regs] dma\r\n", 0u, REG_TITLE);
+    visit("DMACON", DMACON, REG_HEX);
+    visit("DMALOW", DMALOW, REG_HEX);
+    visit("DMAHIGH", DMAHIGH, REG_HEX);
+    visit("DMA0CH", DMA0CH, REG_HEX);
+    visit("DMA0SEL", DMA0SEL, REG_HEX);
+    visit("DMA0STAT", DMA0STAT, REG_HEX);
+    visit("DMA0SRC", DMA0SRC, REG_HEX);
+    visit("DMA0DST", DMA0DST, REG_HEX);
+    visit("DMA0CNT", DMA0CNT, REG_HEX);
+    visit("IEC2", IEC2, REG_HEX);           /* DMA0 enable,  bit 13      */
+    visit("IFS2", IFS2, REG_HEX);           /* DMA0 flag,    bit 13      */
+    visit("IPC9", IPC9, REG_HEX);           /* DMA0 priority             */
 }

@@ -18,6 +18,7 @@
 #include "clock.h"
 #include "timebase.h"
 #include "log.h"        /* port layer (src/port): port_log(), port_log_kv(), port_trace*(), port_flush() */
+#include "regs.h"       /* port layer (src/port): reg_visit_t for the register dump (P4.8) */
 #include "panic.h"      /* port layer: port_panic()                                       */
 #include "wait.h"       /* port layer: PORT_WAIT_WHILE() (P4.6a)                          */
 
@@ -665,23 +666,23 @@ uint32_t clock_adc_set_pll(uint32_t postdiv1, uint32_t postdiv2)
 #endif
 }
 
-void clock_regs_dump(void)
+void clock_regs_visit(reg_visit_t visit)
 {
-    port_log("[regs] clock\r\n");
-    port_log_kv("OSCCTRL", OSCCTRL, true);
-    port_log_kv("PLL1CON", PLL1CON, true);
-    port_log_kv("PLL1DIV", PLL1DIV, true);
-    port_log_kv("PLL2CON", PLL2CON, true);
-    port_log_kv("PLL2DIV", PLL2DIV, true);
-    port_log_kv("CLK1CON", CLK1CON, true);
-    port_log_kv("CLK1DIV", CLK1DIV, true);
-    port_log_kv("CLK6CON", CLK6CON, true);
-    port_log_kv("CLK6DIV", CLK6DIV, true);
-    port_log_kv("CLK7CON", CLK7CON, true);     /* DAC clock                 */
-    port_log_kv("CLK7DIV", CLK7DIV, true);
-    port_log_kv("VCO1DIV", VCO1DIV, true);     /* DAC clock source, 400 MHz */
-    port_log_kv("CLK13CON", CLK13CON, true);   /* SCCP1 trigger clock       */
-    port_log_kv("CLK13DIV", CLK13DIV, true);
-    port_log_kv("IEC0", IEC0, true);           /* CLKFAIL enable, bit 9     */
-    port_log_kv("IFS0", IFS0, true);           /* CLKFAIL flag,   bit 9     */
+    visit("[regs] clock\r\n", 0u, REG_TITLE);
+    visit("OSCCTRL", OSCCTRL, REG_HEX);
+    visit("PLL1CON", PLL1CON, REG_HEX);
+    visit("PLL1DIV", PLL1DIV, REG_HEX);
+    visit("PLL2CON", PLL2CON, REG_HEX);
+    visit("PLL2DIV", PLL2DIV, REG_HEX);
+    visit("CLK1CON", CLK1CON, REG_HEX);
+    visit("CLK1DIV", CLK1DIV, REG_HEX);
+    visit("CLK6CON", CLK6CON, REG_HEX);
+    visit("CLK6DIV", CLK6DIV, REG_HEX);
+    visit("CLK7CON", CLK7CON, REG_HEX);     /* DAC clock                 */
+    visit("CLK7DIV", CLK7DIV, REG_HEX);
+    visit("VCO1DIV", VCO1DIV, REG_HEX);     /* DAC clock source, 400 MHz */
+    visit("CLK13CON", CLK13CON, REG_HEX);   /* SCCP1 trigger clock       */
+    visit("CLK13DIV", CLK13DIV, REG_HEX);
+    visit("IEC0", IEC0, REG_HEX);           /* CLKFAIL enable, bit 9     */
+    visit("IFS0", IFS0, REG_HEX);           /* CLKFAIL flag,   bit 9     */
 }

@@ -1057,7 +1057,7 @@ void capture_variant_regs(void)
     console_kv("[var]   clkgen6 ratio x100", clock_adc_div());
     if (var_trig_ns != 0u) {
         console_kv("[var]   trigger period ns", var_trig_ns);
-        sccp1_regs_dump();
+        sccp1_regs_visit(reg_print);
     }
 }
 

@@ -309,16 +309,32 @@ void fail(uint32_t code)
 /* ------------------------------------------------------------------ *
  * Register dump - what Part 4 of docs/TROUBLESHOOTING.md asks for
  *
- * Each module prints its own registers; this only sets the order and
- * adds what belongs to nobody else.
+ * Each driver walks its own registers and hands them to reg_print()
+ * below (port/regs.h, P4.8); this only sets the order and adds what
+ * belongs to nobody else.
  * ------------------------------------------------------------------ */
+
+/* The printing visitor: the three line forms the drivers' former
+ * xxx_regs_dump() printed, through the same three console calls, so
+ * that the text is the same character for character (the "regs" golden
+ * trace). A title arrives as the whole line, "\r\n" included. */
+void reg_print(const char *name, uint32_t v, reg_fmt_t fmt)
+{
+    switch (fmt) {
+    case REG_HEX:   console_kv_hex(name, v); break;
+    case REG_DEC:   console_kv(name, v);     break;
+    case REG_TITLE:
+    default:        console_puts(name);      break;
+    }
+}
+
 void regs_dump(void)
 {
-    clock_regs_dump();
-    adc_regs_dump();
-    dma0_regs_dump();
+    clock_regs_visit(reg_print);
+    adc_regs_visit(reg_print);
+    dma0_regs_visit(reg_print);
     capture_regs_dump();
-    dac_regs_dump();
+    dac_regs_visit(reg_print);
     console_regs_dump();
     console_puts("[regs] cpu\r\n");
     console_kv_hex("INTCON1", INTCON1);

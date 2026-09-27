@@ -38,6 +38,8 @@
       <logicalFolder name="port" displayName="port" projectFiles="true">
         <itemPath>../src/port/log.h</itemPath>
         <itemPath>../src/port/panic.h</itemPath>
+        <itemPath>../src/port/regs.h</itemPath>
+        <itemPath>../src/port/wait.h</itemPath>
       </logicalFolder>
       <logicalFolder name="sim" displayName="sim" projectFiles="true">
         <itemPath>../src/sim/sim.h</itemPath>

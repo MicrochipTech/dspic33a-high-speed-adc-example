@@ -121,6 +121,21 @@ void fail(uint32_t code)
     trace_note("F fail(%lu)\n", (unsigned long)code);
     longjmp(fail_jmp, 1);
 }
+
+/* diag.c's printing register visitor (port/regs.h, P4.8): capture.c's
+ * capture_variant_regs() and chaintest.c's recipe dump pass it to the
+ * drivers' xxx_regs_visit(). The same three console calls as diag.c's
+ * reg_print(), so a scenario without diag.c records the same `C` lines
+ * the driver's former xxx_regs_dump() produced. */
+void reg_print(const char *name, uint32_t v, reg_fmt_t fmt)
+{
+    switch (fmt) {
+    case REG_HEX:   console_kv_hex(name, v); break;
+    case REG_DEC:   console_kv(name, v);     break;
+    case REG_TITLE:
+    default:        console_puts(name);      break;
+    }
+}
 #endif
 
 /* __delay32(): a D line, and Timer1 (TMR1, 12.5 MHz) advances by

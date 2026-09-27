@@ -852,11 +852,11 @@ static bool stream_for(uint32_t n_ticks, bool data_src, uint32_t ms, uint32_t sn
     const bool clean_so_far = started && (ov == 0u) && (la == 0u) && (mi == 0u) && !brake;
     if (recipe && clean_so_far) {
         say("@RECIPE the chain's registers while it runs\r\n");
-        clock_regs_dump();
-        sccp1_regs_dump();
-        adc_regs_dump();
-        dma0_regs_dump();
-        dac_regs_dump();
+        clock_regs_visit(reg_print);
+        sccp1_regs_visit(reg_print);
+        adc_regs_visit(reg_print);
+        dma0_regs_visit(reg_print);
+        dac_regs_visit(reg_print);
         console_kv_hex("IPC9 (DMA0IP 22:20)", IPC9);
         console_kv_hex("IPC12 (U2RXIP 26:24)", IPC12);
         say("@RECIPE end\r\n");

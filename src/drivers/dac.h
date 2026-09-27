@@ -19,6 +19,7 @@
 #define DAC_H
 
 #include <stdbool.h>
+#include "regs.h"       /* reg_visit_t (src/port, P4.8) */
 #include <stdint.h>
 
 #define DAC_UNITS   2                  /* the two with an output pin      */
@@ -87,6 +88,6 @@ bool     uref_route_dac2(bool drive_pin);
 void     uref_off(void);
 uint32_t uref_insel(void);
 
-void     dac_regs_dump(void);
+void     dac_regs_visit(reg_visit_t visit);
 
 #endif /* DAC_H */

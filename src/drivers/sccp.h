@@ -46,6 +46,7 @@
 #define SCCP_H
 
 #include <stdint.h>
+#include "regs.h"       /* reg_visit_t (src/port, P4.8) */
 #include <stdbool.h>
 
 /* ADC trigger code for this module, from the ATDF value group
@@ -97,9 +98,9 @@ uint32_t sccp1_period(void);         /* ticks, as configured            */
 /* The rate this setting should produce: sccp1_hz() / ticks, in kSPS. */
 uint32_t sccp1_nominal_ksps(void);
 
-/* CCP1CON1/CON2/PR and the counter read twice, as "name: value" lines
- * (part of regs_dump() and of the test matrix). Two equal reads of the
+/* CCP1CON1/CON2/PR and the counter read twice, one visit() each
+ * (port/regs.h, P4.8; printed by the test matrix and the chain test). Two equal reads of the
  * counter mean the module is not running. */
-void     sccp1_regs_dump(void);
+void     sccp1_regs_visit(reg_visit_t visit);
 
 #endif /* SCCP_H */

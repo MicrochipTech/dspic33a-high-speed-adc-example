@@ -5,6 +5,7 @@
 #define DMA_H
 
 #include <stdint.h>
+#include "regs.h"       /* reg_visit_t (src/port, P4.8) */
 #include <stdbool.h>
 #include <xc.h>
 
@@ -52,7 +53,9 @@ void dma0_clear(uint32_t flags);
  * acted on with dma0_clear(). */
 void dma0_event(uint32_t status);
 
-/* The channel's registers as "name: 0x........" lines (part of regs_dump()). */
-void dma0_regs_dump(void);
+/* The channel's registers, one visit() per register (port/regs.h, P4.8);
+ * diag.c's regs_dump() prints them as "name: 0x........" lines. sim_dma.c
+ * visits its three stand-in variables instead. */
+void dma0_regs_visit(reg_visit_t visit);
 
 #endif /* DMA_H */

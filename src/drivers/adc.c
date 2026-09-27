@@ -11,7 +11,8 @@
 #include <stdbool.h>
 #include "board.h"
 #include "adc.h"
-#include "log.h"        /* port layer (src/port): port_log(), port_log_kv(), port_trace*() */
+#include "log.h"        /* port layer (src/port): port_trace*() for the start-up trace */
+#include "regs.h"       /* port layer (src/port): reg_visit_t for the register dump (P4.8) */
 #include "panic.h"      /* port layer: port_panic()                                       */
 #include "wait.h"       /* port layer: PORT_WAIT_WHILE(), PORT_WAIT_LIMIT (P4.6a)          */
 
@@ -305,20 +306,20 @@ void adc_start_burst(void)
     ADCBITS(SWTRG).CH0TRG = 1u;
 }
 
-void adc_regs_dump(void)
+void adc_regs_visit(reg_visit_t visit)
 {
-    port_log("[regs] adc\r\n");
-    port_log_kv("core", adc_core(), false);
-    port_log_kv("ADxCON", ADCREG(CON), true);
-    port_log_kv("ADxSTAT", ADCREG(STAT), true);
-    port_log_kv("ADxCH0CON1", ADCREG(CH0CON1), true);
-    port_log_kv("ADxCH0CNT", ADCREG(CH0CNT), true);
-    port_log_kv("ADxCH0RES", ADCREG(CH0RES), true);
-    port_log_kv("ADxCH0DATA", ADCREG(CH0DATA), true);
+    visit("[regs] adc\r\n", 0u, REG_TITLE);
+    visit("core", adc_core(), REG_DEC);
+    visit("ADxCON", ADCREG(CON), REG_HEX);
+    visit("ADxSTAT", ADCREG(STAT), REG_HEX);
+    visit("ADxCH0CON1", ADCREG(CH0CON1), REG_HEX);
+    visit("ADxCH0CNT", ADCREG(CH0CNT), REG_HEX);
+    visit("ADxCH0RES", ADCREG(CH0RES), REG_HEX);
+    visit("ADxCH0DATA", ADCREG(CH0DATA), REG_HEX);
     /* The IEC/IFS word that holds the core's channel-0 event. */
-    port_log_kv("ch0 irq", adc_cur->ch0_irq, false);
-    port_log_kv("cal bits (ACALEN|CALREQ|CALRATE)", adc_cal_bits(), true);
-    port_log_kv("IECx (this core's word)", *adc_cur->IEC, true);
-    port_log_kv("IFSx (this core's word)", *adc_cur->IFS, true);
-    port_log_kv("CH0 IRQ mask in it", adc_cur->ch0_mask, true);
+    visit("ch0 irq", adc_cur->ch0_irq, REG_DEC);
+    visit("cal bits (ACALEN|CALREQ|CALRATE)", adc_cal_bits(), REG_HEX);
+    visit("IECx (this core's word)", *adc_cur->IEC, REG_HEX);
+    visit("IFSx (this core's word)", *adc_cur->IFS, REG_HEX);
+    visit("CH0 IRQ mask in it", adc_cur->ch0_mask, REG_HEX);
 }

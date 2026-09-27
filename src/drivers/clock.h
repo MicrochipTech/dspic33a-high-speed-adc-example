@@ -5,6 +5,7 @@
 #define CLOCK_H
 
 #include <stdint.h>
+#include "regs.h"       /* reg_visit_t (src/port, P4.8) */
 #include <stdbool.h>
 
 /* FRC -> PLL1 320 MHz -> CLKGEN6 (ADC), PLL2 200 MHz -> CLKGEN1 (system).
@@ -170,7 +171,8 @@ uint32_t clock_dac_hz(void);
 #define CM_PLL2_VCODIV  0x0Eu
 uint32_t clock_monitor_hz(uint32_t cntsel);
 
-/* The clock registers as "name: 0x........" lines (part of regs_dump()). */
-void clock_regs_dump(void);
+/* The clock registers, one visit() per register (port/regs.h, P4.8);
+ * diag.c's regs_dump() prints them as "name: 0x........" lines. */
+void clock_regs_visit(reg_visit_t visit);
 
 #endif /* CLOCK_H */

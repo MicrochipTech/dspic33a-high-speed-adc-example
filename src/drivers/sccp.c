@@ -21,7 +21,7 @@
 #include <xc.h>
 #include "sccp.h"
 #include "clock.h"
-#include "log.h"        /* port layer (src/port): port_log(), port_log_kv() */
+#include "regs.h"       /* port layer (src/port): reg_visit_t for the register dump (P4.8) */
 
 static uint32_t   sccp1_ticks = 0;
 static sccp_clk_t sccp1_clk   = SCCP_CLK_PERIPHERAL;
@@ -145,7 +145,7 @@ uint32_t sccp1_nominal_ksps(void)
     return (sccp1_ticks != 0u) ? (sccp1_hz() / 1000u / sccp1_ticks) : 0u;
 }
 
-void sccp1_regs_dump(void)
+void sccp1_regs_visit(reg_visit_t visit)
 {
     /* Two reads of the counter a few instructions apart: both 0 means the
      * module never started, and then no trigger can reach the ADC
@@ -154,17 +154,17 @@ void sccp1_regs_dump(void)
      * the reads - so the raw values are printed and not judged here. */
     const uint32_t t1 = CCP1TMR;
     const uint32_t t2 = CCP1TMR;
-    port_log("[regs] sccp1\r\n");
-    port_log_kv("CCP1CON1", CCP1CON1, true);
-    port_log_kv("CCP1CON2", CCP1CON2, true);
-    port_log_kv("CCP1PR", CCP1PR, true);
-    port_log_kv("CLKSEL (0 periph, 1 CLKGEN13)", CCP1CON1bits.CLKSEL, false);
-    port_log_kv("MOD", CCP1CON1bits.MOD, false);
-    port_log_kv("AUXOUT (1 rollover, 2 special event)", CCP1CON2bits.AUXOUT, false);
-    port_log_kv("CCP1TMR (first read)", t1, false);
-    port_log_kv("CCP1TMR (second read)", t2, false);
-    port_log_kv("CCP1RA", CCP1RA, true);
-    port_log_kv("CCP1RB", CCP1RB, true);
-    port_log_kv("module clock Hz", sccp1_hz(), false);
-    port_log_kv("nominal ksps", sccp1_nominal_ksps(), false);
+    visit("[regs] sccp1\r\n", 0u, REG_TITLE);
+    visit("CCP1CON1", CCP1CON1, REG_HEX);
+    visit("CCP1CON2", CCP1CON2, REG_HEX);
+    visit("CCP1PR", CCP1PR, REG_HEX);
+    visit("CLKSEL (0 periph, 1 CLKGEN13)", CCP1CON1bits.CLKSEL, REG_DEC);
+    visit("MOD", CCP1CON1bits.MOD, REG_DEC);
+    visit("AUXOUT (1 rollover, 2 special event)", CCP1CON2bits.AUXOUT, REG_DEC);
+    visit("CCP1TMR (first read)", t1, REG_DEC);
+    visit("CCP1TMR (second read)", t2, REG_DEC);
+    visit("CCP1RA", CCP1RA, REG_HEX);
+    visit("CCP1RB", CCP1RB, REG_HEX);
+    visit("module clock Hz", sccp1_hz(), REG_DEC);
+    visit("nominal ksps", sccp1_nominal_ksps(), REG_DEC);
 }

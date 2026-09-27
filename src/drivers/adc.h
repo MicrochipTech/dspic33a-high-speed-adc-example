@@ -5,6 +5,7 @@
 #define ADC_H
 
 #include <stdbool.h>
+#include "regs.h"       /* reg_visit_t (src/port, P4.8) */
 #include <stdint.h>
 #include "board.h"
 
@@ -127,7 +128,9 @@ void    adc_set_mode_burst(void);
  * by capture_init() before every start, idle only. */
 void    adc_set_burst_len(uint32_t count);
 
-/* The core's registers as "name: 0x........" lines (part of regs_dump()). */
-void adc_regs_dump(void);
+/* The core's registers, one visit() per register (port/regs.h, P4.8):
+ * "[regs] adc" title, then ADxCON, ADxSTAT, ... as REG_HEX and the core
+ * number, the IRQ number as REG_DEC. diag.c's regs_dump() prints them. */
+void adc_regs_visit(reg_visit_t visit);
 
 #endif /* ADC_H */

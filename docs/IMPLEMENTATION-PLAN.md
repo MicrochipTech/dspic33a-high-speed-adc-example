@@ -59,7 +59,7 @@ added along the way and are not counted.
 | P4.6a `port/wait.h` | done | `529c6a3` | Fable | added task: one bounded-wait macro instead of per-driver copies |
 | P4.6 dma | done | `49497b0` | Fable | ISR unchanged, 42 instructions |
 | P4.7 clock | done | `6acd0fa` | Fable | `clock_fail_hook()` returns the boot stage; strong version in `port_impl.c` |
-| P4.8 Register visitor | in progress | | Fable | |
+| P4.8 Register visitor | done | this commit | Fable | `port/regs.h`: one visitor `(name, v, fmt)` with `REG_HEX/REG_DEC/REG_TITLE` reproduces the old dumps character for character (`regs` golden unchanged); the drivers keep no print call, only the three callers and the six dump functions change |
 | P5.1-P5.2 UART driver | open | | | |
 | P6.1-P6.5 Split `cli.c` | open | | | |
 | P7.1 Board config as data | open | | | |

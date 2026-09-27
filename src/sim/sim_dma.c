@@ -44,6 +44,7 @@
 #include <xc.h>
 #include <stddef.h>
 #include "dma.h"
+#include "regs.h"       /* port layer (src/port): reg_visit_t for the register dump (P4.8) */
 #include "sim.h"
 #include "adc.h"
 #include "capture.h"
@@ -129,12 +130,12 @@ void dma0_clear(uint32_t flags)
     (void)flags;                          /* no status register here     */
 }
 
-void dma0_regs_dump(void)
+void dma0_regs_visit(reg_visit_t visit)
 {
-    console_puts("[regs] dma (simulator stand-in, no registers)\r\n");
-    console_kv("sim_enabled", sim_enabled ? 1u : 0u);
-    console_kv_hex("sim_dst", (uint32_t)sim_dst);
-    console_kv("sim_half_len", sim_half_len);
+    visit("[regs] dma (simulator stand-in, no registers)\r\n", 0u, REG_TITLE);
+    visit("sim_enabled", sim_enabled ? 1u : 0u, REG_DEC);
+    visit("sim_dst", (uint32_t)sim_dst, REG_HEX);
+    visit("sim_half_len", sim_half_len, REG_DEC);
 }
 
 /* ------------------------------------------------------------------ *

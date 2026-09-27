@@ -14,11 +14,12 @@
  * reset values of every register the dump covers) and none of its
  * callees waits on anything, so no hardware-model rules are needed here.
  *
- * regs_dump() (diag.c) calls, in order: clock_regs_dump(), adc_regs_dump(),
- * dma0_regs_dump(), capture_regs_dump(), dac_regs_dump(), then
+ * regs_dump() (diag.c) calls, in order: clock_regs_visit(), adc_regs_visit(),
+ * dma0_regs_visit() (each with diag.c's reg_print() as the visitor, P4.8),
+ * capture_regs_dump(), dac_regs_visit(), then
  * console_regs_dump() and three direct reads of its own (INTCON1, PCTRAP,
  * fail_code) - hence diag.c, clock.c, adc.c, dma.c, capture.c, dac.c,
- * sccp.c (capture.c's capture_variant_regs() calls sccp1_regs_dump(),
+ * sccp.c (capture.c's capture_variant_regs() calls sccp1_regs_visit(),
  * so sccp.c must link even though regs_dump() itself never reaches that
  * function - the linker resolves every symbol a linked .o references),
  * timebase.c and led.c (capture.c calls into both) round out the sources.

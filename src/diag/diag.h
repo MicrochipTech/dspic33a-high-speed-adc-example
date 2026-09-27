@@ -5,6 +5,7 @@
 #define DIAG_H
 
 #include <stdint.h>
+#include "regs.h"       /* reg_visit_t, reg_fmt_t (src/port, P4.8) */
 
 /* Bound for every hardware wait loop, in loop iterations. A step that
  * needs longer than this has failed; fail() then reports which one. */
@@ -74,5 +75,12 @@ void diag_report_build(void);
 /* Clock, ADC, DMA, interrupt and UART registers as "name: 0x........"
  * lines on the console. Printed by fail() and by the "regs" command. */
 void regs_dump(void);
+
+/* The register visitor that prints (port/regs.h, P4.8): REG_HEX ->
+ * console_kv_hex(), REG_DEC -> console_kv(), REG_TITLE -> console_puts()
+ * of the whole line. What regs_dump() passes to every driver's
+ * xxx_regs_visit(); chaintest.c and capture.c pass it for their own
+ * partial dumps. */
+void reg_print(const char *name, uint32_t v, reg_fmt_t fmt);
 
 #endif /* DIAG_H */

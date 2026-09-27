@@ -32,7 +32,7 @@
 #include <stddef.h>
 #include "dac.h"
 #include "clock.h"
-#include "log.h"        /* port layer (src/port): port_log(), port_log_kv() */
+#include "regs.h"       /* port layer (src/port): reg_visit_t for the register dump (P4.8) */
 
 #define DAC_UPDTRG_IMMEDIATE  3u      /* p1409: any write updates at once, binary 11 */
 
@@ -253,18 +253,18 @@ void uref_off(void)
 
 uint32_t uref_insel(void) { return UREFCONbits.INSEL; }
 
-void dac_regs_dump(void)
+void dac_regs_visit(reg_visit_t visit)
 {
-    port_log("[regs] dac\r\n");
-    port_log_kv("DACCTRL1", DACCTRL1, true);
-    port_log_kv("DAC1CON", DAC1CON, true);
-    port_log_kv("DAC1DAT", DAC1DAT, true);
-    port_log_kv("DAC1SLPCON", DAC1SLPCON, true);
-    port_log_kv("DAC1SLPDAT", DAC1SLPDAT, true);
-    port_log_kv("DAC2CON", DAC2CON, true);
-    port_log_kv("DAC2DAT", DAC2DAT, true);
-    port_log_kv("DAC2SLPCON", DAC2SLPCON, true);
-    port_log_kv("DAC2SLPDAT", DAC2SLPDAT, true);
-    port_log_kv("UREFCON", UREFCON, true);   /* INSEL 7 = DAC2 on the internal UREF line */
-    port_log_kv("DAC clock Hz (read back)", clock_dac_hz(), false);
+    visit("[regs] dac\r\n", 0u, REG_TITLE);
+    visit("DACCTRL1", DACCTRL1, REG_HEX);
+    visit("DAC1CON", DAC1CON, REG_HEX);
+    visit("DAC1DAT", DAC1DAT, REG_HEX);
+    visit("DAC1SLPCON", DAC1SLPCON, REG_HEX);
+    visit("DAC1SLPDAT", DAC1SLPDAT, REG_HEX);
+    visit("DAC2CON", DAC2CON, REG_HEX);
+    visit("DAC2DAT", DAC2DAT, REG_HEX);
+    visit("DAC2SLPCON", DAC2SLPCON, REG_HEX);
+    visit("DAC2SLPDAT", DAC2SLPDAT, REG_HEX);
+    visit("UREFCON", UREFCON, REG_HEX);   /* INSEL 7 = DAC2 on the internal UREF line */
+    visit("DAC clock Hz (read back)", clock_dac_hz(), REG_DEC);
 }
