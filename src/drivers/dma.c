@@ -14,8 +14,8 @@
 
 #include <xc.h>
 #include "dma.h"
-#include "console.h"
-#include "diag.h"
+#include "log.h"        /* port layer (src/port): port_log(), port_log_kv(), port_trace*() */
+#include "panic.h"      /* port layer: port_panic()                                       */
 
 /* The device's data RAM, from the device header (0x4000 and 0x10000 for
  * the 64 KB parts, matching p33AK512MPS512.gld). Only a sanity check
@@ -94,9 +94,9 @@ void dma0_init(uint32_t trigger, const volatile void *src,
     const uint32_t last  = first + dst_bytes - 1u;
     if ((first < RAM_FIRST) || (last > RAM_LAST) || (last < first) ||
         (dst_bytes % 2u != 0u) || (count > 0xFFFFu) || (first % 4u != 0u)) {
-        console_kv_hex("[dma] unusable buffer (outside RAM, odd size, misaligned or > 64K transactions), first", first);
-        console_kv_hex("[dma] unusable buffer, last", last);
-        fail(8u);
+        port_log_kv("[dma] unusable buffer (outside RAM, odd size, misaligned or > 64K transactions), first", first, true);
+        port_log_kv("[dma] unusable buffer, last", last, true);
+        port_panic(8u);
     }
     DMALOW  = first;
     DMAHIGH = last;
@@ -130,9 +130,9 @@ void dma0_init(uint32_t trigger, const volatile void *src,
      * priority 4. Nothing fires until the first burst is started. */
     IFS2bits.DMA0IF = 0;
     IEC2bits.DMA0IE = 1;
-    console_trace("[dma] channel 0 armed, IRQ on; address window = the buffer:\r\n");
-    console_trace_kv_hex("[dma] DMALOW", DMALOW);
-    console_trace_kv_hex("[dma] DMAHIGH", DMAHIGH);
+    port_trace("[dma] channel 0 armed, IRQ on; address window = the buffer:\r\n");
+    port_trace_kv("[dma] DMALOW", DMALOW, true);
+    port_trace_kv("[dma] DMAHIGH", DMAHIGH, true);
 }
 
 uint32_t dma0_remaining(void)
@@ -206,17 +206,17 @@ void __attribute__((interrupt, no_auto_psv)) _DMA0Interrupt(void)
 
 void dma0_regs_dump(void)
 {
-    console_puts("[regs] dma\r\n");
-    console_kv_hex("DMACON", DMACON);
-    console_kv_hex("DMALOW", DMALOW);
-    console_kv_hex("DMAHIGH", DMAHIGH);
-    console_kv_hex("DMA0CH", DMA0CH);
-    console_kv_hex("DMA0SEL", DMA0SEL);
-    console_kv_hex("DMA0STAT", DMA0STAT);
-    console_kv_hex("DMA0SRC", DMA0SRC);
-    console_kv_hex("DMA0DST", DMA0DST);
-    console_kv_hex("DMA0CNT", DMA0CNT);
-    console_kv_hex("IEC2", IEC2);           /* DMA0 enable,  bit 13      */
-    console_kv_hex("IFS2", IFS2);           /* DMA0 flag,    bit 13      */
-    console_kv_hex("IPC9", IPC9);           /* DMA0 priority             */
+    port_log("[regs] dma\r\n");
+    port_log_kv("DMACON", DMACON, true);
+    port_log_kv("DMALOW", DMALOW, true);
+    port_log_kv("DMAHIGH", DMAHIGH, true);
+    port_log_kv("DMA0CH", DMA0CH, true);
+    port_log_kv("DMA0SEL", DMA0SEL, true);
+    port_log_kv("DMA0STAT", DMA0STAT, true);
+    port_log_kv("DMA0SRC", DMA0SRC, true);
+    port_log_kv("DMA0DST", DMA0DST, true);
+    port_log_kv("DMA0CNT", DMA0CNT, true);
+    port_log_kv("IEC2", IEC2, true);           /* DMA0 enable,  bit 13      */
+    port_log_kv("IFS2", IFS2, true);           /* DMA0 flag,    bit 13      */
+    port_log_kv("IPC9", IPC9, true);           /* DMA0 priority             */
 }

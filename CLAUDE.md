@@ -50,7 +50,7 @@ the sources still include each other as `"name.h"` without a folder prefix:
 | `config_bits.c` | every configuration word, with reasons | - |
 | `clock.c/.h` | PLLs, clock generators, clock-fail interrupt, `clock_cpu_on_pll()`, `clock_adc_set_pll()`, `clock_adc_set_rate()`, the CLKGEN6 divider `clock_adc_set_div()` with its result codes, CLKGEN13 for the trigger (PLL1 out / 2 = 160 MHz), CLKGEN7 for the DAC (PLL1 VCO divider, 400 MHz), `clock_monitor_hz()` (clock monitor 4 as a frequency meter) | console, diag, chaintest |
 | `adc.c/.h` | the ADC core: init, burst trigger, PINSEL/SAMC, the trigger-source registers, IRQSEL, calibration bits, core 5's CH0 interrupt as a counter (`adc_ch0_event()` in chaintest.c) - every register and vector core 5 uses is identical on the MPS506 (checked against the pack header 25.09.2026), so the chain test needs no board guard. On the port layer since P4.5 (27.09.2026): its register dump and its start-up trace print through `port/log.h` only (`port_log*()`, `port_trace*()`), its ADRDY wait stops through `port_panic(5)` via `port/wait.h`'s `PORT_WAIT_WHILE` (P4.6a; until then a private copy of diag.h's macros), and `adc_init(pinsel, samc, burst_len)` takes the buffer length from the caller (`SAMPLES_PER_BUF_MAX`, passed by capture.c and main.c) instead of reading capture.h; no `console.h`, `diag.h`, `capture.h`. `adc_ch0_event()` remains a plain extern into chaintest.c until P8.3 | port, chaintest (`adc_ch0_event()`) |
-| `dma.c/.h` | DMA channel 0: window = the buffer, HALF/DONE interrupt shell, status flags, `dma0_remaining()` | console, diag; calls `dma0_event()` in capture.c |
+| `dma.c/.h` | DMA channel 0: window = the buffer, HALF/DONE interrupt shell, status flags, `dma0_remaining()`. On the port layer since P4.6 (27.09.2026): the buffer check's two lines and its stop go through `port_log_kv()`/`port_panic(8)`, the start-up trace through `port_trace*()`, the register dump through `port_log*()`; no `console.h`, `diag.h`, `capture.h` (it never included capture.h - `dma0_event()` is declared in dma.h). `_DMA0Interrupt` unchanged: 42 instructions, no indirect call (tests/baseline.md) | port; calls `dma0_event()` in capture.c (plain extern until P8.1) |
 | `sim_dma.c` | replaces `dma.c` in the simulator build; implements `dma.h` without a DMA | adc, capture, console |
 | `capture.c/.h` | the measurement: the DMA buffer (private, with guard words), `dma0_event()`, the counters, start/stop/input, self-test, per-half processing and its cost, the variant table, the triggered stream `capture_chain_*()`, and `capture_chain_halt()`/`_resume()` - pausing and restarting an ALREADY RUNNING chain stream's trigger in place (DMA channel left armed, counters untouched), for the GUI's halt/grab/restart cycle | adc, dma, sccp, led, console, diag |
 | `crc16.c/.h` | CRC-16 over a sample block, for the `blk` binary transfer | cli |
@@ -86,7 +86,10 @@ P4.4 (the 12 `console_*` calls of its register dump, `dac.sources` gained
 three `console_trace*()` calls of `adc_init()` - for which `port/log.h` gained the
 `port_trace*()` pair - `WAIT_WHILE`/`WAIT_LIMIT` first as a private copy with `port_panic(5)`, since P4.6a `port/wait.h`'s `PORT_WAIT_WHILE`,
 and `SAMPLES_PER_BUF_MAX` as `adc_init()`'s third parameter; every scenario linking
-`adc.c` already listed `port_impl.c`); `dma.c`, `clock.c` move over in P4.6 and P4.7.
+`adc.c` already listed `port_impl.c`); `dma.c` in P4.6 (the two `console_kv_hex()` and the
+`fail(8)` of the buffer check, the three `console_trace*()` of `dma0_init()`, the 13
+`console_*` of its register dump; every scenario linking `dma.c` already listed
+`port_impl.c`); `clock.c` moves over in P4.7.
 The console never
 reads the buffer directly;
 it uses `capture_completed_half()`, or `capture_oneshot_n()` when it needs a window that
