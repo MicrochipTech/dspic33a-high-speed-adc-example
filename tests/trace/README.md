@@ -415,7 +415,9 @@ it never appears as a driver write.
 - **Access width.** A bit-field store may be a byte store on the host and a 32-bit or
   `bset` on the dsPIC; the trace shows the register value, not the width.
 - The **device reset values** (all 0, as in the spike; the gld/header have none - not
-  revisited in P0.4).
+  revisited in P0.4). P0.8 measured the consequence: `AD3CON` reads 0x80488000 on the
+  device after `adc_init()` (`RPTCNT` = 18 at reset), the trace says 0x80008000; the
+  ATDF's `initval` would supply the right value (see "P0.8 cross-check").
 - Code under `#ifdef __MPLAB_DEBUGGER_SIMULATOR` (the host takes the hardware path,
   `WAIT_LIMIT` = 2 000 000 not the simulator's 20 000) and the other `BOARD`'s code
   unless built with `-DBOARD=2` against the MPS506 header.
@@ -425,7 +427,7 @@ it never appears as a driver write.
   Linux port would use `mprotect`+`sigaction(SIGSEGV)` and a `ucontext_t`'s trap flag, and
   `pthread_create`/a `timer_t` for the watchdog; not needed today.
 
-## Simulator (question for P0.8, not touched by P0.4)
+## Simulator: the P0.3 probe (the question P0.8 answered below)
 
 `tests/trace/spike/sim_sfr_probe.py` (MDB, sim build, 58 s Run, 99 s in total, not the
 acceptance run): after boot (`boot_stage = 9`, `fail_code = 0`):
@@ -446,6 +448,154 @@ only register by register where the simulator keeps them, and needs the reduced 
 `Print` after `Halt` (W0101-SIM NullPointerException). Boot to stage 9 takes ~55 s of
 simulation because of the UART banner.
 
+## P0.8 cross-check: the fake header against the ATDF and the simulator (27.09.2026)
+
+The trace is only as good as `tools/gen_fake_sfr.py`'s output, and that generator reads
+two hand-maintained files of the device pack: the C header `p<MCU>.h` (names, bit
+fields, masks) and the linker script `p<MCU>.gld` (addresses). P0.8 checked both against
+the pack's third description of the same silicon, the ATDF
+(`<DFP>/atdf/dsPIC33AK512MPS512.atdf`, `...MPS506.atdf`; CLAUDE.md: "where the device
+pack's ATDF and the datasheet disagree, the ATDF has been right every time"), and,
+where the simulator can say anything at all, against what the simulator holds after
+boot. Two parts, two tools, the first of them now part of `tools\trace.bat`.
+
+### Part 1 - static: `tools/check_fake_sfr.py` (every `trace.bat` run, both devices)
+
+**Method.** The checker re-reads the header and the gld through the generator's own
+parsers (`gen_fake_sfr.parse_header()`/`parse_gld()`, factored out for this purpose;
+the generated files are byte-identical before and after that refactor), so what it
+checks is exactly what the generator consumed - it never reads the generated `xc.h`.
+It resolves every register of the ATDF to an absolute address and a name the header
+would use (instance -> register-group -> register chain: `ADC3`/`AD` + `CH[0]` +
+`CON1` = `AD3CH0CON1` at 0xB40 + 0x18 + 0x0; `TIMER1`/`T` + `CON` = `T1CON`; `CLOCK`/
+`CLK[6]` + `CON` = `CLK6CON`), then for every `extern volatile uint32_t X` with a gld
+address: finds the ATDF register by name (else by address), compares the address, the
+ATDF's `size`, and every `_X_F_MASK` of the header with the ATDF bitfield of the same
+name. An address that differs or a same-named field whose mask differs is an error
+(exit 1, and `trace.bat` fails). Everything else is a count, listed with `-v`.
+
+**Result, both devices, 0 errors.** MPS512: 2047 header SFRs, 1602 found in the ATDF
+(1560 by name, 42 by address only), 445 with no ATDF counterpart; 1357 addresses agree
+exactly, the other 245 sit in the five ADC `CH` groups (below); 9221 fields agree, none
+disagrees. MPS506: 1997 SFRs, 1556 found, 441 without; 1311 + 245 addresses; 8607 fields.
+**Every one of the 47 registers the golden traces write is verified by name, exact
+address and every header field, on both devices.** Runtime 0.2 s per device (about
+1 s each with Python's start-up); `trace.bat` went from ~7 s to ~10 s.
+
+**What the ATDF does not say, or says differently** - none of it an error, all of it
+handled explicitly in `resolve_atdf()` so that the check stays honest about what it
+verified:
+
+- **The element pitch of a counted register group.** The ATDF's `size` attribute of a
+  counted group is the sum of its registers' sizes, not the distance between two
+  elements: the ADC's `CH` group says 28 (7 registers), the gld and the pack's own
+  `.PIC` file (`edc/dsPIC33AK512MPS512.PIC`, what MPLAB X and the simulator use) put
+  `AD1CH1CON1` at 0x838 = 0x818 + 32. For DMA the two happen to coincide (44). For the
+  five `ADn/CH` groups the check therefore demands element 0 exactly and one
+  consistent pitch for the 49 later registers per core, and reports that pitch
+  (`pitch gld 32, ATDF size 28`) - the ATDF confirms the order and spacing inside a
+  channel and the base of channel 0, nothing more. `AD3CH0*`, the only channel
+  registers the firmware touches, are verified exactly.
+- **Counted groups without a `size`** (`CLK` 4..17, `PLL` 1..2, `VCO` 1..2, `CM` 1..4)
+  carry their register offsets biased by `(count - start_index) * pitch` with the pitch
+  nowhere stated (`CLK/CON` at 0x50 = 10 * 8, `PLL/CON` at 0xC = 1 * 12, `CM/CON` at 0x90
+  = 3 * 0x30). The checker recovers the pitch from the group's smallest offset; every
+  `CLKnCON/DIV`, `PLLnCON/DIV`, `VCOnDIV`, `CMnX` of both devices then matches the gld,
+  which is what proves the recovery right. The OPA module's `AMP` group has the same
+  bias on a non-counted group shared by three instances (`CON1` at 0x10 = (3-1) * 8;
+  gld and `.PIC`: `AMP1CON1` at the instance's own base 0x3B08); removed the same way.
+- **Two flattened modules, `ccp` and `CLC`.** One group lists every instance's registers
+  under full names (`CCP1CON1` at 0x0 ... `CCP8BUF` at 0x170, then MCCP9's `CCP9CON1`
+  restarting at 0x0) and all nine (ten) instances refer to that one group at their own
+  bases - placed per instance, eight of the nine copies land on other peripherals
+  (SCCP4's copy of `CCP8CON2` on `TMR1`, which is how this was found). Each instance's
+  block is placed at that instance's base; what the ATDF verifies for these two modules
+  is the instance bases and the order and spacing inside an instance, not its own
+  inter-instance offsets. `SCCP1`'s registers, the ones `sccp.c` writes, are verified.
+- **Registers the ATDF sizes as 2 bytes** where the header declares `uint32_t`: 181
+  (MPS512) / 135 (MPS506), all GPIO - `PORTx/LATx/TRISx/ANSELx/ODCx/CNxx`, `RPINRn`,
+  `RPORn`, `RPCON`, `IOIMnCON/BCON/STAT`. The ATDF gives the implemented width; the
+  header's 32-bit declaration matches the 4-byte SFR pitch and is what the compiler
+  uses. Reported, not an error; `LATD` (`nano`) is one of them and its address and
+  field masks agree.
+- **Header SFRs the ATDF has no register for**: 445 / 441. The CPU's (`PC`, `SPLIM`,
+  `W0..`, `CORCON`, `MODCON`, `XBREV`, ...), `APG*` (116), the PAC's `PRnCTRL/ST/END/LOCK`,
+  `ITC*`, `SMATH*/SDATA*`, `HPCCNT*`, `PMD1..4`, `CLK1DIV..CLK3DIV` (the ATDF's `CLK1..3`
+  groups define only `CON`), ADC5's channels 8..15 (the ATDF's `AD` group has 8),
+  `ADxCH7ACC` (the ATDF's `ACC` group, count 2 from index 6 with `size` 4, puts `ACC7`
+  on `CH7CON1`'s address), `C1FIFOUA1..6`, `FEX2`, `BMXCAN*`, the RAM ECC registers, and
+  whatever the `Ext_Interrupt` group reference points at (the ATDF's own
+  `ext_interrupt` module does not define it). Unverifiable by this check, listed by
+  `-v`; **none of them is written by any golden trace.**
+- **42 found by address with a different name**: `ADxCH6ACC` (ATDF: `ACC6`), the BISS
+  `B1*` registers (ATDF: `B*`), `C1FIFOUA7`/`C2FIFOUA7` (ATDF: `CnFIFOUA`). Addresses and
+  fields agree.
+- **Fields known to one side only** (no same-named field disagrees): header-only 297 /
+  293 - ADC5's `STAT/RSTAT/SWTRG/CMPSTAT` bits for channels 8..15, `ADxCMPSTAT`'s
+  `CHnCMP`/`CHnFLG` alias pairs, `PACCON1/2.IOIMCONnLK/WR`, per-generator bits of
+  `CLKFAIL`/`SCSFAIL`, `IOIMnCON`; ATDF-only 375 - almost all the whole-register
+  pseudo-field (`CRCDAT.CRCDAT`, `AD1CH0DATA.DATA`, mask 0xFFFFFFFF), plus `B1IDSn.RDATAn`
+  bytes and `SPInBRG.SPI1BRG`.
+
+**ATDF vs C header, where they disagree**: only in what is listed above - the counted
+groups' pitch (the ATDF's `size` is not one), the 2-byte widths, the naming of the ADC
+accumulators and the BISS registers, and coverage (445 registers, the one-sided fields).
+No address and no mask of a field both sides name differs. The pack's `.PIC` file
+agrees with the gld in every case that was looked up (`ADxCHy` pitch, `AMPn`, `CCPn`,
+`DMAn`, `CLK6CON`, `PLL1DIV`, `CM4STAT`).
+
+### Part 2 - dynamic: `sim_trap.py --smoke --dump-sfr` + `check_fake_sfr.py --sim-dump`
+
+**Method.** `tools\build.bat smoke`, then `python tools\sim_trap.py --smoke --dump-sfr
+@tests\trace\golden\boot.trace` (one smoke run: 70 s in total - MDB 8 s, programming
+12 s, 21 s to `[smoke] DONE`, the rest `Print`s; expected.log matched, no trap): the 23
+registers the `boot` golden writes are `Print`ed once after programming (the
+simulator's reset values) and once after the halt at `[smoke] DONE`, into
+`build\sfr_dump.txt`. `python tools\check_fake_sfr.py --sim-dump build\sfr_dump.txt
+--trace tests\trace\golden\boot.trace` then classifies each register against the host
+trace's end state, using the ATDF's `rw` attribute per field.
+
+**What differs between the two boots, and is accounted for.** The smoke build boots
+through `main.c`, the golden through the `boot` scenario's entry-point list: the
+console's UART/PPS/TRIS writes (`console_early_init()`/`cli_init()`, stubbed in the
+scenario) are not in the trace and not compared; `capture_set_pll(7, 7)` after
+`capture_init()` is a no-op in the simulator build (`clock.c`: "no PLL to retune"), so
+`PLL1DIV` stays at `clock_init()`'s 0x0100C829 exactly as in the golden; `dma.c` is
+replaced by `sim_dma.c`, so the DMA channel and `IEC2` are never written in the
+simulator ("not written"); the smoke script's `help`/`version`/`status` write no SFR.
+
+| class | n | registers | what it means |
+|---|---|---|---|
+| agree | 7 | `VCO1DIV`, `VCO2DIV`, `IEC0`, `T1CON`, `PR1`, `AD3CH0CON1`, `AD3CH0CNT` | the simulator holds exactly the host's end value |
+| status | 4 | `PLL1CON`, `PLL2CON`, `CLK1CON`, `CLK6CON` | the writable, non-switch bits agree (`ON`, `NOSC`, `FSCMEN`, `BOSC`...); the rest is `COSC`/`CLKRDY` (read-only: the simulator shows its own, the host model sets `CLKRDY`) and `OSWEN`/`DIVSWEN`/`FOUTSWEN`/`PLLSWEN` (the switch requests: hardware and the host model clear them when the switch is done, the simulator has no clock model and leaves them set) |
+| not stored | 2 | `PLL1DIV`, `PLL2DIV` | the P0.3 finding made precise: the write reaches the register (it leaves its reset value 0x0100C812) but `POSTDIV1/2` and `PLLFBDIV` read back 0; only `PLLPRE` = 1 survives (0x01000000). A simulator model artefact, not a header one: the layout of the reset value itself (`PLLFBDIV` = 200, `POSTDIV` 2/2 in the header's field positions) agrees with the header |
+| reset value | 1 | `AD3CON` | differs in `ADRDY` (read-only, set by the host model) and in `RPTCNT` = 18 (0x480000): the simulator's reset value, equal to the ATDF's `initval`, which `adc_init()`'s bit-field write of `ON` preserves and the host's all-0 reset assumption lacks. See below |
+| not written | 9 | `IEC2`, `DMACON`, `DMALOW`, `DMAHIGH`, `DMA0CH`, `DMA0SEL`, `DMA0SRC`, `DMA0DST`, `DMA0CNT` | `sim_dma.c` |
+| DISAGREE | 0 | - | the only class that would have been a finding |
+
+**The one substantive result** is `AD3CON`. On silicon the register reads 0x80488000
+after `adc_init()`; the golden says `0x80000000 -> 0x80008000`. The trace is right
+about the write (the `ON` bit, a bit-field store) and about the address; it is wrong
+about the absolute value in a field the code never touches, because every SFR starts
+at 0 on the host. Nothing in the drivers branches on `RPTCNT`, so no golden trace is
+wrong in what it records, and none was changed. But the same mechanism would bite a
+scenario whose code reads a field with a non-zero reset value (`clock_init()` reads
+`CLK1CONbits.COSC`, reset 1 - the simulator shows `CLK1CON` = 0x101 at reset, the host
+0x0; the `boot`/`clock` scenarios preset it to 0x80000000 by hand). The dump also
+settles how trustworthy the ATDF's `initval` is: **all 23 simulator reset values equal
+the ATDF's `initval`** (`PLL1CON` 0x20101, `PLL1DIV` 0x0100C812, `CLKnCON` 0x101,
+`AD3CON` 0x480000, `DMA0CNT` 1, `PR1` 0xFFFFFFFF, the rest 0). Presetting `sfr_mem[]`
+from `initval` (the "reset values" open point below) would therefore be a change of
+known effect: `AD3CON`'s golden lines would become `0x80480000 -> 0x80488000`, and
+`CLK1CON`'s hand preset would become unnecessary.
+
+**Limitation - what the simulator cannot confirm**: the DMA registers and `IEC2` (never
+written in that build), the divider fields of `PLLxDIV` (zeroed by the model), and any
+read-only or self-clearing bit (`COSC`, `CLKRDY`, `ADRDY`, `*SWEN`) - 11 of the 23
+registers in full, 4 more in some of their bits. For those the static check against
+the ATDF (part 1) is the only confirmation, and it is complete for every register a
+golden trace writes.
+
 ## How to run it
 
     tools\trace.bat            build (incrementally) + run every scenario, compare
@@ -456,6 +606,16 @@ simulation because of the UART banner.
     tools\trace.bat clean      wipe the object cache and every generated header dir
                                 first, then run the check above from cold - see
                                 "caching and how to force a clean run" below
+
+    python tools\check_fake_sfr.py [-v]        the P0.8 static check on its own (both
+                                                devices; trace.bat runs it after the
+                                                scenarios, its failure fails trace.bat)
+    tools\build.bat smoke
+    python tools\sim_trap.py --smoke --dump-sfr @tests\trace\golden\boot.trace
+    python tools\check_fake_sfr.py --sim-dump build\sfr_dump.txt --trace tests\trace\golden\boot.trace
+                                                the P0.8 dynamic check (one smoke-length
+                                                simulator run, ~70 s; on request only,
+                                                like every simulator run)
 
 `tools\trace.bat` is a thin wrapper; the actual work is `tools/trace_build.py` (P0.5b -
 see "problem 2" of the P0.5b task and the script's own docstring). It exists because the
@@ -552,5 +712,11 @@ a clean run" above for what `tools\trace.bat`'s own per-invocation cost now is.
   runs), and worth its own investigation rather than assumed to be this race again.
 - **Reset values from the ATDF** (`initval`), for scenarios whose code branches on a
   register's state at entry (`clock_init()` reads `CLK1CONbits.COSC`) - still assumed
-  all-0, as in the spike.
-- **Simulator cross-check (P0.8)**, unchanged from the spike's findings above.
+  all-0, as in the spike. P0.8 (above) found the ATDF's `initval` equal to the
+  simulator's reset value for all 23 registers it read, and one golden value that
+  differs from silicon because of the assumption (`AD3CON.RPTCNT`); `check_fake_sfr.py`'s
+  `resolve_atdf()` already parses `initval`, so a preset would be a small change to
+  `gen_fake_sfr.py`/`recorder.c` with the effect on the goldens stated above.
+- ~~**Simulator cross-check (P0.8)**~~ - **done (27.09.2026)**, see "P0.8 cross-check":
+  0 errors static on both devices, 0 real disagreements dynamic; `trace.bat` now runs
+  the static check every time.

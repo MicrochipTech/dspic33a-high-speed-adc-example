@@ -47,6 +47,10 @@ Output (into --out DIR):
 
 Usage (tools/trace.bat runs exactly this, every time it runs):
   python tools/gen_fake_sfr.py --mcu 33AK512MPS512 --out build/trace/gen
+
+tools/check_fake_sfr.py (P0.8) re-reads the same two inputs through
+parse_header()/parse_gld() below and checks every address and bit-field
+mask against the pack's ATDF; tools/trace.bat runs it after the scenarios.
 """
 import argparse
 import os
@@ -76,29 +80,17 @@ def parse_gld(path):
     return addr
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--mcu", default="33AK512MPS512")
-    ap.add_argument("--dfp", default=DFP_DEFAULT,
-                    help="the pack's xc16/support/dsPIC33A directory")
-    ap.add_argument("--out", required=True)
-    ap.add_argument("--cxx", action="store_true", help="also write xc_cxx.h")
-    ap.add_argument("--style", choices=("symbols", "macros"), default="symbols",
-                    help="symbols: keep `extern volatile T X;` and place X by sfr_syms.ld "
-                         "(default); macros: `#define X SFR_REG(idx)` (breaks on the 36 "
-                         "register names that are also bit-field names, e.g. PC, SPLIM)")
-    a = ap.parse_args()
-
-    hdr = os.path.join(a.dfp, "h", "p%s.h" % a.mcu)
-    gld = os.path.join(a.dfp, "gld", "p%s.gld" % a.mcu)
-    gaddr = parse_gld(gld)
-    with open(hdr, encoding="latin-1") as f:
-        lines = f.read().splitlines()
-
-    # Pass 1: SFR declarations, bit-field typedefs, mask macros.
-    regs = {}        # name -> (kind, type); kind 'reg' or 'bits'
-    typedefs = {}    # XBITS -> list of named (field, width) in declaration order
-    maskdefs = {}    # (reg, field) -> {POSITION, LENGTH, MASK}
+def parse_header(lines):
+    """Pass 1 over the device header: SFR declarations, bit-field typedefs,
+    mask macros. Shared with tools/check_fake_sfr.py (P0.8), which checks
+    exactly what this generator consumes against the pack's ATDF.
+    Returns (regs, typedefs, maskdefs):
+      regs      name -> (kind, type); kind 'reg' (uint32_t) or 'bits'
+      typedefs  XBITS -> list of named (field, width) in declaration order
+      maskdefs  (reg, field) -> {POSITION, LENGTH, MASK}"""
+    regs = {}
+    typedefs = {}
+    maskdefs = {}
     cur = None
     for ln in lines:
         m = RE_EXTERN.match(ln)
@@ -123,6 +115,29 @@ def main():
         m = RE_MASKDEF.match(ln)
         if m:
             maskdefs.setdefault((m.group(1), m.group(2)), {})[m.group(3)] = int(m.group(4), 16)
+    return regs, typedefs, maskdefs
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--mcu", default="33AK512MPS512")
+    ap.add_argument("--dfp", default=DFP_DEFAULT,
+                    help="the pack's xc16/support/dsPIC33A directory")
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--cxx", action="store_true", help="also write xc_cxx.h")
+    ap.add_argument("--style", choices=("symbols", "macros"), default="symbols",
+                    help="symbols: keep `extern volatile T X;` and place X by sfr_syms.ld "
+                         "(default); macros: `#define X SFR_REG(idx)` (breaks on the 36 "
+                         "register names that are also bit-field names, e.g. PC, SPLIM)")
+    a = ap.parse_args()
+
+    hdr = os.path.join(a.dfp, "h", "p%s.h" % a.mcu)
+    gld = os.path.join(a.dfp, "gld", "p%s.gld" % a.mcu)
+    gaddr = parse_gld(gld)
+    with open(hdr, encoding="latin-1") as f:
+        lines = f.read().splitlines()
+
+    regs, typedefs, maskdefs = parse_header(lines)
 
     # Addresses. The gld names every register X and X's bits as _Xbits.
     def address_of(name):

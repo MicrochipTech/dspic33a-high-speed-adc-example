@@ -45,8 +45,19 @@ Options:
                   command in "help"): commit it with the change.
                   Exit code 0 = PASS, 1 = FAIL. Prints where the time went.
 
+  --dump-sfr      with --smoke (P0.8, tests\\trace\\README.md "P0.8
+                  cross-check"): Print the named SFRs once after
+                  programming (the simulator's reset values) and once
+                  after the halt at "[smoke] DONE", and write both to
+                  --dump-out (build\\sfr_dump.txt) for
+                  tools\\check_fake_sfr.py --sim-dump, which compares them
+                  with the end state of a host golden trace.
+                  "@tests\\trace\\golden\\boot.trace" names exactly the
+                  registers that trace writes. MDB prints SFRs in decimal.
+
 Usage:  python sim_trap.py [--elf ..\\build\\adc_dma_40msps_sim.elf] [-v]
         python sim_trap.py --smoke [--update-expected] [-v]
+        python sim_trap.py --smoke --dump-sfr @tests\\trace\\golden\\boot.trace
 """
 import argparse
 import glob
@@ -208,6 +219,43 @@ INTCON1_TRAPS = 0x1C
 SIM_ERROR_RE = re.compile(r"E\d{4}|[Tt]rap|Address error|Stack error|Illegal|halted at", re.I)
 
 
+def dump_sfr_names(spec):
+    """--dump-sfr: 'A,B,C', or @FILE with one name per line (a .trace
+    file: the registers its 'W NAME old -> new' lines write, in order)."""
+    if not spec:
+        return []
+    if not spec.startswith("@"):
+        return [s.strip() for s in spec.split(",") if s.strip()]
+    names = []
+    with open(spec[1:], encoding="ascii", errors="replace") as f:
+        for ln in f:
+            mm = re.match(r"^W\s+(\w+)\s", ln) if spec.endswith(".trace") else re.match(r"^\s*(\w+)", ln)
+            if mm and mm.group(1) not in names and not ln.startswith("#"):
+                names.append(mm.group(1))
+    return names
+
+
+def write_sfr_dump(path, names, before, after):
+    """MDB's Print answers ('NAME=value', see Mdb.print_symbols) for the
+    two moments, one line per register: 'NAME reset=<v> after=<v>'; a
+    register MDB did not answer for gets '-'."""
+    def table(lines):
+        d = {}
+        for l in lines:
+            mm = re.match(r"^(\w+)\s*=\s*(\S+)", l)
+            if mm:
+                d[mm.group(1)] = mm.group(2)
+        return d
+    b, aft = table(before), table(after)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", newline="\n") as f:
+        for n in names:
+            f.write(f"{n} reset={b.get(n, '-')} after={aft.get(n, '-')}\n")
+    print(f"--- SFR dump ({len(names)} registers, before Run and after the halt): {path}")
+    for n in names:
+        print(f"    {n:<12} reset={b.get(n, '-'):<12} after={aft.get(n, '-')}")
+
+
 def smoke(a):
     elf = os.path.abspath(a.elf or os.path.join(ROOT, "build", "adc_dma_40msps_smoke.elf"))
     out = os.path.splitext(elf)[0] + ".uart2.txt"
@@ -216,6 +264,8 @@ def smoke(a):
     uart = uart_reader(out)
     t_all = time.time()
     m, t_up, t_prog = start_sim(elf, out, a.verbose)
+    dump_names = dump_sfr_names(a.dump_sfr)
+    dump_reset = m.print_symbols(dump_names) if dump_names else []
     sim_lines_before = len(m.lines)
 
     print(f"--- smoke: run until '[smoke] DONE' (timeout {a.smoke_timeout:.0f} s)")
@@ -253,6 +303,9 @@ def smoke(a):
     if mdb_run:
         print("--- MDB lines during the run ---")
         print("\n".join(mdb_run[-20:]))
+    if dump_names:
+        dump_after = m.print_symbols(dump_names)
+        write_sfr_dump(a.dump_out, dump_names, dump_reset, dump_after)
     m.quit()
 
     txt = uart()
@@ -320,6 +373,12 @@ def main():
     ap.add_argument("--log", default=os.path.join(ROOT, "build", "smoke.log"))
     ap.add_argument("--update-expected", action="store_true",
                     help="--smoke: rewrite tests/smoke/expected.log from this run")
+    ap.add_argument("--dump-sfr", default=None,
+                    help="--smoke (P0.8): SFRs to Print after programming and again after the halt at "
+                         "'[smoke] DONE' - a comma-separated list, or @FILE (one name per line; a .trace "
+                         "file gives the registers its W lines write). Written to --dump-out as "
+                         "'NAME reset=<v> after=<v>' for tools/check_fake_sfr.py --sim-dump")
+    ap.add_argument("--dump-out", default=os.path.join(ROOT, "build", "sfr_dump.txt"))
     ap.add_argument("--run-seconds", type=float, default=240.0,
                     help="100 halves take about 150 s after the boot, more with mismatch reports on the UART")
     ap.add_argument("--fault", type=lambda x: int(x, 0), default=0,

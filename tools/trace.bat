@@ -30,6 +30,12 @@ rem  record mode; in check mode a missing golden is a FAIL (every
 rem  scenario has had one since P0.5). A golden file with no matching
 rem  scenario source is reported as a warning, not counted.
 rem
+rem  After the scenarios, tools\check_fake_sfr.py (P0.8) checks the
+rem  inputs of the fake header - every SFR's address and bit-field
+rem  masks - against the pack's ATDF for both devices (about a second;
+rem  see tests\trace\README.md "P0.8 cross-check"). A mismatch there
+rem  fails this script like a failed scenario would.
+rem
 rem  Uses %~dp0, so it runs from any cwd.
 rem ---------------------------------------------------------------------
 setlocal
@@ -41,4 +47,7 @@ if errorlevel 1 (
 )
 
 python "%~dp0trace_build.py" %1
-exit /b %errorlevel%
+set RC=%errorlevel%
+python "%~dp0check_fake_sfr.py"
+if errorlevel 1 set RC=1
+exit /b %RC%
