@@ -6,6 +6,7 @@
                    projectFiles="true">
       <logicalFolder name="app" displayName="app" projectFiles="true">
         <itemPath>../src/app/capture.h</itemPath>
+        <itemPath>../src/app/pingpong.h</itemPath>
         <itemPath>../src/app/board.h</itemPath>
       </logicalFolder>
       <logicalFolder name="cli" displayName="cli" projectFiles="true">
@@ -65,6 +66,7 @@
                    projectFiles="true">
       <logicalFolder name="app" displayName="app" projectFiles="true">
         <itemPath>../src/app/main.c</itemPath>
+        <itemPath>../src/app/pingpong.c</itemPath>
         <itemPath>../src/app/capture.c</itemPath>
         <itemPath>../src/app/config_bits.c</itemPath>
         <itemPath>../src/app/port_impl.c</itemPath>
