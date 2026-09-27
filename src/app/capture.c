@@ -47,6 +47,7 @@
 #include "timebase.h"
 #include "clock.h"
 #include "sccp.h"
+#include "stats.h"
 
 /* Self-test input and window. ADxAN6 is the internal 15/16 * VDD
  * reference on every core and package (Table 16-2, p1224), which the
@@ -756,14 +757,8 @@ uint32_t capture_process_bench(void)
     return timebase_ticks() - t0;
 }
 
-static uint32_t half_mean(const volatile uint16_t *b, uint32_t n)
-{
-    uint32_t acc = 0;
-    for (uint32_t i = 0; i < n; i++) {
-        acc += b[i];
-    }
-    return acc / n;
-}
+/* half_mean() is lib/stats.c since P2.2 (27.09.2026); capture_selftest()
+ * below is its only caller here. */
 
 bool capture_service(void)
 {
@@ -823,7 +818,11 @@ uint32_t capture_selftest(uint32_t *mean)
      * reference and nothing else. */
     rc = wait_for_blocks(blocks_done + SELFTEST_HALVES);
     if (rc == 0u) {
-        const uint32_t m = half_mean(capture_completed_half(), half_len);
+        /* The cast drops `volatile`: the completed half is the one the
+         * DMA finished last and is not writing (it fills the other half
+         * until the next DONE), so half_mean() may read it as ordinary
+         * memory. Same reasoning as completed_half_stats() in cli.c. */
+        const uint32_t m = half_mean((const uint16_t *)capture_completed_half(), half_len);
         selftest_mean = m;
         if (mean != NULL) { *mean = m; }
         if ((m < SELFTEST_MIN) || (m > SELFTEST_MAX)) { rc = 7u; }

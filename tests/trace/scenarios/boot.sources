@@ -5,3 +5,4 @@ src/app/capture.c
 src/drivers/dma.c
 src/drivers/led.c
 src/drivers/sccp.c
+src/lib/stats.c

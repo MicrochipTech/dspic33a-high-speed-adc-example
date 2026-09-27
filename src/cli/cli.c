@@ -83,6 +83,7 @@
 #include "cmd_parser.h"
 #include "crc16.h"
 #include "fmt.h"
+#include "stats.h"
 
 /* ------------------------------------------------------------------ *
  * UART2 transport
@@ -648,27 +649,27 @@ static void cmd_selftest_fn(int argc, char **argv)
 }
 CMD_DEFINE(selftest, "selftest", cmd_selftest_fn, "selftest - sample the internal reference");
 
-/* min/max/mean/pp of the completed half - shared by "stats" and the
- * periodic [half] line. */
-static void half_stats(uint32_t *mn, uint32_t *mx, uint32_t *mean)
+/* min/max/mean/pp of the completed half - shared by "stats", "stream"
+ * and the periodic [half] line. The arithmetic is lib/stats.c since P2.2
+ * (27.09.2026); this wrapper only picks the half.
+ *
+ * The cast drops `volatile`: capture_completed_half() is the half the DMA
+ * finished last and is not writing - the DMA is filling the OTHER half -
+ * so the samples do not change under the reader and the compiler may read
+ * them as ordinary memory. (Should the reader be slower than one half
+ * period, the DMA wraps into this half; that race existed with volatile
+ * too - each sample is read once either way - and is what `late` counts.) */
+static void completed_half_stats(uint32_t *mn, uint32_t *mx, uint32_t *mean)
 {
-    const volatile uint16_t *b = capture_completed_half();
-    uint32_t lo = 0xFFFFu, hi = 0u, acc = 0u;
-    const uint32_t n = capture_half_len();
-    for (uint32_t i = 0; i < n; i++) {
-        const uint16_t v = b[i];
-        if (v < lo) { lo = v; }
-        if (v > hi) { hi = v; }
-        acc += v;
-    }
-    *mn = lo; *mx = hi; *mean = acc / n;
+    half_stats((const uint16_t *)capture_completed_half(), capture_half_len(),
+               mn, mx, mean);
 }
 
 void console_half_stats(void)
 {
     char line[96];
     uint32_t mn, mx, mean;
-    half_stats(&mn, &mx, &mean);
+    completed_half_stats(&mn, &mx, &mean);
     char *p = copy_str(line, "[half] n=");
     p = u32_to_str(p, ready_half);
     p = copy_str(p, " min=");  p = u32_to_str(p, mn);
@@ -683,7 +684,7 @@ static void cmd_stats_fn(int argc, char **argv)
 {
     uint32_t mn, mx, mean;
     (void)argc; (void)argv;
-    half_stats(&mn, &mx, &mean);
+    completed_half_stats(&mn, &mx, &mean);
     put_kv("half", ready_half);
     put_kv("min", mn);
     put_kv("max", mx);
@@ -1643,7 +1644,7 @@ static void cmd_stream_fn(int argc, char **argv)
     const uint32_t pmax = proc_ticks_max;
     const bool brake = capture_overrun_aborted();
     uint32_t mn = 0u, mx = 0u, mean = 0u;
-    half_stats(&mn, &mx, &mean);
+    completed_half_stats(&mn, &mx, &mean);
     put_line(running ? "stream: on - SCCP1 -> ADC (single conversion) -> DMA0 -> ping-pong -> main()"
                      : "stream: STOPPED by itself - the overrun brake fired, the rate is not usable");
     put_kv("ksps", ksps);
