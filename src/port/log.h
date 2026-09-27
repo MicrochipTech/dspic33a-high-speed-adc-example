@@ -42,4 +42,11 @@ void port_log_kv(const char *key, uint32_t v, bool hex);
 void port_trace(const char *s);
 void port_trace_kv(const char *key, uint32_t v, bool hex);
 
+/* Block until everything handed to port_log()/port_trace() so far has
+ * left - for a driver about to change the clock the output runs on
+ * (clock_init() before the CPU clock, and with it the baud rate,
+ * changes 25x). console_flush() here; empty where output is not
+ * buffered (P4.7). */
+void port_flush(void);
+
 #endif /* PORT_LOG_H */

@@ -21,6 +21,8 @@
 #include "panic.h"
 #include "console.h"
 #include "diag.h"
+#include "capture.h"     /* capture_halt() for clock_fail_hook()          */
+#include "clock.h"       /* clock_fail_hook()'s declaration                */
 
 void port_log(const char *s)
 {
@@ -53,6 +55,11 @@ void port_trace_kv(const char *key, uint32_t v, bool hex)
     }
 }
 
+void port_flush(void)
+{
+    console_flush();
+}
+
 void port_panic(uint32_t code)
 {
     fail(code);
@@ -60,4 +67,23 @@ void port_panic(uint32_t code)
      * it noreturn; without this loop the compiler reports a noreturn
      * function that returns. Never reached. */
     for (;;) { }
+}
+
+/* The clock driver's only upward call (clock.h, P4.7): what this
+ * application does when the fail-safe clock monitor has moved the CPU
+ * to the backup FRC, before _CLKFInterrupt() prints and stops - halt
+ * the capture, then bring the console up again for the new clock, in
+ * that order, exactly as the ISR did itself until P4.7 - and the boot
+ * stage the report names. It lives here rather than in a file of its
+ * own because this is already the file that binds the drivers to this
+ * project's console and fail(); when P8 adds the DMA and ADC hooks, the
+ * hooks can move to a file of their own together. In the trace harness
+ * the two callees are stubs (or capture.c's real capture_halt() where
+ * it is linked), so the fail golden sees the same two lines in the same
+ * order. Overrides clock.c's weak default. */
+uint32_t clock_fail_hook(void)
+{
+    capture_halt();
+    console_force_up();
+    return boot_stage;
 }

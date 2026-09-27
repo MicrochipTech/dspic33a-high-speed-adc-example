@@ -14,11 +14,12 @@
  */
 
 #include <xc.h>
+#include <stddef.h>     /* NULL (clock_adc_set_rate()) */
 #include "clock.h"
-#include "capture.h"
-#include "console.h"
-#include "diag.h"
 #include "timebase.h"
+#include "log.h"        /* port layer (src/port): port_log(), port_log_kv(), port_trace*(), port_flush() */
+#include "panic.h"      /* port layer: port_panic()                                       */
+#include "wait.h"       /* port layer: PORT_WAIT_WHILE() (P4.6a)                          */
 
 /* NOSC / COSC values, from the ATDF value-group CLK1_CON__COSC. */
 #define NOSC_FRC        0x1u
@@ -99,12 +100,12 @@ void clock_init(void)
      * FRC first. Changing PLL settings underneath a running CPU clock can
      * overclock the core - this matters on a debugger restart, where the
      * part is not freshly reset. (The MCC example does the same.) */
-    console_trace_kv_hex("[clk] CLK1CON at entry", CLK1CON);
+    port_trace_kv("[clk] CLK1CON at entry", CLK1CON, true);
     if ((CLK1CONbits.COSC >= NOSC_PLL1_OUT) && (CLK1CONbits.COSC <= 0x8u)) {
-        console_trace("[clk] system clock on a PLL, parking on FRC\r\n");
+        port_trace("[clk] system clock on a PLL, parking on FRC\r\n");
         CLK1CONbits.NOSC  = NOSC_FRC;
         CLK1CONbits.OSWEN = 1u;
-        WAIT_WHILE(CLK1CONbits.OSWEN, 3u);
+        PORT_WAIT_WHILE(CLK1CONbits.OSWEN, 3u);
     }
 
     /* ---- PLL1: 320 MHz for the ADC ---- */
@@ -112,12 +113,12 @@ void clock_init(void)
     PLL1DIV = 0x0100C829u;      /* N1=1, M=200, POSTDIV1=5, POSTDIV2=1  */
 
     PLL1CONbits.PLLSWEN  = 1u;  /* (a) apply input and feedback dividers */
-    WAIT_WHILE(PLL1CONbits.PLLSWEN, 1u);
+    PORT_WAIT_WHILE(PLL1CONbits.PLLSWEN, 1u);
     PLL1CONbits.FOUTSWEN = 1u;  /* (c) apply output dividers             */
-    WAIT_WHILE(PLL1CONbits.FOUTSWEN, 1u);
+    PORT_WAIT_WHILE(PLL1CONbits.FOUTSWEN, 1u);
     PLL1CONbits.OSWEN    = 1u;  /* (e) switch                            */
-    WAIT_WHILE(PLL1CONbits.OSWEN, 1u);
-    WAIT_WHILE(!OSCCTRLbits.PLL1RDY, 1u);
+    PORT_WAIT_WHILE(PLL1CONbits.OSWEN, 1u);
+    PORT_WAIT_WHILE(!OSCCTRLbits.PLL1RDY, 1u);
 
     /* VCO divider output = the DAC clock (CLKGEN7, NOSC 7). INTDIV[30:16],
      * F = FVCO / (2 * INTDIV) (12.3.9; Example 12-4, p781, writes the same
@@ -127,32 +128,32 @@ void clock_init(void)
      * at 320 MHz - below its minimum (ANALYSIS.md C.12.1). */
     VCO1DIV = 0x20000u;
     PLL1CONbits.DIVSWEN = 1u;
-    WAIT_WHILE(PLL1CONbits.DIVSWEN, 1u);
-    console_trace("[clk] PLL1 locked, 320 MHz\r\n");
+    PORT_WAIT_WHILE(PLL1CONbits.DIVSWEN, 1u);
+    port_trace("[clk] PLL1 locked, 320 MHz\r\n");
 
     /* ---- PLL2: 200 MHz for the system clock ---- */
     PLL2CON = 0x8100u;
     PLL2DIV = 0x01007D29u;      /* N1=1, M=125, POSTDIV1=5, POSTDIV2=1  */
 
     PLL2CONbits.PLLSWEN  = 1u;
-    WAIT_WHILE(PLL2CONbits.PLLSWEN, 2u);
+    PORT_WAIT_WHILE(PLL2CONbits.PLLSWEN, 2u);
     PLL2CONbits.FOUTSWEN = 1u;
-    WAIT_WHILE(PLL2CONbits.FOUTSWEN, 2u);
+    PORT_WAIT_WHILE(PLL2CONbits.FOUTSWEN, 2u);
     PLL2CONbits.OSWEN    = 1u;
-    WAIT_WHILE(PLL2CONbits.OSWEN, 2u);
-    WAIT_WHILE(!OSCCTRLbits.PLL2RDY, 2u);
+    PORT_WAIT_WHILE(PLL2CONbits.OSWEN, 2u);
+    PORT_WAIT_WHILE(!OSCCTRLbits.PLL2RDY, 2u);
 
     /* PLL2 VCO divider: 1000 MHz / (2 * 1) = 500 MHz. Nothing runs on it
      * except, on request, the DAC as a cross-check on a second VCO
      * (clock_dac_select(), chaintest S5). 500 MHz is the DAC's maximum. */
     VCO2DIV = 0x10000u;
     PLL2CONbits.DIVSWEN = 1u;
-    WAIT_WHILE(PLL2CONbits.DIVSWEN, 2u);
-    console_trace("[clk] PLL2 locked, 200 MHz\r\n");
+    PORT_WAIT_WHILE(PLL2CONbits.DIVSWEN, 2u);
+    port_trace("[clk] PLL2 locked, 200 MHz\r\n");
     /* Let that line leave the shift register before the CPU clock, and
      * with it the baud rate, changes 25x. Seen on the board: without
      * this the tail of the line came out as garbage. */
-    console_flush();
+    port_flush();
 
     /* ---- CLKGEN1 = system clock, from PLL2, no divider ----
      * DS70005591D 12.4.9, p795: "Clock Generator 1 is the clock source
@@ -160,7 +161,7 @@ void clock_init(void)
     CLK1CON = 0x129600u;        /* NOSC = PLL2 out, ON, backup BFRC, FSCM */
     CLK1DIV = 0u;               /* 200 MHz straight through               */
     CLK1CONbits.OSWEN = 1u;
-    WAIT_WHILE(CLK1CONbits.OSWEN, 3u);
+    PORT_WAIT_WHILE(CLK1CONbits.OSWEN, 3u);
     /* From here on the CPU runs at 200 MHz and the UART's baud generator
      * is off by 25x until cli_init() re-sets it - so no trace output
      * until then. */
@@ -172,14 +173,15 @@ void clock_init(void)
     CLK6CON = 0x29500u;         /* NOSC = PLL1 out, ON                   */
     CLK6DIV = 0u;               /* 320 MHz straight through              */
     CLK6CONbits.OSWEN = 1u;
-    WAIT_WHILE(CLK6CONbits.OSWEN, 4u);
+    PORT_WAIT_WHILE(CLK6CONbits.OSWEN, 4u);
 
     /* The fail-safe clock monitor is on (FSCMEN in the CLK1CON value
      * above). When it sees the system clock stop it moves the CPU to the
      * backup FRC and raises IRQ 9 (CLKFAIL). Left masked, that only sets
      * a flag: the board would carry on at 8 MHz with a garbled console and
      * a wrong sample rate, and nothing would say why. Enabled, it lands
-     * in _CLKFInterrupt(), which reports the event and stops in fail(10). */
+     * in _CLKFInterrupt(), which reports the event and stops with code 10
+ * (port_panic()). */
     IFS0bits.CLKFAILIF = 0u;
     IEC0bits.CLKFAILIE = 1u;
 }
@@ -187,19 +189,29 @@ void clock_init(void)
 /* IRQ 9, IVT slot 17: the fail-safe clock monitor moved the CPU off the
  * PLL. The name follows the pack's interrupt list ("CLKFInterrupt");
  * that the linker put it into slot 17 was checked on the built ELF.
- * The console is re-initialised from scratch because the CPU is now on
- * the 8 MHz BFRC and the baud divider was set for 100 MHz. */
+ * What the application must do first - here: halt the capture and
+ * re-initialise the console from scratch, because the CPU is now on
+ * the 8 MHz BFRC and the baud divider was set for 100 MHz - is
+ * clock_fail_hook() (clock.h), implemented in src/app/port_impl.c; the
+ * driver only knows that something has to happen before it prints,
+ * and that the application may have a boot stage worth naming.
+ * This weak default is what a project without such a hook links: it
+ * does nothing and reports stage 0. */
+uint32_t __attribute__((weak)) clock_fail_hook(void)
+{
+    return 0u;
+}
+
 void __attribute__((interrupt, no_auto_psv)) _CLKFInterrupt(void)
 {
     IFS0bits.CLKFAILIF = 0u;
-    capture_halt();
-    console_force_up();
-    console_puts("\r\n[CLKF] clock fail: the FSCM switched the CPU to the backup FRC\r\n");
-    console_kv_hex("[CLKF] OSCCTRL", OSCCTRL);
-    console_kv_hex("[CLKF] PLL2CON", PLL2CON);
-    console_kv_hex("[CLKF] CLK1CON", CLK1CON);
-    console_kv("[CLKF] reached boot stage", boot_stage);
-    fail(10u);
+    const uint32_t stage = clock_fail_hook();
+    port_log("\r\n[CLKF] clock fail: the FSCM switched the CPU to the backup FRC\r\n");
+    port_log_kv("[CLKF] OSCCTRL", OSCCTRL, true);
+    port_log_kv("[CLKF] PLL2CON", PLL2CON, true);
+    port_log_kv("[CLKF] CLK1CON", CLK1CON, true);
+    port_log_kv("[CLKF] reached boot stage", stage, false);
+    port_panic(10u);
 }
 
 /* ------------------------------------------------------------------ *
@@ -655,21 +667,21 @@ uint32_t clock_adc_set_pll(uint32_t postdiv1, uint32_t postdiv2)
 
 void clock_regs_dump(void)
 {
-    console_puts("[regs] clock\r\n");
-    console_kv_hex("OSCCTRL", OSCCTRL);
-    console_kv_hex("PLL1CON", PLL1CON);
-    console_kv_hex("PLL1DIV", PLL1DIV);
-    console_kv_hex("PLL2CON", PLL2CON);
-    console_kv_hex("PLL2DIV", PLL2DIV);
-    console_kv_hex("CLK1CON", CLK1CON);
-    console_kv_hex("CLK1DIV", CLK1DIV);
-    console_kv_hex("CLK6CON", CLK6CON);
-    console_kv_hex("CLK6DIV", CLK6DIV);
-    console_kv_hex("CLK7CON", CLK7CON);     /* DAC clock                 */
-    console_kv_hex("CLK7DIV", CLK7DIV);
-    console_kv_hex("VCO1DIV", VCO1DIV);     /* DAC clock source, 400 MHz */
-    console_kv_hex("CLK13CON", CLK13CON);   /* SCCP1 trigger clock       */
-    console_kv_hex("CLK13DIV", CLK13DIV);
-    console_kv_hex("IEC0", IEC0);           /* CLKFAIL enable, bit 9     */
-    console_kv_hex("IFS0", IFS0);           /* CLKFAIL flag,   bit 9     */
+    port_log("[regs] clock\r\n");
+    port_log_kv("OSCCTRL", OSCCTRL, true);
+    port_log_kv("PLL1CON", PLL1CON, true);
+    port_log_kv("PLL1DIV", PLL1DIV, true);
+    port_log_kv("PLL2CON", PLL2CON, true);
+    port_log_kv("PLL2DIV", PLL2DIV, true);
+    port_log_kv("CLK1CON", CLK1CON, true);
+    port_log_kv("CLK1DIV", CLK1DIV, true);
+    port_log_kv("CLK6CON", CLK6CON, true);
+    port_log_kv("CLK6DIV", CLK6DIV, true);
+    port_log_kv("CLK7CON", CLK7CON, true);     /* DAC clock                 */
+    port_log_kv("CLK7DIV", CLK7DIV, true);
+    port_log_kv("VCO1DIV", VCO1DIV, true);     /* DAC clock source, 400 MHz */
+    port_log_kv("CLK13CON", CLK13CON, true);   /* SCCP1 trigger clock       */
+    port_log_kv("CLK13DIV", CLK13DIV, true);
+    port_log_kv("IEC0", IEC0, true);           /* CLKFAIL enable, bit 9     */
+    port_log_kv("IFS0", IFS0, true);           /* CLKFAIL flag,   bit 9     */
 }

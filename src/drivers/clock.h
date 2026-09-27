@@ -8,9 +8,21 @@
 #include <stdbool.h>
 
 /* FRC -> PLL1 320 MHz -> CLKGEN6 (ADC), PLL2 200 MHz -> CLKGEN1 (system).
- * Every wait is bounded; a step that fails stops in fail(1..4). Enables
- * the clock-fail interrupt (_CLKFInterrupt in clock.c, stops in fail(10)). */
+ * Every wait is bounded; a step that fails stops with code 1..4
+ * (port_panic()). Enables the clock-fail interrupt (_CLKFInterrupt in
+ * clock.c, which stops with code 10). */
 void clock_init(void);
+
+/* Called by _CLKFInterrupt() first thing, before it prints its report
+ * and stops: the fail-safe clock monitor has moved the CPU to the
+ * backup FRC, so whatever must stop or be re-initialised for the
+ * report to come out readable is the application's business - here
+ * capture_halt() and console_force_up(), in that order, in
+ * src/app/port_impl.c. Returns the application's boot stage for the
+ * "[CLKF] reached boot stage" line (diag.c's boot_stage here). clock.c
+ * carries a weak default that does nothing and returns 0, for a project
+ * that has no such hook (P4.7, 27.09.2026). */
+uint32_t clock_fail_hook(void);
 
 /* True once CLKGEN1 runs on PLL2 (200 MHz); false on the FRC or the
  * backup FRC (8 MHz). Everything that has to time itself or pick a baud
