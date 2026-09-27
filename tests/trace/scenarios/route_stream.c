@@ -4,8 +4,10 @@
  * setup call at 1 MSPS, then the stop/restore chain_stream_off() runs. The
  * point: the register-write sequence must equal the `stream_on` golden's,
  * line for line, apart from the `#` note lines the two scenarios write
- * themselves - that is the proof P11.3 owes before P11.4 routes "stream on"
- * through routing_apply() (docs/IMPLEMENTATION-PLAN.md P11.3/P11.4).
+ * themselves - that is the proof P11.3 owed before P11.4 routed "stream on"
+ * through routing_apply() (docs/IMPLEMENTATION-PLAN.md P11.3/P11.4; since
+ * P11.4 chain_stream_on() IS routing_apply(&ROUTE_STREAM) plus the tail
+ * below, and the stream_on golden stayed byte-identical).
  *
  * What is under test is the FIRST block only, up to the trace_point
  * "routing_apply(&ROUTE_STREAM)": route_check() (no register), then

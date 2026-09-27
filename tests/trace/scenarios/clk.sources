@@ -11,3 +11,4 @@ src/drivers/led.c
 src/lib/stats.c
 src/app/port_impl.c
 src/boards/ev74h48a.c
+src/app/routing.c

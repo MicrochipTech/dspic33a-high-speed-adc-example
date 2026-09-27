@@ -142,8 +142,8 @@ void acq_chain_restore(void);
  * 1..5, PINSEL, SAMC, and whether DAC2 is started as the signal - and the
  * chain-test default (core 5, RA8, SAMC 0, with the DAC) put back
  * afterwards for chaintest.c's own acq_chain_setup() calls. What routing_
- * apply() (routing.h, P11.3) calls; chain_stream_on_input() does the same
- * three statements inline until P11.4. */
+ * apply() (routing.h, P11.3) calls - and since P11.4 (27.09.2026) its only
+ * caller: chain_stream_on()/_on_input() go through routing_apply(). */
 bool acq_chain_setup_input(uint8_t core, uint8_t pinsel, uint8_t samc, bool test_dac);
 
 /* Pick SLPDAT so that one triangle slope lasts about SLOPE_TARGET samples
@@ -175,7 +175,14 @@ bool chain_stream_on(uint32_t ksps);
  * and test_signal = whether DAC2's triangle is started as the signal (it
  * is on RA8 = AD5AN3 and on UREF = ANn7). Without it the DAC is left as it
  * is, and the grab frame says slp=0. chain_stream_on(ksps) is core 5,
- * PINSEL 3 (RA8), SAMC 0, with the triangle. */
+ * PINSEL 3 (RA8), SAMC 0, with the triangle. Since P11.4 (27.09.2026) both
+ * go through routing_apply() (routing.h): chain_stream_on() applies
+ * ROUTE_STREAM, this one a route built from its arguments (ROUTE_SRC_DAC_PIN/
+ * dac 2 with test_signal, ROUTE_SRC_EXT without), so a PINSEL the core does
+ * not reach (route_pin_reachable(): not a package pin of that core on this
+ * device, and not one of the internal channels 6/7, or 5/8 on core 5) is
+ * refused - the one refusal the routing added to what this firmware accepted
+ * before. Returns false as for any other set-up failure. */
 bool chain_stream_on_input(uint32_t ksps, uint8_t core, uint8_t pinsel, uint8_t samc,
                            bool test_signal);
 void chain_stream_off(void);

@@ -1524,7 +1524,7 @@ def main_gui(args):
                 with ui.row().classes("w-full gap-2"):
                     core_sel = ui.select({n: f"ADC{n}" for n in range(1, 6)}, value=3,
                                          label="core (1..5)").props("dense outlined").classes("flex-grow")
-                    input_in = ui.number("PINSEL (0..15, 6 = internal ref)", value=5, min=0, max=15,
+                    input_in = ui.number("PINSEL (this core's pins; 6 = internal ref, 7 = UREF)", value=5, min=0, max=15,
                                          step=1, format="%d").props("dense outlined").classes("flex-grow")
                 channel_info_lbl = ui.label().classes("text-xs text-slate-400")
                 samc_in = ui.number("SAMC · sample time (0..31)", value=0, min=0, max=31, step=1, format="%d").props("dense outlined")
@@ -1835,7 +1835,9 @@ def main_gui(args):
                    "fixed at 5 for the test triangle. Also the core shown in the chip and board "
                    "tiles below."),
         (input_in, "PINSEL: the analog input of that core - fixed at 3 (RA8) for the test "
-                   "triangle. 6 is the internal 15/16 x VDD reference, 7 the internal UREF line."),
+                   "triangle. 6 is the internal 15/16 x VDD reference, 7 the internal UREF line. "
+                   "Only this core's package pins and those two are offered (the value snaps): "
+                   "since P11.4 the firmware's routing refuses a PINSEL the core cannot reach."),
         (samc_in, "SAMC: how long the ADC samples before it converts, in steps of 2 x SAMC + 0.5 "
                   "TAD. Part of 'stream on ... <samc>' for a custom input; fixed at 0 for the "
                   "test triangle."),

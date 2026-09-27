@@ -84,8 +84,13 @@
 #define ROUTE_CHANNEL_BYTES     (2u * ROUTE_HALF_SAMPLES * ROUTE_SAMPLE_BYTES)
 #define ROUTE_RAM_BUDGET_BYTES  (56u * 1024u)
 
-/* PINSEL 7 is not a package pin - it is UREF, reachable from every core
- * (board.h's DAC_UREF_PINSEL comment, DS70005591D Table 16-2). */
+/* Two PINSEL values are not package pins but internal channels every core
+ * has (DS70005591D Table 16-2; the pack's ATDF, dsPIC33AK512MPS512.atdf
+ * and ...MPS506.atdf, ADC instance params: "ADnAN6 = 15/16*VDD Reference
+ * Input", "ADnAN7 = Uref Input" for n = 1..5): PINSEL 6 is the reference
+ * the self-test samples (capture.c), PINSEL 7 is UREF (board.h's
+ * DAC_UREF_PINSEL). Core 5 has two more, in routing.c's table. */
+#define ROUTE_PINSEL_VREF       6u
 #define ROUTE_PINSEL_UREF       7u
 
 /* RAM_TABLE has no ADC core. */
@@ -190,9 +195,13 @@ typedef struct {
 extern const route_t ROUTE_STREAM;
 extern const route_t ROUTE_B2B;
 
-/* Every ADC core reaches PINSEL 7 (UREF); for any other PINSEL, whether
- * `core` reaches it as a package pin is a silicon fact, not a policy - see
- * tools/gen_route_pins.py and routing.c's route_pin_mask[]. */
+/* Every ADC core reaches PINSEL 6 and 7 (the internal reference and UREF,
+ * above); core 5 also reaches its two further internal channels (PINSEL 5,
+ * "Touch ADC Input", and 8, VDDCORE - the ATDF's own names, see routing.c);
+ * for any other PINSEL, whether `core` reaches it as a package pin is a
+ * silicon fact, not a policy - see tools/gen_route_pins.py and routing.c's
+ * route_pin_mask[]. PINSEL 9..15 select nothing the ATDF names on either
+ * device and are refused. */
 bool route_pin_reachable(uint8_t core, uint8_t pinsel);
 
 /* Removes every route added so far and resets every resource counter. */

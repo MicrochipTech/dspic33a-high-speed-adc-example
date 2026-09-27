@@ -58,13 +58,30 @@ static void test_route_pin_reachable(void)
     CHECK(route_pin_reachable(1u, 4u));
     CHECK(!route_pin_reachable(1u, 5u));
     CHECK(route_pin_reachable(2u, 5u));
-    CHECK(!route_pin_reachable(2u, 6u));
 
-    /* PINSEL 7 (UREF) is reachable from every core - DS70005591D Table
-     * 16-2, board.h's DAC_UREF_PINSEL comment. */
+    /* PINSEL 6 (the 15/16 VDD reference) and 7 (UREF) are internal
+     * channels of every core - DS70005591D Table 16-2, the ATDF's
+     * "ADnAN6"/"ADnAN7" params (P11.4: until then 6 was refused, which
+     * would have broken the GUI's "6 = internal ref"). */
     for (uint32_t core = 1u; core <= ROUTE_ADC_CORES; core++) {
+        CHECK(route_pin_reachable((uint8_t)core, ROUTE_PINSEL_VREF));
         CHECK(route_pin_reachable((uint8_t)core, ROUTE_PINSEL_UREF));
     }
+
+    /* core 5's two further internal channels (ATDF: AD5AN5 "Touch ADC
+     * Input", AD5AN8 "VDDCORE"); no other core has them */
+    CHECK(route_pin_reachable(5u, 5u));
+    CHECK(route_pin_reachable(5u, 8u));
+    CHECK(!route_pin_reachable(1u, 8u));
+    CHECK(!route_pin_reachable(4u, 8u));
+
+    /* PINSEL 9..15 name nothing in the ATDF: refused on every core */
+    for (uint32_t core = 1u; core <= ROUTE_ADC_CORES; core++) {
+        for (uint32_t p = 9u; p <= 15u; p++) {
+            CHECK(!route_pin_reachable((uint8_t)core, (uint8_t)p));
+        }
+    }
+    CHECK(!route_pin_reachable(1u, 16u));
 
     /* no core 0, no core past ROUTE_ADC_CORES. */
     CHECK(!route_pin_reachable(0u, 0u));
@@ -310,6 +327,62 @@ static void test_apply_not_yet_shapes(void)
     }
 }
 
+static void test_internal_channels_pass_the_rules(void)
+{
+    /* route_check() (through routing_add()) accepts every core on PINSEL 6
+     * and 7 - "stream on <ksps> <core> 6|7", the GUI's internal inputs -
+     * and refuses a pin the core does not bring out (P11.2's rule, the one
+     * refusal P11.4 added to "stream on"). Distinct cores, so the second
+     * add of the same core is what is under test, not core exclusivity. */
+    for (uint32_t core = 1u; core <= ROUTE_ADC_CORES; core++) {
+        routing_clear();
+        route_t vref = { .src = ROUTE_SRC_EXT, .core = (uint8_t)core,
+                         .pinsel = ROUTE_PINSEL_VREF, .sink = ROUTE_SINK_STREAM };
+        CHECK_EQ(routing_add(&vref), ROUTE_OK);
+        routing_clear();
+        route_t uref = { .src = ROUTE_SRC_EXT, .core = (uint8_t)core,
+                         .pinsel = ROUTE_PINSEL_UREF, .sink = ROUTE_SINK_STREAM };
+        CHECK_EQ(routing_add(&uref), ROUTE_OK);
+    }
+    routing_clear();
+    route_t unbonded = { .src = ROUTE_SRC_EXT, .core = 5u, .pinsel = 9u,
+                         .sink = ROUTE_SINK_STREAM };     /* AD5AN9: no pin, no name */
+    CHECK_EQ(routing_add(&unbonded), ROUTE_ERR_PIN_UNREACHABLE);
+    route_t unbonded2 = { .src = ROUTE_SRC_EXT, .core = 1u, .pinsel = 5u,
+                          .sink = ROUTE_SINK_STREAM };    /* AD1AN5: not on the MPS512 */
+    CHECK_EQ(routing_add(&unbonded2), ROUTE_ERR_PIN_UNREACHABLE);
+}
+
+static void test_apply_on_off_on(void)
+{
+    /* "stream on" / "stream off" / "stream on" (P11.4): the applied route
+     * holds its core until routing_clear() - which chain_stream_off() and
+     * the post-apply failure path call - releases it; without the clear the
+     * second apply is a core conflict and reaches no driver. */
+    routing_clear();
+    stubs_reset(true);
+    CHECK_EQ(routing_apply(&stream_like), ROUTE_OK);      /* on  */
+    CHECK_EQ(stub_setup_calls, 1);
+    CHECK_EQ(routing_apply(&stream_like), ROUTE_ERR_CORE_IN_USE);  /* on again, no off */
+    CHECK_EQ(stub_setup_calls, 1);                        /* refused before any call */
+    CHECK_EQ(stub_restore_calls, 0);
+
+    routing_clear();                                      /* off */
+    CHECK_EQ(routing_apply(&stream_like), ROUTE_OK);      /* on  */
+    CHECK_EQ(stub_setup_calls, 2);
+    CHECK_EQ(stub_restore_calls, 0);
+
+    /* the custom-input shape after the test shape, and back, the same way */
+    routing_clear();
+    route_t ext = { .src = ROUTE_SRC_EXT, .core = 5u, .pinsel = ROUTE_PINSEL_VREF,
+                    .sink = ROUTE_SINK_STREAM, .samc = 3u };
+    CHECK_EQ(routing_apply(&ext), ROUTE_OK);
+    CHECK(!stub_test_dac);
+    routing_clear();
+    CHECK_EQ(routing_apply(&stream_like), ROUTE_OK);
+    CHECK(stub_test_dac);
+}
+
 static void test_apply_setup_failure(void)
 {
     /* the clock tree/DAC refused: restore once, SETUP, and the route is not
@@ -342,6 +415,8 @@ int main(void)
     test_apply_ext();
     test_apply_precheck_refuses_before_any_call();
     test_apply_not_yet_shapes();
+    test_internal_channels_pass_the_rules();
+    test_apply_on_off_on();
     test_apply_setup_failure();
 
     return check_summary();

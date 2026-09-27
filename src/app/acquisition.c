@@ -354,12 +354,13 @@ bool acq_chain_setup(void)
     return acq_setup_ok;
 }
 
-/* acq_chain_setup() with the input chosen for this one call: the three
- * lines chain_stream_on_input() wraps around its own call (below), as a
- * function, so that routing_apply() (routing.c, P11.3) can run the same
- * setup for a route_t without reaching this file's statics. chain_stream_
- * on_input() itself keeps its inline copy until P11.4 routes it through
- * routing_apply(); the two are the same three statements on purpose. */
+/* acq_chain_setup() with the input chosen for this one call: until P11.4
+ * (27.09.2026) the three lines chain_stream_on_input() wrapped around its
+ * own acq_chain_setup() call, as a function, so that routing_apply()
+ * (routing.c, P11.3) can run the same setup for a route_t without reaching
+ * this file's statics. Since P11.4 routing_apply() is the ONLY caller:
+ * chain_stream_on()/_on_input() (below) go through it, the inline copy is
+ * gone, and this is the one place the chain's input is set. */
 bool acq_chain_setup_input(uint8_t core, uint8_t pinsel, uint8_t samc, bool test_dac)
 {
     s_core = core; s_pinsel = pinsel; s_samc = samc; s_test_dac = test_dac;
@@ -440,27 +441,41 @@ static uint32_t period_for(uint32_t ksps)
     return (n < 4u) ? 4u : n;                 /* 40 MSPS is the ceiling      */
 }
 
-bool chain_stream_on(uint32_t ksps)
-{
-    return chain_stream_on_input(ksps, CHAIN_CORE, CHAIN_PINSEL, CHAIN_SAMC, true);
-}
-
-bool chain_stream_on_input(uint32_t ksps, uint8_t core, uint8_t pinsel, uint8_t samc,
-                           bool test_signal)
+/* The one setup path of "stream on" since P11.4 (27.09.2026): the route is
+ * brought up by routing_apply() (routing.c) - route_check() first (no
+ * register: pin reachability, core exclusivity, the resource table, the
+ * sink gate), then acq_chain_setup_input(core, pinsel, samc, test_dac) with
+ * the route's input and DAC choice, acq_chain_restore() if the clock tree,
+ * trigger clock or DAC refused - the very statements this function ran
+ * inline before, so the register sequence is the one the `stream_on`/
+ * `stream_on_input` goldens fix (tests/trace). routing_apply() leaves the
+ * trigger stopped and the DMA channel down; the rate is not a route's
+ * (routing.h, requirement A1), so the tail here starts it, as before.
+ *
+ * Whether DAC2 is started as the signal is the route's `src`: ROUTE_SRC_
+ * DAC_PIN (ROUTE_STREAM, chain_stream_on()) starts it, ROUTE_SRC_EXT (the
+ * custom input) leaves it alone - exactly the old test_signal flag.
+ *
+ * The route is recorded on success and released by routing_clear() when
+ * the stream is torn down - chain_stream_off(), and the one failure path
+ * after a successful apply - so that the next "stream on" is not refused
+ * as a core conflict with the previous one. */
+static bool stream_on_route(uint32_t ksps, const route_t *r)
 {
     chain_stream_off();
-    if (CHAIN_ON_SIMULATOR || (ksps == 0u) || (core < 1u) || (core > 5u) ||
-        (pinsel > 15u) || (samc > 31u)) { return false; }
+    if (CHAIN_ON_SIMULATOR || (ksps == 0u) || (r->core < 1u) || (r->core > 5u) ||
+        (r->pinsel > 15u) || (r->samc > 31u)) { return false; }
     acq_trig_hz = TRIG_HZ_NOMINAL;
-    s_core = core; s_pinsel = pinsel; s_samc = samc; s_test_dac = test_signal;
-    const bool ok = acq_chain_setup();
-    s_core = CHAIN_CORE; s_pinsel = CHAIN_PINSEL; s_samc = CHAIN_SAMC; s_test_dac = true;
-    if (!ok) { acq_chain_restore(); return false; }
+    if (routing_apply(r) != ROUTE_OK) { return false; }   /* restored by routing_apply() */
     const uint32_t n = period_for(ksps);
     uint16_t slp = 0u;                        /* 0 in the frame: no test triangle */
-    if (test_signal) { (void)acq_triangle_for(acq_rate_hz(n), &slp); }
+    if (r->src == ROUTE_SRC_DAC_PIN) { (void)acq_triangle_for(acq_rate_hz(n), &slp); }
     acq_wait_ticks(TICKS_PER_MS);
-    if (!capture_chain_start(n, SCCP_MODE_TIMER, 0u, false)) { acq_chain_restore(); return false; }
+    if (!capture_chain_start(n, SCCP_MODE_TIMER, 0u, false)) {
+        acq_chain_restore();
+        routing_clear();
+        return false;
+    }
     s_on     = true;
     s_ticks  = n;
     s_slpdat = slp;
@@ -468,11 +483,28 @@ bool chain_stream_on_input(uint32_t ksps, uint8_t core, uint8_t pinsel, uint8_t 
     return true;
 }
 
+bool chain_stream_on(uint32_t ksps)
+{
+    return stream_on_route(ksps, &ROUTE_STREAM);
+}
+
+bool chain_stream_on_input(uint32_t ksps, uint8_t core, uint8_t pinsel, uint8_t samc,
+                           bool test_signal)
+{
+    const route_t r = {
+        .src = test_signal ? ROUTE_SRC_DAC_PIN : ROUTE_SRC_EXT,
+        .core = core, .pinsel = pinsel, .dac = test_signal ? 2u : 0u,
+        .sink = ROUTE_SINK_STREAM, .table_samples = 0u, .samc = samc,
+    };
+    return stream_on_route(ksps, &r);
+}
+
 void chain_stream_off(void)
 {
     if (!s_on) { return; }
     (void)capture_chain_stop();
     acq_chain_restore();
+    routing_clear();
     s_on = false;
 }
 

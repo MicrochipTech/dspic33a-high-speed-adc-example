@@ -22,8 +22,9 @@
 
 #define ROUTE_MAX_ROUTES 24u
 
-/* One bit per PINSEL that reaches a package pin on that core; PINSEL 7
- * (UREF) is not in this table, see ROUTE_PINSEL_UREF in routing.h. Two
+/* One bit per PINSEL that reaches a package pin on that core; the internal
+ * channels (PINSEL 6/7 everywhere, 5/8 on core 5) are not in this table,
+ * see route_int_mask[] below. Two
  * tables, one per device the firmware builds for, selected by the device
  * macro xc-dsc defines from -mcpu (the trace harness's fake xc.h defines
  * the same one per NAME.mcu): which PINSEL reaches a pin is a property of
@@ -53,16 +54,36 @@ static const uint8_t route_pin_mask[ROUTE_ADC_CORES] = {
 #endif
 };
 
+/* One bit per PINSEL that is an INTERNAL channel of that core - no package
+ * pin, reachable on every package, so not in route_pin_mask[] and not
+ * generated: read off the pack's ATDF by hand (P11.4, 27.09.2026;
+ * dsPIC33AK-MP_DFP 1.4.260, dsPIC33AK512MPS512.atdf and ...MPS506.atdf, the
+ * ADC module's per-instance <param>s, identical on both devices):
+ *   every core   ADnAN6 "15/16*VDD Reference Input", ADnAN7 "Uref Input"
+ *                (ROUTE_PINSEL_VREF/ROUTE_PINSEL_UREF, routing.h)
+ *   core 5 only  AD5AN5 "Touch ADC Input", AD5AN8 "VDDCORE"
+ * ADnAN9..15 carry no <param> on either device (the PINSEL value-group
+ * AD_CH_CON1__PINSEL merely lists AD_AN0..15 as numbers), so they are
+ * treated as reserved and refused. Before P11.4 "stream on <ksps> <core>
+ * <pinsel>" accepted any PINSEL 0..15 unchecked; the GUI's "6 = internal
+ * ref" hint (tools/adc_gui.py) is why 6 had to stay reachable. */
+static const uint16_t route_int_mask[ROUTE_ADC_CORES] = {
+    (1u << ROUTE_PINSEL_VREF) | (1u << ROUTE_PINSEL_UREF),               /* core 1 */
+    (1u << ROUTE_PINSEL_VREF) | (1u << ROUTE_PINSEL_UREF),               /* core 2 */
+    (1u << ROUTE_PINSEL_VREF) | (1u << ROUTE_PINSEL_UREF),               /* core 3 */
+    (1u << ROUTE_PINSEL_VREF) | (1u << ROUTE_PINSEL_UREF),               /* core 4 */
+    (1u << 5) | (1u << ROUTE_PINSEL_VREF) | (1u << ROUTE_PINSEL_UREF) | (1u << 8), /* core 5 */
+};
+
 static route_t  route_table[ROUTE_MAX_ROUTES];
 static uint32_t route_count = 0u;
 
 bool route_pin_reachable(uint8_t core, uint8_t pinsel)
 {
     if (core < 1u || core > ROUTE_ADC_CORES) { return false; }
-    if (pinsel == ROUTE_PINSEL_UREF) { return true; }
-    if (pinsel > 7u) { return false; } /* PINSEL is wider than the pins this
-                                        * table models; nothing routing_add()
-                                        * builds today passes more than 7 */
+    if (pinsel > 15u) { return false; }             /* PINSEL is 4 bits wide */
+    if ((route_int_mask[core - 1u] & (1u << pinsel)) != 0u) { return true; }
+    if (pinsel > 7u) { return false; }              /* route_pin_mask[] is 8 bits */
     return (route_pin_mask[core - 1u] & (1u << pinsel)) != 0u;
 }
 

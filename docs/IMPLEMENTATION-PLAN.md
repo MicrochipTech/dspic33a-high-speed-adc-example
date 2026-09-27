@@ -23,7 +23,7 @@ commit message stays the detailed record; this table is the one place to see whe
 work stands. `done` = committed and re-checked by the lead session (builds, `trace.bat`,
 `hosttest.bat`, goldens, no trailer).
 
-As of 27.09.2026, 21:00. Done: 45 of 52 tasks in the N+1 scope (63 planned plus P0.9 = 64; P8 and P10, 12
+As of 27.09.2026, 22:30. Done: 46 of 52 tasks in the N+1 scope (63 planned plus P0.9 = 64; P8 and P10, 12
 tasks, moved to N+2 on 27.09.2026); P0.5b and P4.6a were added along the way and are
 not counted.
 
@@ -80,7 +80,8 @@ not counted.
 | P11.1 Routing types | done | `4bddb2c` (worktree, beside P9.3) | Sonnet | routing.h/.c, host-only, no apply yet; pin-reachability table from a new generator, tools/gen_route_pins.py, against tools/pins128.py |
 | P11.2 Host tests of the conflict rules | done | `0a5ecca`, merge (see log) | Sonnet | tests/host/test_routing.c, 45/45 checks, one test per rule; a deliberately broken SCCP check caught it (44/45, reverted) |
 | P11.3 `routing_apply()` for `ROUTE_STREAM` | done | this commit | Fable | `routing_apply()` = `route_check()` (routing_add()'s rules, shared) + shape gate (STREAM sink, no table, EXT or DAC_PIN/dac 2; else NOT_YET before any driver call) + `acq_chain_setup_input()` (new in acquisition.c: the three statements chain_stream_on_input() wraps around acq_chain_setup(), as a function; the fixed order is acq_chain_setup()'s body, mapped step by step in routing.c's comment) + restore/`ROUTE_ERR_SETUP` on refusal; `route_t` gained `samc` (the rate stays outside a route, A1); `ROUTE_STREAM`/`ROUTE_B2B` defined in acquisition.c from board.h's macros (both boards); pin table per DEVICE macro (`pins64.py` added to gen_route_pins.py; Nano: AD5AN3 = RA8 reachable); routing.c in every build. New golden `route_stream`: W/C lines equal `stream_on`'s except six IEC2/DMACON/DMA0CH down/up lines its extra snapshot point exposes - without that point byte-identical (checked, not committed); `slp=0` in both (clock_dac_hz() reads COSC the model never switches). `stream on` NOT routed through it yet (P11.4). Verified: hw/sim/nano/smoke clean; trace 14/14, 13 existing goldens unchanged; hosttest 15/15 (test_routing 93 checks); fncmp `_DMA0Interrupt` 42/0, `_U2RXInterrupt` 55/0, 427 functions identical, 5 differ only in BUILD_ID string hashes or a relabelled RAM address (`_cmd_parser_feed_char`: the same constant now falls inside `route_table`), 14 new (none dropped by the linker); [SMOKE] PASS |
-| P11.4-P11.5 | open | | | P11.4 is the central proof |
+| P11.4 `stream on` through the routing | done | this commit | Fable | `chain_stream_on()` = `routing_apply(&ROUTE_STREAM)` + the old tail, `chain_stream_on_input()` builds the route from its arguments (`ROUTE_SRC_DAC_PIN`/dac 2 with `test_signal`, `ROUTE_SRC_EXT` without - the old `s_test_dac` flag verbatim; cli.c passes `false` for every custom form), both through one static `stream_on_route()`; the inline setup copy is gone (`acq_chain_setup_input()` has one caller). `routing_clear()` in `chain_stream_off()` and on the post-apply failure path (on/off/on host test). **The central proof: the `stream_on`, `stream_on_input` and `route_stream` goldens are byte-identical** (trace 14/14, `git diff --stat` on `tests/trace/golden` empty). Stopped once before editing: the routing would have refused PINSEL 6 (the internal 15/16 VDD reference, the GUI's "6 = internal ref"); lead decision: 6 reachable everywhere like 7 (`ROUTE_PINSEL_VREF`), and per the ATDF core 5's AD5AN5 "Touch ADC Input"/AD5AN8 "VDDCORE" too (`route_int_mask[]`); 9..15 unnamed, refused; package pins a core does not bring out refused as P11.2 intended (see Decisions). routing.c added to the five `.sources` that link acquisition.c. Verified: hw/sim/nano/smoke clean; hosttest all PASS (test_routing 161 checks); fncmp `_DMA0Interrupt` 42/0, `_U2RXInterrupt` 55/0; [SMOKE] PASS; `adc_gui.py --selftest` PASS |
+| P11.5 `route list` | open | | | [SMOKE] + expected.log |
 | P12.1-P12.4 Close-out | open | | | P12.4 = [SIM], runs without asking since 27.09.2026 |
 | BR.1 `tools/board_run.py` | in review | `175b20c` (worktree) | Sonnet | phase BR added 27.09.2026 (not counted in the 52); host-side, worktree beside P9/P11; selftest 10/10 |
 | BR.2 `tools/eval_board.py` + `expected.json` | in progress (worktree) | | Sonnet | |
@@ -119,6 +120,7 @@ not counted.
 | 27.09. | BR: the P3 libraries' cycle count on silicon is not in the first board run. Reason: keep the new firmware in B minimal; P3.8 stays optional | BR.6 |
 | 27.09. | BR pass criterion adopted from `board-run-task.md` section 10, the stack margin fixed at >= 25 % of the stack unused. Reason: the port layer and visitor callbacks added depth that no host tool measures; a quarter leaves room for interrupt nesting not reached in the run | BR.9 |
 | 27.09. | BR: `sim_trap.py` cannot serve as a transport for the runner - the simulator's UART is write-only to a file, nothing feeds bytes in at run time (BR.1's look); the runner is tested against its stand-in only | BR.1 |
+| 27.09. | `stream on` custom input through the routing: PINSEL 6/7 (the internal 15/16 VDD reference and UREF) always reachable, and the internal channels the ATDF names on core 5 (AD5AN5 "Touch ADC Input", AD5AN8 "VDDCORE") likewise; PINSEL 9..15 (unnamed in the ATDF) and package pins a core does not bring out are refused - intended by P11.2's rule "a pin the core cannot reach", the only console behaviour change of N+1 (same "set-up failed" line as any other refusal; the GUI already snapped its PINSEL field to the core's pins plus 6/7, its hint narrowed) | P11.4: `routing.c`'s `route_int_mask[]`, `acquisition.h` |
 
 ### Handover to the next lead session (27.09.2026, 18:30)
 
@@ -183,6 +185,19 @@ card of 30-60 calls costs 2-6 M, a card of 300+ calls 150 M+ - keep cards small.
   port/polarity and the console's PPS/TRIS pins stay `board.h` macros (compile-time
   uses, `led_toggle()`'s hot path, and a path no golden trace exercises without a
   board run) - `grep board.h src/drivers/` still finds hits; revisit in N+2 with P8.
+- The DAC slope path of `stream on` is covered by no golden (found in P11.3, recorded
+  P11.4): in the trace harness `acq_triangle_for()` refuses the triangle because
+  `clock_dac_hz()` reads `CLK7CON.COSC`, which the hardware model never switches, so
+  `slp=0` in both `stream_on` and `route_stream` and no `DAC2SLP*` write appears in
+  either. `tests/trace/scenarios/stream_on.c`'s header paragraph on the PLL1DIV/VCO1DIV
+  preset ("or it reads 0 and refuses the triangle") is therefore stale - the preset is
+  necessary but not sufficient. Only the `dac` scenario traces the triangle registers.
+  A model rule that lets CLK7CON's COSC follow NOSC on OSWEN would close it (a golden
+  change, on purpose, in a card of its own).
+- PINSEL 9..15 are refused by `route_pin_reachable()` since P11.4 because the pack's ATDF
+  (dsPIC33AK-MP_DFP 1.4.260, both devices) names no channel for them - only the
+  value-group's bare `AD_AN9..15`. If a datasheet revision names one, add it to
+  `route_int_mask[]` in routing.c.
 
 ## Rules for every task
 
