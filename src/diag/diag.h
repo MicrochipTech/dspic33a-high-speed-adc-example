@@ -42,8 +42,12 @@ void fail(uint32_t code);
 /* Stack high-water mark (BR.6, 27.09.2026), read by "status" (cli.c):
  * diag_stack_paint() fills the free stack with a pattern once, as the
  * first thing main() does; diag_stack_size() is how much of it was
- * painted, in bytes; diag_stack_used_max() is the highest RAM address any
- * push has reached since; diag_stack_free_pct() is the percentage of
+ * painted, in bytes (from main()'s entry SP up to SPLIM less a margin - the
+ * few words crt0 and main() itself hold below it are not counted);
+ * diag_stack_used_max() is the highest RAM address any push has reached
+ * since (an ADDRESS - "status" prints it as stack_hwm_addr);
+ * diag_stack_used_bytes() is that depth in bytes above the paint start
+ * ("status": stack_used); diag_stack_free_pct() is the percentage of
  * diag_stack_size() still unpainted-over - the board-run pass criterion
  * (docs/IMPLEMENTATION-PLAN.md, BR.9) is >= 25. See diag.c for how and
  * why (the stack direction, the ECC-RAM reason painting must run before
@@ -54,6 +58,7 @@ void fail(uint32_t code);
 void     diag_stack_paint(void);
 uint32_t diag_stack_size(void);
 uint32_t diag_stack_used_max(void);
+uint32_t diag_stack_used_bytes(void);
 uint32_t diag_stack_free_pct(void);
 
 /* Print RCON, the reset-cause register, decoded, then clear it so the

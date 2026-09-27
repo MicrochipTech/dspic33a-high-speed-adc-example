@@ -648,7 +648,8 @@ def selftest():
     # below); check_stack_criterion() is the one piece that DOES know two
     # of the names, and judges them.
     BR6_FIELDS_PASS = {
-        "stack_size": "12480", "stack_used_max": "4928", "stack_free_pct": "61",
+        "stack_size": "12480", "stack_used": "4928", "stack_hwm_addr": "34628",
+        "stack_free_pct": "61",
         "buf_addr": "16512", "buf_align_mod4": "0", "buf_len": "4096",
         "buf_guard_ok": "1", "boot_stage": "9", "trap_seen": "0", "trap_vec": "0",
         "chain_mark": "0",

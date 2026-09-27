@@ -385,12 +385,17 @@ uint32_t diag_stack_used_max(void)
     return stack_paint_lo;                  /* nothing touched yet       */
 }
 
+uint32_t diag_stack_used_bytes(void)
+{
+    const uint32_t used_max = diag_stack_used_max();
+    return (used_max > stack_paint_lo) ? (used_max - stack_paint_lo) : 0u;
+}
+
 uint32_t diag_stack_free_pct(void)
 {
     const uint32_t size = diag_stack_size();
     if (size == 0u) { return 0u; }
-    const uint32_t used_max = diag_stack_used_max();
-    const uint32_t used = (used_max > stack_paint_lo) ? (used_max - stack_paint_lo) : 0u;
+    const uint32_t used = diag_stack_used_bytes();
     const uint32_t free_bytes = (size > used) ? (size - used) : 0u;
     return (free_bytes * 100u) / size;
 }
@@ -399,6 +404,7 @@ uint32_t diag_stack_free_pct(void)
 void     diag_stack_paint(void)      { }
 uint32_t diag_stack_size(void)       { return 0u; }
 uint32_t diag_stack_used_max(void)   { return 0u; }
+uint32_t diag_stack_used_bytes(void) { return 0u; }
 uint32_t diag_stack_free_pct(void)   { return 0u; }
 #endif
 

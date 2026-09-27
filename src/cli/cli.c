@@ -432,8 +432,12 @@ static void cmd_status_fn(int argc, char **argv)
      * works: no fixed-size line buffer here to size from the longest
      * line, unlike console_status_line()'s single buffer - put_kv() sends
      * each field through cmd_parser_write() on its own. */
+    /* stack_used is a depth in bytes, stack_hwm_addr the address it reached
+     * - two keys so neither can be misread as the other (both measured from
+     * main()'s entry SP, where the paint starts; diag.h). */
     put_kv("stack_size", diag_stack_size());
-    put_kv("stack_used_max", diag_stack_used_max());
+    put_kv("stack_used", diag_stack_used_bytes());
+    put_kv("stack_hwm_addr", diag_stack_used_max());
     put_kv("stack_free_pct", diag_stack_free_pct());
     /* Buffer placement, after relinking: address, its alignment (dma.c's
      * dma0_init() refuses a destination address that is not a multiple of

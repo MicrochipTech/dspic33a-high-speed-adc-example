@@ -1063,7 +1063,8 @@ def selftest():
     # check) is exercised, this only proves the runner logs a status reply
     # that carries them through untouched, end to end.
     target_b = ReplayTarget("B", has_route=True, nak_once={"regs"}, extra_status_fields={
-        "stack_size": "52264", "stack_used_max": "5192", "stack_free_pct": "90",
+        "stack_size": "52264", "stack_used": "5192", "stack_hwm_addr": "34892",
+        "stack_free_pct": "90",
         "buf_addr": "16720", "buf_align_mod4": "0", "buf_len": "4096",
         "buf_guard_ok": "1", "boot_stage": "9", "trap_seen": "0", "trap_vec": "0",
         "chain_mark": "0"})
