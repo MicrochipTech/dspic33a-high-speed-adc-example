@@ -1,0 +1,86 @@
+{
+  "_readme": "tools/eval_board.py's expectations against 'chain all' (R2). Each entry: 'stage' (a list of chain-test stage numbers), an optional 'match' (field->value, or field->[allowed values], to pick which @S<stage>.<n> result lines within those stages this entry judges), 'check' (one of 'verdict', 'field_eq', 'field_max', 'field_min', 'field_in') with 'value' (or 'field'+'value' for the field_* checks), 'source' ('run19': measured on silicon, checked against BOTH A and B; 'prediction': about the NEXT run only, checked against B only), 'date' (the docs/HARDWARE-LOG.md entry this came from), and 'note' (kept in the deviation line). Field names match chaintest.c's own @S<stage>.<n> lines verbatim (ksps, overrun, late, missed, load_max_x10, ...). Update this file only from a confirmed board run (BR.9), tagging new/changed entries with that run's number - see board-run-task.md section 6 and 10.",
+  "schema_version": 1,
+  "expectations": [
+    {
+      "id": "s6-s9-8msps-clean-stream",
+      "block": "R2",
+      "stage": [6, 9],
+      "match": {"ksps": 8000},
+      "check": "field_eq",
+      "value": {"overrun": 0, "late": 0, "missed": 0},
+      "source": "run19",
+      "date": "2026-09-25",
+      "note": "run 19: 8 MSPS for 15 s, 120000509 transfers, overrun 0, late 0, missed 0, isr = half + done"
+    },
+    {
+      "id": "s5-triangle-clean-to-10msps",
+      "block": "R2",
+      "stage": [5],
+      "match": {"ksps": [100, 1000, 4000, 8000, 10000]},
+      "check": "verdict",
+      "value": "PASS",
+      "source": "run19",
+      "date": "2026-09-25",
+      "note": "run 19: S5 triangle grid clean (slip 0.03-0.09 samples), slope/model 1.000 at 100 kSPS, 1/4/8/10 MSPS"
+    },
+    {
+      "id": "s4-overrun-from-10msps",
+      "block": "R2",
+      "stage": [4],
+      "match": {"ksps": 10000},
+      "check": "field_min",
+      "field": "overrun",
+      "value": 1,
+      "source": "run19",
+      "date": "2026-09-25",
+      "note": "run 19: S4 at 10 MSPS showed overrun 732 of 0.5M transfers - a known limit of this silicon, not a fault; reported here only so a silent change (better or worse) is not dropped"
+    },
+    {
+      "id": "s5-lost-triggers-from-16msps",
+      "block": "R2",
+      "stage": [5],
+      "match": {"ksps": [16000, 20000]},
+      "check": "verdict",
+      "value": "FAIL",
+      "source": "run19",
+      "date": "2026-09-25",
+      "note": "run 19: S5 at 16/20 MSPS lost triggers (slip 6.2/5.0 samples) - the triangle FAIL there is the known limit, not a new fault"
+    },
+    {
+      "id": "prediction-s4-s6-pass-1-4-8msps",
+      "block": "R2",
+      "stage": [4, 6],
+      "match": {"ksps": [1000, 4000, 8000]},
+      "check": "verdict",
+      "value": "PASS",
+      "source": "prediction",
+      "date": "2026-09-25",
+      "note": "predicted after run 19 (processing-loop rewrite, tolerance fixes): S4 and S6 pass at 1, 4 and 8 MSPS"
+    },
+    {
+      "id": "prediction-s9-picks-8-or-10msps",
+      "block": "R2",
+      "stage": [9],
+      "match": {},
+      "check": "field_in",
+      "field": "ksps",
+      "value": [8000, 10000],
+      "source": "prediction",
+      "date": "2026-09-25",
+      "note": "predicted after run 19: S9 (\"the attempt\") picks 8 or 10 MSPS as the rate that streams cleanly"
+    },
+    {
+      "id": "prediction-s6-8msps-load-below-half",
+      "block": "R2",
+      "stage": [6],
+      "match": {"ksps": 8000},
+      "check": "field_max",
+      "field": "load_max_x10",
+      "value": 500,
+      "source": "prediction",
+      "date": "2026-09-25",
+      "note": "predicted after run 19 (unrolled 32-bit processing loop): processing load at 8 MSPS falls well below half (was 92% = load_max_x10 920 in run 19)"
+    }
+  ]
+}

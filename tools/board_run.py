@@ -107,6 +107,7 @@ import zipfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np  # noqa: E402
 import protocol  # noqa: E402
+import eval_board  # noqa: E402  (BR.2: the one place summary.txt's content is built)
 from eval_chain import tri_eval as chain_tri_eval  # noqa: E402
 from eval_chain import grid_ok as chain_grid_ok  # noqa: E402
 from eval_chain import synth as chain_synth  # noqa: E402
@@ -617,27 +618,18 @@ def open_target(port, ui):
 
 # ---------------------------------------------------------------------------
 # Output: summary.txt, session.json, the zip
+#
+# summary.txt's content is tools/eval_board.py's build_summary_text() (BR.2)
+# - it parses the very log lines this module just wrote, exactly as it
+# would parse them again later from the zip, so a live run's summary.txt
+# and eval_board.py's own after-the-fact report can never disagree; this
+# module no longer has a summary-building function of its own.
 # ---------------------------------------------------------------------------
-def build_summary(results_a, results_b):
-    lines = ["board run summary", ""]
-    for label, results in (("A", results_a), ("B", results_b)):
-        lines.append(f"run {label}:")
-        for b in BLOCK_ORDER:
-            v = results.get(b, {}).get("verdict", "missing")
-            lines.append(f"  {b}: {v.upper()}")
-        lines.append("")
-    both_ok = all(results.get(b, {}).get("verdict") in ("ok", "not_available")
-                  for results in (results_a, results_b) for b in BLOCK_ORDER)
-    lines.append(f"overview: {'PASS' if both_ok else 'FAIL'}")
-    lines.append("(the A/B comparison against expectations is eval_board.py's job, BR.2)")
-    return "\n".join(lines) + "\n"
-
-
-def write_zip(out_dir, board, session, log_a, log_b, frames_a, frames_b, results_a, results_b):
+def write_zip(out_dir, board, session, log_a, log_b, frames_a, frames_b):
     ts = time.strftime("%Y%m%d-%H%M%S")
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, f"run-{ts}-{board}.zip")
-    summary = build_summary(results_a, results_b)
+    summary = eval_board.build_summary_text(log_a.lines, log_b.lines, eval_board.load_expected())
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("A.log", log_a.text())
         z.writestr("B.log", log_b.text())
@@ -688,25 +680,59 @@ def perform_full_run(port, ui, out_dir, hex_a=None, hex_b=None,
     session["r5_signal"] = dict(present=signal_present, frequency_hz=freq)
 
     board = board_label(results_a["R0"].get("version", []))
-    zip_path, summary = write_zip(out_dir, board, session, log_a, log_b, frames_a, frames_b,
-                                   results_a, results_b)
+    zip_path, summary = write_zip(out_dir, board, session, log_a, log_b, frames_a, frames_b)
     print(summary)
     print(f"file to send: {zip_path}")
-    return 0 if "FAIL" not in summary.splitlines()[-2] else 1
+    return 0 if summary.rstrip("\n").splitlines()[-1] == "overview: PASS" else 1
 
 
 # ---------------------------------------------------------------------------
 # --selftest: a replayed A and B firmware, no board.
 # ---------------------------------------------------------------------------
+# The clean "chain all" reply every ReplayTarget answers with by default -
+# a module-level constant so BR.2's eval_board.py selftest (tools/eval_board.py)
+# can build a second, deliberately-FAILing variant of it without duplicating
+# the PASS lines, and so both selftests are provably looking at the same
+# baseline text.
+DEFAULT_CHAIN_ALL_LINES = [
+    "@S0.1 hz=160000000 expect=160000000 -> PASS",
+    "@S4.1 ksps=1000 xfer=1000 expect=1000 tol=5 overrun=0 brake=0 -> PASS",
+    "@S4.2 ksps=4000 xfer=4000 expect=4000 tol=5 overrun=0 brake=0 -> PASS",
+    "@S4.3 ksps=8000 xfer=8000 expect=8000 tol=5 overrun=0 brake=0 -> PASS",
+    "@S5.0 ksps=100 slip_x100=5 zero=0 dbl=0 up=1 dn=1 slip_n=2 ratio_x1000=1000 -> PASS",
+    "@S5.1 ksps=1000 slip_x100=5 zero=0 dbl=0 up=1 dn=1 slip_n=2 ratio_x1000=1000 -> PASS",
+    "@S5.2 ksps=4000 slip_x100=5 zero=0 dbl=0 up=1 dn=1 slip_n=2 ratio_x1000=1000 -> PASS",
+    "@S5.3 ksps=8000 slip_x100=5 zero=0 dbl=0 up=1 dn=1 slip_n=2 ratio_x1000=1000 -> PASS",
+    "@S5.4 ksps=10000 slip_x100=8 zero=0 dbl=0 up=1 dn=1 slip_n=2 ratio_x1000=1000 -> PASS",
+    "@S6.1 ksps=1000 xfer=1000 expect=1000 tol=5 overrun=0 late=0 missed=0 isr=2 half=1 "
+    "done=1 brake=0 guard_ok=1 load_max_x10=200 free_cyc_per_sample=10 -> PASS",
+    "@S6.2 ksps=4000 xfer=4000 expect=4000 tol=5 overrun=0 late=0 missed=0 isr=2 half=1 "
+    "done=1 brake=0 guard_ok=1 load_max_x10=350 free_cyc_per_sample=8 -> PASS",
+    "@S6.3 ksps=8000 xfer=8000 expect=8000 tol=5 overrun=0 late=0 missed=0 isr=2 half=1 "
+    "done=1 brake=0 guard_ok=1 load_max_x10=460 free_cyc_per_sample=6 -> PASS",
+    "@S9.1 ksps=8000 xfer=8000 expect=8000 tol=5 overrun=0 late=0 missed=0 isr=2 half=1 "
+    "done=1 brake=0 guard_ok=1 load_max_x10=460 free_cyc_per_sample=6 -> PASS",
+    "@SUM stages=10 pass=13 fail=0",
+    "@END",
+]
+
+
 class ReplayTarget:
     """Stands in for protocol.Target in --selftest: answers like the
-    firmware's console would for the commands this runner sends, with three
-    injectable faults used to exercise the runner's own handling of them -
-    a command that times out once (`timeout_block`), a command that NAKs
-    once (`nak_once`), and one 'stream grab' that comes back with a
-    corrupted CRC (`grab_fault_at`, a (ksps, grab index) pair)."""
+    firmware's console would for the commands this runner sends, with
+    several injectable faults used to exercise the runner's (and, via
+    `chain_all_lines`/`extra_status_fields`, eval_board.py's) own handling
+    of them - a command that times out once (`timeout_block`), a command
+    that NAKs once (`nak_once`), one 'stream grab' that comes back with a
+    corrupted CRC (`grab_fault_at`, a (ksps, grab index) pair), a
+    "chain all" reply other than the clean default (`chain_all_lines`, used
+    by eval_board.py's selftest to manufacture an A/B difference at a known
+    stage), and extra "key: value" lines appended to "status" beyond the
+    baseline set (`extra_status_fields`, standing in for BR.6's not-yet-named
+    fields - present in B, absent in A)."""
 
-    def __init__(self, label, has_route, timeout_block=None, nak_once=None, grab_fault_at=None):
+    def __init__(self, label, has_route, timeout_block=None, nak_once=None, grab_fault_at=None,
+                 chain_all_lines=None, extra_status_fields=None):
         self.label = label
         self.has_route = has_route
         self.timeout_block = timeout_block
@@ -714,6 +740,8 @@ class ReplayTarget:
         self.nak_once = set(nak_once or ())
         self._nak_fired = set()
         self.grab_fault_at = grab_fault_at
+        self.chain_all_lines = chain_all_lines or DEFAULT_CHAIN_ALL_LINES
+        self.extra_status_fields = extra_status_fields or {}
         self.port = f"replay-{label}"
         self.chain_on = False
         self.chain_ksps = 0
@@ -769,14 +797,14 @@ class ReplayTarget:
                 lines.append("  route list - the routing table")
             return True, lines
         if c == "status":
-            return True, ["running: " + ("1" if self.chain_on else "0"),
-                          "overrun: 0", "late: 0", "missed: 0", "fail_code: 0"]
+            lines = ["running: " + ("1" if self.chain_on else "0"),
+                     "overrun: 0", "late: 0", "missed: 0", "fail_code: 0"]
+            lines += [f"{k}: {v}" for k, v in self.extra_status_fields.items()]
+            return True, lines
         if c == "regs":
             return True, ["CLK1CON: 0x00001234", "AD5CON1: 0x00005678"]
         if line == "chain all":
-            return True, ["@S0.1 hz=160000000 expect=160000000 -> PASS",
-                          "@S9.1 ksps=8000 -> PASS",
-                          "@SUM stages=10 pass=10 fail=0", "@END"]
+            return True, self.chain_all_lines
         if line == "test all":
             return True, ["[test] self: PASS", "[test] clock: PASS", "[test] all: done"]
         if c == "route" and len(parts) > 1 and parts[1] == "list":
@@ -861,8 +889,7 @@ def selftest():
         session = dict(runner_version=RUNNER_VERSION, port="replay", pc_time="selftest",
                         python=platform.python_version(), pyserial=None, hex=[],
                         r5_signal=dict(present=False, frequency_hz=None))
-        zip_path, _ = write_zip(tmp, "EV74H48A-selftest", session, log_a, log_b,
-                                 frames_a, frames_b, results_a, results_b)
+        zip_path, _ = write_zip(tmp, "EV74H48A-selftest", session, log_a, log_b, frames_a, frames_b)
         with zipfile.ZipFile(zip_path) as z:
             names = z.namelist()
         check("zip contains A.log/B.log/summary.txt/session.json",

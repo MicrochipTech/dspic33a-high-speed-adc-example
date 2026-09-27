@@ -101,6 +101,27 @@ if exist "%ROOT%\tools\board_run.py" (
   echo board_run.py --selftest: tools\board_run.py not found - FAIL
 )
 
+rem  tools\eval_board.py (BR.2): turns a board_run.py session into deviation
+rem  lines against tests\board\expected.json - same reasoning as
+rem  board_run.py above, called explicitly right after it.
+set /a TOTAL+=1
+if exist "%ROOT%\tools\eval_board.py" (
+  where python >nul 2>nul
+  if errorlevel 1 (
+    echo eval_board.py --selftest: no python found on PATH - FAIL
+  ) else (
+    python "%ROOT%\tools\eval_board.py" --selftest
+    if errorlevel 1 (
+      echo eval_board.py --selftest: FAIL
+    ) else (
+      echo eval_board.py --selftest: PASS
+      set /a PASSED+=1
+    )
+  )
+) else (
+  echo eval_board.py --selftest: tools\eval_board.py not found - FAIL
+)
+
 echo.
 if !PASSED! EQU !TOTAL! (
   echo !PASSED!/!TOTAL! PASS
