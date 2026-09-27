@@ -19,7 +19,10 @@ is to prove the bounded-wait timeout, not to open a real port.
 Needs only the standard library; runs with any Python 3.8+.
 """
 import os
+import socket
 import sys
+import threading
+import time
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(ROOT, 'tools'))
@@ -45,6 +48,65 @@ def build_grab_frame(samples, **meta):
     crc = protocol.crc16_ccitt_false(payload)
     tail = f"\r\nCRC {crc:04X}\r\n> ".encode("ascii") + protocol.ACK
     return header, payload, tail
+
+
+def check_target_over_socket_url():
+    """Target(url) must open a plain COM port and a "socket://host:port"
+    URL the same way (tools/remote.py's RemoteBench hands back exactly such
+    a URL for a bench_client tunnel) - Target.__init__ now opens the port
+    through serial.serial_for_url() instead of serial.Serial() for that
+    reason. This drives a real Target over a real loopback TCP socket
+    played by a tiny thread standing in for the firmware at byte level:
+    the sync ACK, then one "stream grab" cycle whose payload deliberately
+    contains 0x06 (ACK) and 0x15 (NAK) sample values - Target.grab() reads
+    the header first to learn the byte count and must not stop on a sample
+    byte that happens to match ACK/NAK (see Target.grab()'s own docstring;
+    parse_grab_frame() already has a unit test for the decode, this one is
+    for the transport)."""
+    samples = [0x0006, 0x0015, 100, 4095, 0]
+    header, payload, tail = build_grab_frame(samples, from_=0, slp=9)
+
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", 0))
+    port = srv.getsockname()[1]
+    srv.listen(1)
+
+    def _read_until_cr(conn):
+        buf = b""
+        while not buf.endswith(b"\r"):
+            chunk = conn.recv(1)
+            if not chunk:
+                return buf
+            buf += chunk
+        return buf
+
+    def serve_one():
+        conn, _ = srv.accept()
+        try:
+            _read_until_cr(conn)                 # Target.sync()'s bare "\r"
+            conn.sendall(protocol.ACK)
+            line = _read_until_cr(conn)           # "stream grab\r"
+            if line != b"stream grab\r":
+                return
+            conn.sendall(b"stream grab\r\n" + header.encode("ascii") + payload + tail)
+            time.sleep(0.2)                       # give the client time to read before we close
+        finally:
+            conn.close()
+
+    th = threading.Thread(target=serve_one, daemon=True)
+    th.start()
+    try:
+        t = protocol.Target(f"socket://127.0.0.1:{port}")
+        try:
+            ok, decoded, meta = t.grab(timeout=2.0)
+        finally:
+            t.close()
+    finally:
+        srv.close()
+        th.join(timeout=2)
+    return check("Target over socket:// parses a GRAB frame with 0x06/0x15 sample bytes",
+                 ok and list(decoded) == samples, f"ok={ok} samples={list(decoded)} meta={meta}")
 
 
 def main() -> int:
@@ -120,6 +182,8 @@ def main() -> int:
     except TimeoutError:
         ok_timeout = True
     ok_all &= check("Target.grab() timeout with no bytes caught", ok_timeout)
+
+    ok_all &= check_target_over_socket_url()
 
     print("test_protocol", "PASS" if ok_all else "FAIL")
     return 0 if ok_all else 1

@@ -24,6 +24,12 @@ Modes
                 input it plays a sine with harmonics and noise, so
                 SNR/THD/harmonics have something to show in the spectrum.
   --port COMx   the board. Without --port the page offers a port list.
+  --remote      the colleague's board through a bench_client tunnel
+                (tools/remote.py) instead of --port - preselects "remote" in
+                that same list; --bench-client sets the path to
+                bench_client.py (default: $BENCH_CLIENT, else
+                C:\\work\\Claas\\Relay\\bench_client.py). No flashing from
+                here - that stays in tools/board_run.py / bench_client.py.
   --selftest    no GUI: run the fake target through the stream/grab cycle,
                 parse, FFT, judge the triangle, print the numbers, exit 0/1.
   --settings F  settings file, read at start-up and written by "save"
@@ -76,6 +82,11 @@ from eval_chain import synth as chain_synth  # noqa: E402
 # host-side tool can talk to the board's console without pulling in NiceGUI.
 # ACK/NAK stay in use here too, for FakeTarget and the self-test below.
 from protocol import ACK, NAK, crc16_ccitt_false, parse_grab_frame, Target  # noqa: E402
+# "Remote" connection choice (below): a bench_client tunnel (tools/remote.py)
+# instead of a local COM port - see RemoteBench's own docstring for the
+# fixed contract this codes against. No flashing here: that stays in
+# board_run.py / bench_client itself (the connection panel says so).
+import remote  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -1347,6 +1358,39 @@ def selftest() -> int:
     print("board detection from 'version' (Nano, Platform, none):",
           "PASS" if (ok_nano and ok_plat and ok_none) else "FAIL")
 
+    # ---- "remote" connection choice: a bench_client tunnel (tools/remote.py),
+    # against the same fixture tools/board_run.py's own --selftest uses
+    # (tests/host/fake_bench_client.py) - never the real bench_client.py or a
+    # real relay/agent. Connect, one 'stream grab' cycle over the tunnel,
+    # disconnect - the same three steps do_connect()/do_connect() (again, to
+    # disconnect) drive from the page, done here without NiceGUI. ----
+    import tempfile
+    fake_bench_client = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                     "..", "tests", "host", "fake_bench_client.py")
+    with tempfile.TemporaryDirectory() as tmp:
+        hexpath = os.path.join(tmp, "A-EV74H48A-abc1234.hex")
+        with open(hexpath, "wb") as f:
+            f.write(b":10000000FF\n")
+        bench = remote.RemoteBench(bench_client=fake_bench_client,
+                                   env=dict(os.environ, FAKE_BENCH_STATE_DIR=os.path.join(tmp, "state")))
+        with bench:
+            flash_code, _ = bench.flash(hexpath, after=1)
+            url = bench.open_tunnel()
+            t = Target(url)
+            ok_v, _ = t.cmd("version")
+            ok_on, _ = t.cmd("stream on 8000")
+            ok_grab, samples, meta = t.grab()
+            t.close()
+            proc = bench._proc
+        ok_remote = flash_code == 0 and ok_v and ok_on and ok_grab and len(samples) > 0
+        ok_all &= ok_remote
+        print("remote: flash + tunnel + connect + one stream grab cycle:",
+              "PASS" if ok_remote else "FAIL", f"- samples={len(samples)} meta={meta}")
+        ok_closed = proc.poll() is not None
+        ok_all &= ok_closed
+        print("remote: disconnect (close_tunnel) ends the tunnel subprocess:",
+              "PASS" if ok_closed else "FAIL")
+
     print("selftest", "PASS" if ok_all else "FAIL")
     return 0 if ok_all else 1
 
@@ -1384,7 +1428,7 @@ def main_gui(args):
     port_lock = asyncio.Lock()
     state = dict(target=None, live=False, busy=False, cycles=0, grabs=0,
                  acq_active=None, test_dac2=None, live_t0=None, buf_size=2048,
-                 settings_path=args.settings)
+                 settings_path=args.settings, remote_bench=None)
 
     def ports():
         try:
@@ -1495,8 +1539,21 @@ def main_gui(args):
             else:
                 ui.query("body").classes(add="no-tips")
         tips_cb.on_value_change(lambda e: set_tooltips(bool(e.value)))
-        port_sel = ui.select(options=["fake"] + ports(), value=args.port or ("fake" if args.fake else None),
+        port_sel = ui.select(options=["fake", "remote"] + ports(),
+                             value=(args.port or ("remote" if args.remote else None)
+                                    or ("fake" if args.fake else None)),
                              label="port").classes("w-44").props("dense outlined")
+        bench_client_in = ui.input(
+            "bench_client.py path",
+            value=args.bench_client or os.environ.get("BENCH_CLIENT", remote.DEFAULT_BENCH_CLIENT),
+        ).classes("w-72").props("dense outlined")
+        bench_client_hint = ui.label("no flashing here - board_run.py / bench_client does that") \
+            .classes("text-xs text-slate-400")
+        bench_client_in.set_visibility(port_sel.value == "remote")
+        bench_client_hint.set_visibility(port_sel.value == "remote")
+        port_sel.on_value_change(
+            lambda e: (bench_client_in.set_visibility(e.value == "remote"),
+                       bench_client_hint.set_visibility(e.value == "remote")))
         conn_btn = ui.button("connect", icon="usb").props("unelevated")
         conn_chip = ui.chip("not connected", icon="link_off", color="grey-8").props("outline")
 
@@ -1812,7 +1869,14 @@ def main_gui(args):
     TIPS = [
         (port_sel, "Which console to talk to. 'fake' is the built-in stand-in: it answers the "
                    "same commands and makes up a signal, so the page can be tried without a "
-                   "board. A COMx entry is the board's USB-UART at 115200 baud."),
+                   "board. A COMx entry is the board's USB-UART at 115200 baud. 'remote' opens "
+                   "a bench_client tunnel (tools/remote.py) to the colleague's board instead - "
+                   "no flashing here, see the field next to it."),
+        (bench_client_in, "Path to bench_client.py (CLAUDE.md's 'Remote board access'), used "
+                          "only when 'port' above is 'remote'. Connect opens a tunnel through it "
+                          "and talks to the board over that; disconnect closes the tunnel. "
+                          "Programming the board is not done from here - tools/board_run.py or "
+                          "bench_client.py's own 'flash' request does that."),
         (conn_btn, "Open or close that port. Everything else on this page needs it: each control "
                    "sends a console command and waits for the prompt before the next one."),
         (conn_chip, "Connection state. It also shows the firmware's build line once connected, "
@@ -2226,6 +2290,10 @@ def main_gui(args):
             single_btn.enable()
             state["target"].close()
             state["target"] = None
+            if state["remote_bench"]:
+                push_log("--- closing the remote tunnel ---")
+                state["remote_bench"].close_tunnel()
+                state["remote_bench"] = None
             state["acq_active"] = None
             conn_btn.text, conn_btn.icon = "connect", "usb"
             conn_chip.text, conn_chip.icon = "not connected", "link_off"
@@ -2242,6 +2310,12 @@ def main_gui(args):
                                              harm2_amp=float(harm2_in.value or 150.0),
                                              harm3_amp=float(harm3_in.value or 0.0),
                                              on_log=push_log)
+            elif port_sel.value == "remote":
+                push_log(f"--- connecting: remote via {bench_client_in.value} ---")
+                state["remote_bench"] = remote.RemoteBench(bench_client=bench_client_in.value)
+                url = state["remote_bench"].open_tunnel()
+                push_log(f"--- tunnel open: {url} ---")
+                state["target"] = Target(url, on_log=push_log)
             else:
                 push_log(f"--- connecting: {port_sel.value} ---")
                 state["target"] = Target(port_sel.value, on_log=push_log)
@@ -2279,6 +2353,9 @@ def main_gui(args):
             conn_chip.icon = "error"
             conn_chip.props("color=negative")
             state["target"] = None
+            if state["remote_bench"]:
+                state["remote_bench"].close_tunnel()
+                state["remote_bench"] = None
     conn_btn.on_click(do_connect)
 
     async def send_dac(unit):
@@ -2599,7 +2676,7 @@ def main_gui(args):
             asyncio.create_task(live_loop())
     live_btn.on_click(toggle_live)
 
-    if args.fake or args.port:
+    if args.fake or args.port or args.remote:
         ui.timer(0.5, do_connect, once=True)
 
     ui.run(title="ADC/DMA capture", port=args.http_port, show=not args.no_browser, reload=False, dark=True)
@@ -2612,6 +2689,12 @@ def main():
     ap.add_argument("--fake-board", default="EV74H48A", choices=["EV74H48A", "EV17P63A"],
                     help="which board the stand-in reports (its 'version' reply), for trying the "
                          "Curiosity Nano profile without one")
+    ap.add_argument("--remote", action="store_true",
+                    help="preselect 'remote' (a bench_client tunnel, tools/remote.py) instead of "
+                         "a board or the fake target - no flashing here, see board_run.py")
+    ap.add_argument("--bench-client",
+                    help="path to bench_client.py for the 'remote' connection choice (default: "
+                         "$BENCH_CLIENT, else C:\\work\\Claas\\Relay\\bench_client.py)")
     ap.add_argument("--selftest", action="store_true", help="fake target through one cycle, no GUI")
     ap.add_argument("--settings", default=SETTINGS_FILE,
                     help="settings file, read at start and written by 'save' "

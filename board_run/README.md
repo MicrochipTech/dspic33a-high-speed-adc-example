@@ -32,6 +32,10 @@ log, a `summary.txt` (the same text printed on screen), and `session.json`
 (which hex file(s), their SHA-256, your git revision and working-tree state,
 the PC clock, and your answer about a signal generator on the R5 input).
 
+(For the lead, not the colleague: the same run without anyone at the board is
+`tools\board_run.bat --remote`, through the relay - see CLAUDE.md's
+`tools/board_run.py` and `tools/remote.py` rows.)
+
 ## The firmware images
 
 | File | Revision | What it is |

@@ -108,7 +108,12 @@ class Target:
     def __init__(self, port: str, baud: int = BAUD, on_log=None):
         import serial  # pyserial
         self.on_log = on_log  # optional callable(str): the console transcript
-        self.ser = serial.Serial(port, baud, timeout=0.05)
+        # serial_for_url() opens a plain COM port exactly like serial.Serial()
+        # did (its "port" and "hwgrep://" handlers fall back to it for any
+        # string without "://"), and additionally understands "socket://
+        # host:port" - the tunnel URL tools/remote.py's RemoteBench hands
+        # back, transparent to everything below this line.
+        self.ser = serial.serial_for_url(port, baud, timeout=0.05)
         self.port = port
         self.sync()
 

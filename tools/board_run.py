@@ -124,6 +124,7 @@ from types import SimpleNamespace
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np  # noqa: E402
 import protocol  # noqa: E402
+import remote  # noqa: E402  (--remote: RemoteBench over bench_client's flash/tunnel requests)
 import eval_board  # noqa: E402  (BR.2: the one place summary.txt's content is built)
 from eval_chain import tri_eval as chain_tri_eval  # noqa: E402
 from eval_chain import grid_ok as chain_grid_ok  # noqa: E402
@@ -287,14 +288,28 @@ def read_reset_banner(target, log, block, timeout=5.0):
     return lines
 
 
-def handle_timeout(target, log, block, ui):
+def handle_timeout(target, log, block, ui, remote=False):
     """board-run-task.md section 2 decision 6 / section 4.2: log it, ask
     for a reset, read the banner, then let the caller carry on with the
-    next block - this function never raises."""
+    next block - this function never raises.
+
+    remote=True (--remote, BR's remote-bench path): there is nobody at the
+    board to press RESET, and the recovery is automatic - close the tunnel,
+    re-flash the SAME image (which resets the board the way RESET would),
+    reopen the tunnel, and read the banner. This is exactly what
+    RemoteTarget.boot_banner() does; read_reset_banner() already calls
+    target.boot_banner() when the target has one (ReplayTarget for the
+    local --selftest, RemoteTarget here), so the only difference at this
+    level is what is printed and that no ENTER is waited for."""
     log.ev(block, "timeout")
-    ui.say(f"{block}: no reply within the timeout - press RESET on the board, then ENTER")
-    ui.prompt("")
-    log.ev(block, "reset requested")
+    if remote:
+        ui.say(f"{block}: no reply within the timeout - closing the tunnel and "
+               "re-flashing to reset the board")
+        log.ev(block, "reset: remote re-flash")
+    else:
+        ui.say(f"{block}: no reply within the timeout - press RESET on the board, then ENTER")
+        ui.prompt("")
+        log.ev(block, "reset requested")
     banner = read_reset_banner(target, log, block)
     log.ev(block, f"reset: boot banner captured ({len(banner)} lines)" if banner
             else "reset: no banner captured")
@@ -330,7 +345,7 @@ def build_grab_blob(n, meta, samples):
     return header.encode("ascii", "replace") + payload
 
 
-def run_r0(target, log, ui):
+def run_r0(target, log, ui, remote=False):
     block = "R0"
     log.ev(block, "block start")
     try:
@@ -338,7 +353,7 @@ def run_r0(target, log, ui):
             target.sync(timeout=TIMEOUT_SYNC)
             log.ev(block, "sync: ready")
     except TimeoutError:
-        handle_timeout(target, log, block, ui)
+        handle_timeout(target, log, block, ui, remote=remote)
     ok_v, version_lines = send(target, log, block, "version", timeout=TIMEOUT_CMD)
     ok_h, help_lines = send(target, log, block, "help", timeout=TIMEOUT_CMD)
     ok_s, status_lines = send(target, log, block, "status", timeout=TIMEOUT_CMD)
@@ -349,7 +364,7 @@ def run_r0(target, log, ui):
     return dict(verdict=verdict, caps=caps, version=version_lines, status=status_lines)
 
 
-def run_simple_block(target, log, caps, ui, block, cap_name, command, timeout):
+def run_simple_block(target, log, caps, ui, block, cap_name, command, timeout, remote=False):
     """R1 (regs), R3 (test all), R6 (route list), R7 (status): one command,
     gated on the capability the firmware's own help advertised."""
     log.ev(block, "block start")
@@ -360,7 +375,7 @@ def run_simple_block(target, log, caps, ui, block, cap_name, command, timeout):
     try:
         ok, lines = send(target, log, block, command, timeout=timeout)
     except TimeoutError:
-        handle_timeout(target, log, block, ui)
+        handle_timeout(target, log, block, ui, remote=remote)
         log.ev(block, "block end timeout")
         return dict(verdict="timeout")
     verdict = "ok" if ok else "fail"
@@ -368,7 +383,7 @@ def run_simple_block(target, log, caps, ui, block, cap_name, command, timeout):
     return dict(verdict=verdict, lines=lines)
 
 
-def run_r2(target, log, caps, ui):
+def run_r2(target, log, caps, ui, remote=False):
     block = "R2"
     log.ev(block, "block start")
     if "chain" not in caps:
@@ -378,7 +393,7 @@ def run_r2(target, log, caps, ui):
     try:
         ok, lines = send(target, log, block, "chain all", timeout=TIMEOUT_R2)
     except TimeoutError:
-        handle_timeout(target, log, block, ui)
+        handle_timeout(target, log, block, ui, remote=remote)
         log.ev(block, "block end timeout")
         return dict(verdict="timeout")
     ended = any(l.strip().startswith("@END") for l in lines)
@@ -418,7 +433,7 @@ def _stream_grabs(target, log, block, label, n_grabs, check_triangle, fail_frame
     return grabs, ok_all
 
 
-def run_r4(target, log, caps, ui, label, fail_frames):
+def run_r4(target, log, caps, ui, label, fail_frames, remote=False):
     """`fail_frames` is the ONE list shared across R4 and R5 (run_session
     passes the same object to both) and mutated in place: the file names
     it hands out ("<label>-grab-<n>.bin") must be unique over the whole
@@ -449,7 +464,7 @@ def run_r4(target, log, caps, ui, label, fail_frames):
             ok_all = ok_all and ok_off
             per_rate.append(dict(ksps=ksps, on_ok=ok_on, grabs=grabs, off_ok=ok_off))
     except TimeoutError:
-        handle_timeout(target, log, block, ui)
+        handle_timeout(target, log, block, ui, remote=remote)
         log.ev(block, "block end timeout")
         return dict(verdict="timeout", rates=per_rate)
     verdict = "ok" if ok_all else "fail"
@@ -457,7 +472,7 @@ def run_r4(target, log, caps, ui, label, fail_frames):
     return dict(verdict=verdict, rates=per_rate)
 
 
-def run_r5(target, log, caps, ui, label, ksps, core, pinsel, samc, fail_frames):
+def run_r5(target, log, caps, ui, label, ksps, core, pinsel, samc, fail_frames, remote=False):
     """See run_r4()'s docstring for why `fail_frames` is shared, not
     block-local."""
     block = "R5"
@@ -478,7 +493,7 @@ def run_r5(target, log, caps, ui, label, ksps, core, pinsel, samc, fail_frames):
         ok_off, _ = send(target, log, block, "stream off", timeout=TIMEOUT_CMD)
         ok_all = ok_all and ok_off
     except TimeoutError:
-        handle_timeout(target, log, block, ui)
+        handle_timeout(target, log, block, ui, remote=remote)
         log.ev(block, "block end timeout")
         return dict(verdict="timeout", grabs=grabs)
     verdict = "ok" if ok_all else "fail"
@@ -487,10 +502,16 @@ def run_r5(target, log, caps, ui, label, ksps, core, pinsel, samc, fail_frames):
 
 
 def run_session(target, ui, label, r5_ksps=R5_DEFAULT_KSPS, r5_core=R5_DEFAULT_CORE,
-                 r5_pinsel=R5_DEFAULT_PINSEL, r5_samc=R5_DEFAULT_SAMC):
+                 r5_pinsel=R5_DEFAULT_PINSEL, r5_samc=R5_DEFAULT_SAMC, remote=False):
     """R0..R7 against one already-open target, in order. Returns
     (log, results, fail_frames) - results[block]['verdict'] is one of
-    ok/fail/timeout/not_available."""
+    ok/fail/timeout/not_available.
+
+    remote=True (--remote) only changes what a mid-run timeout does
+    (handle_timeout()'s own docstring): the sequencing itself, and the
+    small Target interface this needs (sync/cmd/grab/close, an optional
+    boot_banner), is exactly the one protocol.Target, ReplayTarget and
+    RemoteTarget (below) all implement."""
     log = RunLog()
     log.ev("-", f"RUNNER_VERSION={RUNNER_VERSION} label={label} port={getattr(target, 'port', '?')}")
     if hasattr(target, "boot_banner"):
@@ -499,15 +520,16 @@ def run_session(target, ui, label, r5_ksps=R5_DEFAULT_KSPS, r5_core=R5_DEFAULT_C
                 log.rx("SETUP", l.rstrip("\r"))
     results = {}
     fail_frames = []  # shared by R4 and R5 - see run_r4()'s docstring
-    results["R0"] = run_r0(target, log, ui)
+    results["R0"] = run_r0(target, log, ui, remote=remote)
     caps = results["R0"].get("caps", set())
-    results["R1"] = run_simple_block(target, log, caps, ui, "R1", "regs", "regs", TIMEOUT_R1)
-    results["R2"] = run_r2(target, log, caps, ui)
-    results["R3"] = run_simple_block(target, log, caps, ui, "R3", "test", "test all", TIMEOUT_R3)
-    results["R4"] = run_r4(target, log, caps, ui, label, fail_frames)
-    results["R5"] = run_r5(target, log, caps, ui, label, r5_ksps, r5_core, r5_pinsel, r5_samc, fail_frames)
-    results["R6"] = run_simple_block(target, log, caps, ui, "R6", "route", "route list", TIMEOUT_R6)
-    results["R7"] = run_simple_block(target, log, caps, ui, "R7", "status", "status", TIMEOUT_R7)
+    results["R1"] = run_simple_block(target, log, caps, ui, "R1", "regs", "regs", TIMEOUT_R1, remote=remote)
+    results["R2"] = run_r2(target, log, caps, ui, remote=remote)
+    results["R3"] = run_simple_block(target, log, caps, ui, "R3", "test", "test all", TIMEOUT_R3, remote=remote)
+    results["R4"] = run_r4(target, log, caps, ui, label, fail_frames, remote=remote)
+    results["R5"] = run_r5(target, log, caps, ui, label, r5_ksps, r5_core, r5_pinsel, r5_samc, fail_frames,
+                            remote=remote)
+    results["R6"] = run_simple_block(target, log, caps, ui, "R6", "route", "route list", TIMEOUT_R6, remote=remote)
+    results["R7"] = run_simple_block(target, log, caps, ui, "R7", "status", "status", TIMEOUT_R7, remote=remote)
     return log, results, fail_frames
 
 
@@ -742,6 +764,209 @@ def open_target(port, ui):
         else:
             ui.say(f"cannot open {port}: {e}")
         raise
+
+
+# ---------------------------------------------------------------------------
+# --remote: the colleague's board through tools/remote.py's RemoteBench
+# (bench_client's `flash`/`tunnel` requests) instead of a local COM port.
+# See the module docstring's "--remote" paragraph for the sequencing this
+# section drives; RemoteTarget is the one piece the R0..R7 core (above)
+# needs to know nothing new about a remote session - it only ever sees the
+# same sync/cmd/grab/close/boot_banner interface ReplayTarget already gave
+# it for --selftest.
+# ---------------------------------------------------------------------------
+_HEX_REV_RE = re.compile(r"-([0-9A-Fa-f]{6,40})\.hex$")
+_BANNER_REV_RE = re.compile(r"\bgit ([0-9A-Fa-f]{6,40})")
+
+
+def hex_expected_rev(path):
+    """The revision board_run/'s own naming convention
+    ("<A|B>-<board>-<rev>.hex") carries in a hex file's name - None if the
+    name does not end that way (a --hex-a/--hex-b override with a
+    different naming scheme skips the check rather than false-alarming on
+    it)."""
+    m = _HEX_REV_RE.search(os.path.basename(path))
+    return m.group(1) if m else None
+
+
+def extract_banner_rev(text):
+    """The revision a boot banner's "... git <rev>[+local changes] (...)"
+    carries (board.h's BUILD_ID) - None if the text has no such line at
+    all (a flash that produced no banner in the `--after` window)."""
+    m = _BANNER_REV_RE.search(text or "")
+    return m.group(1) if m else None
+
+
+class RemoteTarget:
+    """protocol.Target over a bench_client tunnel (tools/remote.py's
+    RemoteBench), with the one addition run_session()'s R0..R7 core
+    already knows how to use: boot_banner(). The first call (run_session()'s
+    own "SETUP" banner, read right after connecting) just returns the
+    banner flash_and_open() already captured while programming the board -
+    no second flash. Every later call is a genuine mid-run recovery
+    (handle_timeout(), remote=True): close the tunnel, re-flash the SAME
+    hex file (which resets the board exactly as pressing RESET would),
+    reopen the tunnel, open a fresh protocol.Target on it, and hand back
+    its boot banner - mirroring ReplayTarget.boot_banner()'s own
+    first-call-is-free/later-calls-are-a-reset pattern for the local
+    --selftest, one level up (a real re-flash instead of a canned string)."""
+
+    def __init__(self, bench, hex_path, url, initial_banner_text=""):
+        self.bench = bench
+        self.hex_path = hex_path
+        self.port = url
+        self.target = protocol.Target(url)
+        self._initial_banner = initial_banner_text.splitlines()
+        self._used_initial = False
+
+    def cmd(self, line, timeout=5.0):
+        return self.target.cmd(line, timeout=timeout)
+
+    def grab(self, timeout=10.0):
+        return self.target.grab(timeout=timeout)
+
+    def sync(self, timeout=20.0):
+        return self.target.sync(timeout=timeout)
+
+    def close(self):
+        self.target.close()
+        self.bench.close_tunnel()
+
+    def boot_banner(self):
+        if not self._used_initial:
+            self._used_initial = True
+            return self._initial_banner
+        self.bench.close_tunnel()
+        code, banner_text = self.bench.flash(self.hex_path, after=5)
+        if code != 0:
+            # Nothing else in this module raises out of boot_banner() /
+            # read_reset_banner() - handle_timeout() would have no block
+            # left to run against. A re-flash failing mid-run is not a
+            # timeout any more, it is a new, worse problem, so it is
+            # allowed to stop the whole thing rather than be swallowed.
+            raise RuntimeError(f"remote re-flash of {self.hex_path} failed while recovering "
+                                f"from a timeout: {banner_text}")
+        url = self.bench.open_tunnel()
+        self.port = url
+        self.target = protocol.Target(url)
+        return banner_text.splitlines()
+
+
+def flash_and_open(bench, hex_path, which, ui, after=5):
+    """One "program, check the banner's revision, open the tunnel" step -
+    used for both A and B in perform_full_run_remote(). Raises RuntimeError
+    with a message meant to be read as-is (perform_full_run_remote() prints
+    it and stops) on a flash failure or a revision that does not match the
+    hex file's own name; returns (RemoteTarget, flash_info) on success,
+    flash_info going straight into session["hex"]'s entry for this file."""
+    expected = hex_expected_rev(hex_path)
+    ui.say(f"flashing {which} firmware ({hex_path}) via the remote bench ...")
+    code, text = bench.flash(hex_path, after=after)
+    if code != 0:
+        raise RuntimeError(f"remote flash of {which} firmware ({hex_path}) failed: {text}")
+    got = extract_banner_rev(text)
+    if expected and (got or "").lower() != expected.lower():
+        raise RuntimeError(
+            f"remote flash of {which} firmware: banner revision mismatch - expected "
+            f"{expected}, got {got or 'none'} in the boot banner. Wrong hex flashed, the "
+            "board did not reboot, or the console was not reachable in the --after window.")
+    ui.say(f"{which}: banner revision {got or '(none found)'} " +
+           ("confirmed" if expected else "(no expected revision to check - unusual hex name)"))
+    url = bench.open_tunnel()
+    target = RemoteTarget(bench, hex_path, url, initial_banner_text=text)
+    return target, dict(flash_exit_code=code, banner=text)
+
+
+def perform_full_run_remote(bench_client, ui, out_dir, hex_a=None, hex_b=None,
+                             r5_ksps=R5_DEFAULT_KSPS, r5_core=R5_DEFAULT_CORE,
+                             r5_pinsel=R5_DEFAULT_PINSEL, r5_samc=R5_DEFAULT_SAMC,
+                             board_run_dir=BOARD_RUN_DIR, readme_path=README_PATH,
+                             repo_root=REPO_ROOT, git_run=subprocess.run, yes=False,
+                             remote_bench_cls=remote.RemoteBench, bench_env=None):
+    """perform_full_run()'s remote twin: no COM port, no "program the
+    firmware, then press ENTER" prompts - RemoteBench.flash() does the
+    programming, its banner is checked against the hex file's own name
+    before anything is sent to it, and each firmware gets its own tunnel
+    (opened after that firmware is confirmed, closed before the next
+    flash - the agent refuses `flash` while one is open). The hardware
+    checklist prompt stays: the lead confirms it on the colleague's behalf,
+    since there is still a real board with real wiring at the other end of
+    the tunnel - `yes=True` (--yes) answers it without asking, for a
+    non-interactive lead session. bench_env lets --selftest hand the fake
+    bench_client its FAKE_BENCH_* control variables without touching this
+    process's own environment."""
+    if hex_a is None:
+        hex_a = find_hex(board_run_dir, "A")
+    if hex_a is None:
+        raise RuntimeError(f"no A-*.hex found in {board_run_dir} - 'git pull' again, or check "
+                            f"{os.path.join(board_run_dir, 'SHA256SUMS.txt')} for what should be there")
+    if hex_b is None:
+        hex_b = find_hex(board_run_dir, "B")
+
+    checklist = load_checklist(readme_path)
+    if checklist:
+        ui.say("Hardware set-up (remote - confirm this on the colleague's behalf):")
+        for item in checklist:
+            ui.say(f"  - {item}")
+    else:
+        ui.say(f"WARNING: could not read the hardware checklist from {readme_path} - "
+               "check it by hand before continuing.")
+    if yes:
+        ui.say("hardware set-up: --yes given, not asking for confirmation")
+    else:
+        ui.prompt("hardware set-up confirmed, press ENTER: ")
+
+    git_info = get_git_info(repo_root, run=git_run)
+    if git_info["error"]:
+        ui.say(f"WARNING: could not read git status ({git_info['error']}) - "
+               "session.json will not record a revision.")
+    elif git_info["dirty"]:
+        ui.say("WARNING: the working tree is not clean (git status --porcelain is non-empty) - "
+               "recorded in session.json, but a local edit changes what actually runs.")
+
+    session = dict(runner_version=RUNNER_VERSION, transport="remote", bench_client=bench_client,
+                    pc_time=time.strftime("%Y-%m-%d %H:%M:%S"), python=platform.python_version(),
+                    git=git_info, hex=[])
+
+    bench = remote_bench_cls(bench_client=bench_client, env=bench_env)
+    with bench:
+        info_a = prepare_hex(hex_a, "OLD", ui)
+        target_a, flash_info_a = flash_and_open(bench, hex_a, "OLD", ui)
+        info_a.update(flash_info_a)
+        session["hex"].append(info_a)
+        try:
+            log_a, results_a, frames_a = run_session(target_a, ui, "A", r5_ksps, r5_core, r5_pinsel,
+                                                       r5_samc, remote=True)
+        finally:
+            target_a.close()
+
+        log_b = None
+        frames_b = []
+        if hex_b is not None:
+            info_b = prepare_hex(hex_b, "NEW", ui)
+            target_b, flash_info_b = flash_and_open(bench, hex_b, "NEW", ui)
+            info_b.update(flash_info_b)
+            session["hex"].append(info_b)
+            try:
+                log_b, results_b, frames_b = run_session(target_b, ui, "B", r5_ksps, r5_core, r5_pinsel,
+                                                           r5_samc, remote=True)
+            finally:
+                target_b.close()
+        else:
+            ui.say("B firmware not available yet (added in BR.8, board-run-task.md section BR) "
+                   "- running A only.")
+            session["hex"].append(dict(which="NEW", path=None, sha256=None, sha256_status="not_present"))
+
+    yn = ui.prompt("R5: signal generator connected to the input pin? [y/N] ").strip().lower()
+    signal_present = yn.startswith("y")
+    freq = ui.prompt("R5: signal frequency (Hz)? ").strip() if signal_present else None
+    session["r5_signal"] = dict(present=signal_present, frequency_hz=freq)
+
+    board = board_label(results_a["R0"].get("version", []))
+    zip_path, summary = write_zip(out_dir, board, session, log_a, log_b, frames_a, frames_b)
+    print(summary)
+    print(f"file to send: {zip_path}")
+    return 0 if summary.rstrip("\n").splitlines()[-1] == "overview: PASS" else 1
 
 
 # ---------------------------------------------------------------------------
@@ -1019,12 +1244,19 @@ class ReplayTarget:
             return True, ["stream: off, boot configuration restored"]
         return False, ["unknown command"]
 
-    def grab(self, timeout=10.0):
+    def _grab_wire(self):
+        """The three raw wire pieces (header text line, payload bytes, tail
+        - prompt/CRC line/ACK-or-NAK) one 'stream grab' cycle would put on
+        the console, exactly as grab() builds them, split out so a fixture
+        that plays this same replay over a REAL socket (a bench_client
+        stand-in, tests/host/fake_bench_client.py) can send the actual
+        bytes a real Target reads, instead of the (ok, samples, meta) tuple
+        grab() decodes them into for the in-process --selftest here."""
         if not self.chain_on:
             header = "GRAB n=0 from=0 ksps=0 ov=0 late=0 missed=0 halves=0 xfer=0 slp=0 dachz=0\r\n"
             crc = protocol.crc16_ccitt_false(b"")
             tail = f"\r\nCRC {crc:04X}\r\n> ".encode("ascii") + protocol.NAK
-            return protocol.parse_grab_frame(header, b"", tail)
+            return header, b"", tail
         i = self._grab_i.get(self.chain_ksps, 0)
         self._grab_i[self.chain_ksps] = i + 1
         n = 512
@@ -1041,7 +1273,10 @@ class ReplayTarget:
         header = (f"GRAB n={n} from=0 ksps={self.chain_ksps} ov=0 late=0 missed=0 "
                   f"halves=2 xfer={2 * n} slp={slp} dachz=400000000\r\n")
         tail = f"\r\nCRC {crc:04X}\r\n> ".encode("ascii") + protocol.ACK
-        return protocol.parse_grab_frame(header, payload, tail)
+        return header, payload, tail
+
+    def grab(self, timeout=10.0):
+        return protocol.parse_grab_frame(*self._grab_wire())
 
 
 def selftest():
@@ -1256,6 +1491,106 @@ def selftest():
         check("perform_full_run(): a dirty tree is reported to the operator, not fatal",
               any("not clean" in s for s in ui_ab.said))
 
+    # -----------------------------------------------------------------
+    # --remote: perform_full_run_remote() against tests/host/fake_bench_client.py
+    # - never the real bench_client.py or a real relay/agent (that fixture's
+    # own docstring). One FAKE_BENCH_STATE_DIR per scenario below: it is how
+    # the fixture's separate flash/tunnel subprocesses agree on which
+    # firmware is "flashed", so reusing one across scenarios would leak a
+    # hang_done marker or a wrong-revision flash from one into the next.
+    # -----------------------------------------------------------------
+    fake_bench_client = os.path.join(REPO_ROOT, "tests", "host", "fake_bench_client.py")
+
+    def make_remote_board_run(tmp):
+        board_run_dir = os.path.join(tmp, "board_run")
+        os.makedirs(board_run_dir)
+        a_path = os.path.join(board_run_dir, "A-EV74H48A-deadbee.hex")
+        b_path = os.path.join(board_run_dir, "B-EV74H48A-cafefee.hex")
+        with open(a_path, "wb") as f:
+            f.write(b":10000000FF\n")
+        with open(b_path, "wb") as f:
+            f.write(b":10000000EE\n")
+        with open(os.path.join(board_run_dir, "SHA256SUMS.txt"), "w") as f:
+            f.write(f"{compute_sha256(a_path)} *A-EV74H48A-deadbee.hex\n")
+            f.write(f"{compute_sha256(b_path)} *B-EV74H48A-cafefee.hex\n")
+        readme_path = os.path.join(board_run_dir, "README.md")
+        with open(readme_path, "w", encoding="utf-8") as f:
+            f.write("<!-- BOARD_RUN_CHECKLIST:BEGIN\nc\n-->\n"
+                     "- confirm the board is plugged in\n<!-- BOARD_RUN_CHECKLIST:END -->\n")
+        return board_run_dir, readme_path, a_path, b_path
+
+    # ---- full A+B remote session (happy path) ----
+    with tempfile.TemporaryDirectory() as tmp:
+        board_run_dir, readme_path, a_path, b_path = make_remote_board_run(tmp)
+        ui_remote = StubUI(answers=["", "n"])  # checklist ENTER, R5 signal "n"
+        out_dir = os.path.join(tmp, "out")
+        rc = perform_full_run_remote(
+            fake_bench_client, ui_remote, out_dir, hex_a=a_path, hex_b=b_path,
+            board_run_dir=board_run_dir, readme_path=readme_path, repo_root=tmp,
+            git_run=fake_git_clean,
+            bench_env=dict(os.environ, FAKE_BENCH_STATE_DIR=os.path.join(tmp, "state")))
+        check("perform_full_run_remote(): full A+B session reports PASS", rc == 0)
+        zips = [f for f in os.listdir(out_dir) if f.endswith(".zip")]
+        with zipfile.ZipFile(os.path.join(out_dir, zips[0])) as z:
+            names = z.namelist()
+            session_back = json.loads(z.read("session.json"))
+        check("perform_full_run_remote(): zip has both A.log and B.log",
+              "A.log" in names and "B.log" in names)
+        check("perform_full_run_remote(): session.json records transport and bench_client path",
+              session_back["transport"] == "remote" and session_back["bench_client"] == fake_bench_client)
+        check("perform_full_run_remote(): each hex entry carries its flash exit code and banner",
+              all(h.get("flash_exit_code") == 0 and "git" in (h.get("banner") or "")
+                  for h in session_back["hex"]))
+
+    # ---- flash failure (exit 9) stopping cleanly ----
+    with tempfile.TemporaryDirectory() as tmp:
+        board_run_dir, readme_path, a_path, b_path = make_remote_board_run(tmp)
+        try:
+            perform_full_run_remote(
+                fake_bench_client, StubUI(answers=["", "n"]), os.path.join(tmp, "out"),
+                hex_a=a_path, hex_b=b_path, board_run_dir=board_run_dir, readme_path=readme_path,
+                repo_root=tmp, git_run=fake_git_clean,
+                bench_env=dict(os.environ, FAKE_BENCH_STATE_DIR=os.path.join(tmp, "state"),
+                                FAKE_BENCH_FAIL9="1"))
+            check("perform_full_run_remote(): a flash failure (exit 9) stops cleanly", False)
+        except RuntimeError as e:
+            check("perform_full_run_remote(): a flash failure (exit 9) stops cleanly",
+                  "exit 9" in str(e) or "programmer" in str(e).lower())
+
+    # ---- banner-revision mismatch stopping cleanly ----
+    with tempfile.TemporaryDirectory() as tmp:
+        board_run_dir, readme_path, a_path, b_path = make_remote_board_run(tmp)
+        try:
+            perform_full_run_remote(
+                fake_bench_client, StubUI(answers=["", "n"]), os.path.join(tmp, "out"),
+                hex_a=a_path, hex_b=b_path, board_run_dir=board_run_dir, readme_path=readme_path,
+                repo_root=tmp, git_run=fake_git_clean,
+                bench_env=dict(os.environ, FAKE_BENCH_STATE_DIR=os.path.join(tmp, "state"),
+                                FAKE_BENCH_WRONG_REV="1"))
+            check("perform_full_run_remote(): a banner revision mismatch stops cleanly", False)
+        except RuntimeError as e:
+            check("perform_full_run_remote(): a banner revision mismatch stops cleanly",
+                  "revision mismatch" in str(e))
+
+    # ---- a mid-run timeout, recovered by closing the tunnel and re-flashing ----
+    with tempfile.TemporaryDirectory() as tmp:
+        board_run_dir, readme_path, a_path, b_path = make_remote_board_run(tmp)
+        env = dict(os.environ, FAKE_BENCH_STATE_DIR=os.path.join(tmp, "state"),
+                   FAKE_BENCH_TIMEOUT_BLOCK="regs")
+        bench = remote.RemoteBench(bench_client=fake_bench_client, env=env)
+        with bench:
+            target, _ = flash_and_open(bench, a_path, "OLD", StubUI())
+            try:
+                log_r, results_r, _ = run_session(target, StubUI(), "A", remote=True)
+            finally:
+                target.close()
+        check("--remote timeout recovery: R1 (regs) times out once",
+              results_r["R1"]["verdict"] == "timeout")
+        check("--remote timeout recovery: logged closing the tunnel and re-flashing",
+              any("reset: remote re-flash" in l for l in log_r.lines))
+        check("--remote timeout recovery: later blocks still ran, against the reopened tunnel",
+              results_r["R2"]["verdict"] == "ok" and results_r["R7"]["verdict"] == "ok")
+
     print("board_run", "PASS" if ok_all else "FAIL")
     return 0 if ok_all else 1
 
@@ -1278,6 +1613,16 @@ def main(argv=None):
     ap.add_argument("--r5-core", type=int, default=R5_DEFAULT_CORE)
     ap.add_argument("--r5-pinsel", type=int, default=R5_DEFAULT_PINSEL)
     ap.add_argument("--r5-samc", type=int, default=R5_DEFAULT_SAMC)
+    ap.add_argument("--remote", action="store_true",
+                     help="the colleague's board through bench_client's flash/tunnel requests "
+                          "(CLAUDE.md's 'Remote board access') instead of a local COM port - "
+                          "no port argument, no 'program the firmware, press ENTER' prompts")
+    ap.add_argument("--bench-client",
+                     help="path to bench_client.py (default: $BENCH_CLIENT, else "
+                          "C:\\work\\Claas\\Relay\\bench_client.py) - only with --remote")
+    ap.add_argument("--yes", action="store_true",
+                     help="answer the hardware set-up checklist prompt without asking "
+                          "(--remote only; the R5 signal-generator question still asks)")
     a = ap.parse_args(argv)
 
     if a.selftest:
@@ -1286,8 +1631,13 @@ def main(argv=None):
         print_port_list()
         return 0
 
-    port = pick_port(a.port)
     ui = ConsoleUI()
+    if a.remote:
+        bench_client = a.bench_client or os.environ.get("BENCH_CLIENT", remote.DEFAULT_BENCH_CLIENT)
+        return perform_full_run_remote(bench_client, ui, a.out_dir, a.hex_a, a.hex_b,
+                                        a.r5_ksps, a.r5_core, a.r5_pinsel, a.r5_samc, yes=a.yes)
+
+    port = pick_port(a.port)
     return perform_full_run(port, ui, a.out_dir, a.hex_a, a.hex_b,
                              a.r5_ksps, a.r5_core, a.r5_pinsel, a.r5_samc)
 
