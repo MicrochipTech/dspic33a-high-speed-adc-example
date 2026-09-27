@@ -1,1 +1,11 @@
 *.sh text eol=lf
+
+# board_run/*.hex (BR.4): committed prebuilt firmware, pinned byte for byte
+# by board_run/SHA256SUMS.txt. Without this, core.autocrlf=true silently
+# turns the toolchain's CRLF line endings into LF on `git add` (found while
+# staging A-EV74H48A-b41af3b.hex: the blob came out 5702 bytes - one per
+# line - smaller than the file actually built) and the exact bytes on a
+# colleague's checkout would then depend on THEIR core.autocrlf/core.eol,
+# not on what is committed. "binary" disables every text/eol/diff
+# conversion, so the file round-trips identically everywhere.
+*.hex binary
