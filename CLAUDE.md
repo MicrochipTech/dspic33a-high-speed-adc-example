@@ -114,6 +114,51 @@ python tools\sim_trap.py --fault 65536            expect "[simtest] FAIL", one m
 of wall clock, and the user asked on 24.09.2026 that it only ever run when he says so.
 Build the simulator variant to prove it still compiles; run it when asked.
 
+**The smoke run [SMOKE] is the short one** (`docs/IMPLEMENTATION-PLAN.md` P0.7, rule 6):
+the simulator build with `-DSIM_SMOKE=1` boots exactly like the normal simulator build,
+then - instead of starting the stream - types `help`, `version`, `status` into the
+parser through `cmd_parser_feed_char()` (`smoke_run()` in `main.c`; the simulator's
+UART receiver takes no injected bytes, so this is the only way in) and prints
+`[smoke] DONE`. It proves that boot and console reach the far side without a CPU trap
+after a change to either; it says nothing about the ping-pong logic (that is the
+acceptance run) or about registers (that is `tools\trace.bat`).
+
+```
+tools\build.bat smoke                     -> build\adc_dma_40msps_smoke.elf       (-Wall -Wextra clean)
+python tools\sim_trap.py --smoke          expect "[smoke] PASS"; console text in build\smoke.log
+tools\build.bat smoke fault [n]           -> build\adc_dma_40msps_smokefault.elf  (SIM_SMOKE_FAULT=n: a
+python tools\sim_trap.py --smoke --elf build\adc_dma_40msps_smokefault.elf --log build\smokefault.log
+                                          deliberate trap after the script; expect "[smoke] FAIL")
+```
+
+The negative test has four cases (`smoke_run()`, `main.c`): 1 = the plan's misaligned
+32-bit read, 2 = a read from an unmapped address, 3 = the stack pushed past SPLIM,
+4 = a call into an illegal opcode. **The simulator (MPLAB X v6.35) raises no trap for
+1 and 2** - the read returns 0 and the firmware reaches `[smoke] DONE`, so only the
+expected.log diff fails the run. Case 3 sets `INTCON1.STKERR` and the simulator aborts
+with E0110 at the dispatch; case 4 aborts with W0014 "Invalid opcode". `build.bat smoke
+fault` therefore defaults to case 3 (the one real trap), and `sim_trap.py --smoke` reads
+INTCON1 after the halt for exactly that outcome. Do not read a clean smoke run as "no
+misaligned access anywhere": that trap only exists on silicon.
+
+`sim_trap.py --smoke` fails on a `[TRAP]` block or fail code in the console text, on
+`trap_seen`/`fail_code` != 0 after the halt, on a simulator error message, on no
+`[smoke] DONE` within `--smoke-timeout` (180 s), and on any difference from
+`tests/smoke/expected.log`. The comparison masks the three lines that carry `BUILD_ID`
+(`[boot] adc_dma_40msps <date> <time> git ...`, `build: ...`, `[build] ...` - date, time
+and revision differ between any two builds, and even between the three lines of one
+build, because `__TIME__` is per translation unit) on both sides; everything else must
+match byte for byte, ACK bytes included. A task that changes the console on purpose (a
+new command in `help`) runs `python tools\sim_trap.py --smoke --update-expected` and
+commits the new `expected.log` with the change; the diff it prints first is the review.
+Measured 27.09.2026 (`tests/baseline.md`): 82-96 s wall clock per run, of which MDB
+start-up and programming are 35-40 s and the run itself 40-49 s (4.3 k UART characters
+at about 10 ms each); the firmware side is under a minute, so under rule 6 the smoke run
+may run without asking. The smoke path is preprocessor-guarded (`SIM_SMOKE`,
+`SIM_SMOKE_FAULT`) and `tools\fncmp.py --ignore-strings` shows the hardware, sim and nano
+ELFs function-identical with and without it. No MPLAB X configuration exists for it; the
+command line is the way to build it.
+
 ## Rules
 
 - Say what has and has not run on silicon. `docs/HARDWARE-LOG.md` is the record; add a

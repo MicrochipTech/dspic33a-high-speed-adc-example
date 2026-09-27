@@ -64,6 +64,104 @@
 #endif
 #define STATUS_FAST_LINES     12u
 
+#if defined(__MPLAB_DEBUGGER_SIMULATOR) && defined(SIM_SMOKE)
+/* The smoke build (tools\build.bat smoke, tools\sim_trap.py --smoke):
+ * the simulator boots this firmware exactly as the normal simulator
+ * build does, but instead of the ping-pong stream it types a fixed
+ * script into the console and stops. What it proves is that the boot
+ * path and the console reach the far side without a CPU trap - stack,
+ * alignment, RAM layout - in under a minute, after every change that
+ * touches them (docs/IMPLEMENTATION-PLAN.md, rule 6). Nothing here
+ * exists in any other build.
+ *
+ * The script goes in through cmd_parser_feed_char(), the same entry the
+ * receive interrupt uses on silicon, one byte at a time, CR-terminated:
+ * the simulator's UART receiver takes no injected bytes (MDB's uart2io
+ * input options are silently ignored on this device), and the receive
+ * interrupt would not be dispatched anyway. Echo, dispatch, reply and
+ * prompt all run as they would on the board, only in main() context.
+ *
+ * tests/smoke/expected.log is what this printed when it was written;
+ * sim_trap.py --smoke diffs the run against it with the build-id lines
+ * masked. A command added to the script, or a changed reply, is a
+ * change to expected.log in the same commit. */
+#include "cmd_parser.h"
+
+static const char *const smoke_script[] = {
+    "help",       /* every registered command - the table is full when one is missing */
+    "version",    /* [build] block, board, input, console                              */
+    "status",     /* the counters, all idle                                            */
+};
+
+static void smoke_run(void)
+{
+    for (size_t i = 0; i < sizeof smoke_script / sizeof smoke_script[0]; i++) {
+        const char *s = smoke_script[i];
+        console_puts("[smoke] > ");
+        console_puts(s);
+        console_puts("\r\n");
+        while (*s != '\0') { cmd_parser_feed_char(*s++); }
+        cmd_parser_feed_char('\r');      /* Enter: the line is dispatched here */
+    }
+#ifdef SIM_SMOKE_FAULT
+    /* The negative test (build.bat smoke fault [n]): a deliberate CPU
+     * trap after the script, which sim_trap.py --smoke must report as a
+     * failure - no "[smoke] DONE", a [TRAP] block if the handler runs,
+     * INTCON1's trap flags set after the halt. Numbered, because the
+     * simulator does not model every trap the silicon raises (which one
+     * it does is recorded in tests/baseline.md):
+     *   1  a 32-bit read from an odd address (the plan's case). The
+     *      address goes through a volatile variable: given a constant
+     *      odd address, xc-dsc (-O1) quietly emits four byte loads and
+     *      no misaligned access ever happens (seen 27.09.2026). With
+     *      the address opaque it emits the mov.l.
+     *   2  a 32-bit read from an address outside every memory region
+     *      (0x00FF0000: above data RAM, below the SFR/flash windows).
+     *   3  a stack overflow: W15 pushed past SPLIM.
+     *   4  an illegal opcode: a jump into a data table of zeros is not
+     *      possible in flash, so 0xFFFFFFFF placed in flash and called.
+     * Every one of them is a bug the smoke run exists to catch, so the
+     * simulator's answer to each is worth knowing. Measured 27.09.2026
+     * with MPLAB X v6.35: 1 and 2 execute without any trap (the read
+     * returns 0, "[smoke] DONE" follows, only the expected.log diff
+     * fails the run); 3 sets INTCON1.STKERR and the simulator aborts
+     * with E0110 at the trap dispatch; 4 aborts with W0014 "Invalid
+     * opcode" and E0110. build.bat therefore defaults to 3. */
+    {
+        static volatile uint8_t   fault_bytes[8] __attribute__((aligned(4)));
+        static volatile uintptr_t fault_addr;
+        console_kv("[smoke] FAULT case", SIM_SMOKE_FAULT);
+#if SIM_SMOKE_FAULT == 1
+        fault_addr = (uintptr_t)fault_bytes + 1u;
+        console_puts("[smoke] FAULT: misaligned 32-bit read follows\r\n");
+        console_kv("[smoke] read", *(volatile uint32_t *)fault_addr);
+#elif SIM_SMOKE_FAULT == 2
+        fault_addr = 0x00FF0000u;
+        (void)fault_bytes;
+        console_puts("[smoke] FAULT: 32-bit read from an unmapped address follows\r\n");
+        console_kv("[smoke] read", *(volatile uint32_t *)fault_addr);
+#elif SIM_SMOKE_FAULT == 3
+        (void)fault_bytes; (void)fault_addr;
+        console_puts("[smoke] FAULT: stack pushed past SPLIM follows\r\n");
+        __asm__ volatile ("mov.l SPLIM, w0\n\t"
+                          "add.l w0, #64, w0\n\t"
+                          "mov.l w0, w15\n\t"
+                          "mov.l w0, [w15++]" ::: "w0", "memory");
+        console_puts("[smoke] FAULT: still running after the push\r\n");
+#elif SIM_SMOKE_FAULT == 4
+        (void)fault_bytes; (void)fault_addr;
+        static const uint32_t bad_op[2] __attribute__((section(".text"), aligned(4))) = { 0xFFFFFFFFu, 0xFFFFFFFFu };
+        console_puts("[smoke] FAULT: call into an illegal opcode follows\r\n");
+        ((void (*)(void))(uintptr_t)bad_op)();
+        console_puts("[smoke] FAULT: still running after the call\r\n");
+#else
+#error "SIM_SMOKE_FAULT must be 1..4"
+#endif
+    }
+#endif
+}
+#endif /* smoke build */
+
 int main(void)
 {
     /* Persistent RAM is undefined on the very first power-up (no start-up
@@ -149,7 +247,15 @@ int main(void)
     }
     boot_mark(8u);
 
-#ifdef __MPLAB_DEBUGGER_SIMULATOR
+#if defined(__MPLAB_DEBUGGER_SIMULATOR) && defined(SIM_SMOKE)
+    /* Smoke build: the script instead of the stream, then the marker
+     * line the runner waits for. No stream is started, so the main loop
+     * below only idles (the stand-in produces nothing while no burst
+     * runs) and the marker stays the last line of the log. */
+    console_puts("[boot] simulator: smoke build, running the command script\r\n");
+    smoke_run();
+    console_puts("[smoke] DONE\r\n");
+#elif defined(__MPLAB_DEBUGGER_SIMULATOR)
     /* The simulator's job is the ping-pong check, which needs the stream
      * and has nobody to type "test". SIM_HALF_LEN (build.bat sim <n>)
      * runs it at another buffer size, to show the run-time length reaches

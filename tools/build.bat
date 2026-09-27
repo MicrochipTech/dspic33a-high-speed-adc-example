@@ -5,10 +5,19 @@ rem
 rem    build.bat          firmware for the board -> ..\build\adc_dma_40msps.elf/.hex
 rem    build.bat sim      simulator build        -> ..\build\adc_dma_40msps_sim.elf
 rem    build.bat sim 256  simulator build with 256 samples per half -> ..\build\adc_dma_40msps_sim256.elf
+rem    build.bat smoke    simulator smoke build (-DSIM_SMOKE=1: boot, a fixed
+rem                       command script, "[smoke] DONE", no stream)
+rem                                              -> ..\build\adc_dma_40msps_smoke.elf
+rem    build.bat smoke fault [n]  the same plus -DSIM_SMOKE_FAULT=n (1..4, main.c;
+rem                       default 3 = stack error, 1 = a misaligned 32-bit read): a
+rem                       deliberate trap after the script, the negative test for
+rem                       tools\sim_trap.py --smoke
+rem                                              -> ..\build\adc_dma_40msps_smokefault.elf
+rem                                                 (..._smokefault<n>.elf with n given)
 rem
-rem  The simulator build compiles sim_dma.c instead of dma.c, defines
+rem  The simulator builds compile sim_dma.c instead of dma.c, define
 rem  __MPLAB_DEBUGGER_SIMULATOR (as MPLAB X does for a Simulator
-rem  configuration) and keeps debug symbols for tools\sim_trap.py.
+rem  configuration) and keep debug symbols for tools\sim_trap.py.
 rem
 rem  Verified with the versions below on 2026-09-22. Adjust the two paths
 rem  if your installation differs; nothing else needs to change.
@@ -36,6 +45,23 @@ if /i "%1"=="sim" (
   if not "%2"=="" (
     set EXTRA=-D__MPLAB_DEBUGGER_SIMULATOR=1 -g -DSIM_HALF_LEN=%2
     set OUT=..\build\%TARGET%_sim%2
+  )
+)
+if /i "%1"=="smoke" (
+  set DMA=..\sim_dma.c
+  set EXTRA=-D__MPLAB_DEBUGGER_SIMULATOR=1 -g -DSIM_SMOKE=1
+  set OUT=..\build\%TARGET%_smoke
+  rem build.bat smoke fault [n]: fault case n (1..4, main.c). Default 3, the
+  rem stack error - the one trap of the four that the MPLAB X v6.35 simulator
+  rem raises (tests\baseline.md, P0.7); 1 is the plan's misaligned read, which
+  rem it executes without a trap.
+  if /i "%2"=="fault" (
+    set EXTRA=-D__MPLAB_DEBUGGER_SIMULATOR=1 -g -DSIM_SMOKE=1 -DSIM_SMOKE_FAULT=3
+    set OUT=..\build\%TARGET%_smokefault
+    if not "%3"=="" (
+      set EXTRA=-D__MPLAB_DEBUGGER_SIMULATOR=1 -g -DSIM_SMOKE=1 -DSIM_SMOKE_FAULT=%3
+      set OUT=..\build\%TARGET%_smokefault%3
+    )
   )
 )
 rem  build.bat nano   the dsPIC33AK512MPS506 Curiosity Nano (EV17P63A): other
@@ -69,6 +95,7 @@ if errorlevel 1 (
 echo.
 echo Build OK: %OUT%.elf
 if /i "%1"=="sim" goto :done
+if /i "%1"=="smoke" goto :done
 rem NOTE: bin2hex needs -mdfp too. Without it the HEX is still written, but
 rem it prints "Could not open resource file ... c30_device.info / Please
 rem specify the location of a DFP" and looks like a failed build.

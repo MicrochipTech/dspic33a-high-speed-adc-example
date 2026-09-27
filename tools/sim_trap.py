@@ -28,7 +28,25 @@ Options:
                   with E0110 "Failed to execute instruction" - the
                   handler never runs. Kept for re-checking newer versions.
 
+  --smoke         the smoke run [SMOKE] (docs/IMPLEMENTATION-PLAN.md P0.7):
+                  program build\\adc_dma_40msps_smoke.elf (build.bat smoke),
+                  run until the firmware prints "[smoke] DONE", halt, and
+                  judge: FAIL on a [TRAP] block or a fail code in the UART
+                  text, on trap_seen/fail_code != 0 after the halt, on the
+                  simulator reporting an error, or on --smoke-timeout
+                  without the marker. The UART text is saved as
+                  build\\smoke.log and compared line by line with
+                  tests\\smoke\\expected.log; the diff is printed. Lines
+                  that legitimately differ between two builds - the three
+                  that carry BUILD_ID (date, time, git revision) - are
+                  masked on both sides before the comparison (mask_line()).
+                  --update-expected rewrites expected.log from this run,
+                  for a task that changes the console on purpose (a new
+                  command in "help"): commit it with the change.
+                  Exit code 0 = PASS, 1 = FAIL. Prints where the time went.
+
 Usage:  python sim_trap.py [--elf ..\\build\\adc_dma_40msps_sim.elf] [-v]
+        python sim_trap.py --smoke [--update-expected] [-v]
 """
 import argparse
 import glob
@@ -126,10 +144,182 @@ class Mdb:
             self.proc.kill()
 
 
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+# The lines of the console output that differ between two builds of the
+# same source: BUILD_ID (board.h) carries __DATE__, __TIME__ and the git
+# revision, and it appears at boot ("[boot] ..."), in the console banner
+# ("build: ...") and in "version"'s reply ("[build] ..."). Everything from
+# the program name to the end of the line is replaced on both sides of the
+# comparison; the prefix stays, so a line that moved or vanished still shows.
+BUILD_ID_RE = re.compile(r"adc_dma_40msps \w{3} +\d+ \d{4} \d\d:\d\d:\d\d git .*$")
+MASK = "adc_dma_40msps <build-id>"
+
+
+def mask_line(line):
+    return BUILD_ID_RE.sub(MASK, line)
+
+
+def start_sim(elf, out, verbose):
+    """MDB up, UART2 to `out`, the simulator selected and `elf` programmed.
+    Returns the Mdb and the seconds it took (start-up, programming)."""
+    if os.path.exists(out):
+        os.remove(out)
+    bat = find_mdb()
+    if not bat or not os.path.exists(elf):
+        sys.exit(f"missing: mdb={bat} elf={elf}")
+    t0 = time.time()
+    m = Mdb(bat, verbose)
+    m.cmd(f"Device {DEVICE}", 3)
+    m.cmd("Set uart2io.uartioenabled true")
+    m.cmd("Set uart2io.output file")
+    m.cmd(f"Set uart2io.outputfile {out}")
+    m.cmd("Set oscillator.frequency 8")
+    m.cmd("Set oscillator.frequencyunit Mega")
+    m.cmd("Hwtool SIM", 2)
+    if not m.wait_for(r">|Resetting", 60):
+        sys.exit("simulator did not come up")
+    t_up = time.time() - t0
+    m.cmd(f'Program "{elf}"', 2)
+    if not m.wait_for(r"Program succeeded", 90):
+        sys.exit("programming failed:\n" + "\n".join(m.lines[-10:]))
+    t_prog = time.time() - t0 - t_up
+    return m, t_up, t_prog
+
+
+def uart_reader(out):
+    def uart():
+        try:
+            return open(out, "rb").read().decode("ascii", "replace")
+        except FileNotFoundError:
+            return ""
+    return uart
+
+
+SMOKE_SYMBOLS = ["boot_stage", "fail_code", "trap_seen", "trap_vec", "trap_stage", "INTCON1", "W15", "SPLIM"]
+# INTCON1's trap flags (p33AK512MPS512.h): BADOPERR bit 2, ADDRERR bit 3,
+# STKERR bit 4. Set by the CPU when the trap is raised, cleared by the
+# handler - so after the halt they say "a trap was raised and nobody
+# served it", which is what a trap in a simulator that dispatches no
+# interrupt looks like.
+INTCON1_TRAPS = 0x1C
+# What the simulator itself prints when the firmware trips: an address
+# error, a stack error, an illegal opcode. Seen as MDB output, not UART.
+SIM_ERROR_RE = re.compile(r"E\d{4}|[Tt]rap|Address error|Stack error|Illegal|halted at", re.I)
+
+
+def smoke(a):
+    elf = os.path.abspath(a.elf or os.path.join(ROOT, "build", "adc_dma_40msps_smoke.elf"))
+    out = os.path.splitext(elf)[0] + ".uart2.txt"
+    log = os.path.abspath(a.log)
+    expected = os.path.abspath(a.expected)
+    uart = uart_reader(out)
+    t_all = time.time()
+    m, t_up, t_prog = start_sim(elf, out, a.verbose)
+    sim_lines_before = len(m.lines)
+
+    print(f"--- smoke: run until '[smoke] DONE' (timeout {a.smoke_timeout:.0f} s)")
+    m.cmd("Run", 1)
+    t0 = time.time()
+    why = None
+    while time.time() - t0 < a.smoke_timeout:
+        txt = uart()
+        if "[smoke] DONE" in txt:
+            break
+        if "[TRAP]" in txt:
+            why = "the firmware reported a [TRAP]"
+            time.sleep(3.0)             # let the rest of the trap block out
+            break
+        if "[FAIL]" in txt or "fail code" in txt:
+            why = "the firmware reported a fail code"
+            time.sleep(3.0)
+            break
+        if any(SIM_ERROR_RE.search(l) for l in m.lines[sim_lines_before:]):
+            why = "the simulator reported an error (see the MDB lines below)"
+            time.sleep(1.0)
+            break
+        time.sleep(1.0)
+    else:
+        why = f"no '[smoke] DONE' within {a.smoke_timeout:.0f} s"
+    t_run = time.time() - t0
+    m.cmd("Halt", 2)
+    # Only what MDB said between Run and Halt counts as a simulator
+    # message: the Print answers that follow ("trap_seen=0") must not
+    # trip the error pattern.
+    mdb_run = [l for l in m.lines[sim_lines_before:] if l.strip()]
+    sim_errors = [l for l in mdb_run if SIM_ERROR_RE.search(l)]
+    syms = m.print_symbols(SMOKE_SYMBOLS)
+    print("\n".join(syms))
+    if mdb_run:
+        print("--- MDB lines during the run ---")
+        print("\n".join(mdb_run[-20:]))
+    m.quit()
+
+    txt = uart()
+    os.makedirs(os.path.dirname(log), exist_ok=True)
+    with open(log, "wb") as f:
+        f.write(txt.encode("ascii", "replace"))
+
+    problems = []
+    if why:
+        problems.append(why)
+    if "[TRAP]" in txt and not why:
+        problems.append("the firmware reported a [TRAP]")
+    for s in syms:
+        mm = re.match(r"(trap_seen|fail_code)=(\d+)", s)
+        if mm and int(mm.group(2)) != 0:
+            problems.append(f"{mm.group(1)} = {mm.group(2)} after the halt")
+        mm = re.match(r"INTCON1=(\d+)", s)
+        if mm and (int(mm.group(1)) & INTCON1_TRAPS):
+            problems.append(f"INTCON1 = 0x{int(mm.group(1)):X} after the halt: a trap flag is set")
+    if not syms:
+        problems.append("MDB answered no Print (symbols missing - built with -g?)")
+    if sim_errors and "simulator reported" not in (why or ""):
+        problems.append("the simulator reported an error: " + sim_errors[0].strip())
+
+    got = [mask_line(l) for l in txt.splitlines()]
+    if a.update_expected:
+        os.makedirs(os.path.dirname(expected), exist_ok=True)
+        with open(expected, "w", newline="\n") as f:
+            f.write("\n".join(txt.splitlines()) + "\n")
+        print(f"--- expected.log rewritten from this run: {expected}")
+    elif os.path.exists(expected):
+        want = [mask_line(l) for l in open(expected, encoding="ascii", errors="replace").read().splitlines()]
+        if got != want:
+            import difflib
+            diff = list(difflib.unified_diff(want, got, "expected.log", "smoke.log", lineterm="", n=1))
+            print("--- diff against expected.log (build-id lines masked) ---")
+            print("\n".join(diff[:80]))
+            if len(diff) > 80:
+                print(f"... ({len(diff) - 80} more diff lines)")
+            problems.append(f"console output differs from {os.path.relpath(expected, ROOT)}")
+        else:
+            print(f"--- console output matches expected.log ({len(got)} lines, build-id lines masked)")
+    else:
+        problems.append(f"no {expected} - run once with --update-expected and commit it")
+
+    t_total = time.time() - t_all
+    print(f"--- time: mdb start {t_up:.0f} s, program {t_prog:.0f} s, run {t_run:.0f} s, total {t_total:.0f} s"
+          f" ({len(txt)} UART characters)")
+    print(f"--- log: {log}")
+    if problems:
+        print("--- [smoke] FAIL: " + "; ".join(problems))
+        return 1
+    print("--- [smoke] PASS")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--elf", default=os.path.join(os.path.dirname(__file__), "..", "build",
-                                                   "adc_dma_40msps_sim.elf"))
+    ap.add_argument("--elf", default=None,
+                    help="default: build\\adc_dma_40msps_sim.elf (build\\adc_dma_40msps_smoke.elf with --smoke)")
+    ap.add_argument("--smoke", action="store_true", help="the smoke run (see the docstring)")
+    ap.add_argument("--smoke-timeout", type=float, default=180.0,
+                    help="seconds to wait for '[smoke] DONE' before the run counts as failed")
+    ap.add_argument("--expected", default=os.path.join(ROOT, "tests", "smoke", "expected.log"))
+    ap.add_argument("--log", default=os.path.join(ROOT, "build", "smoke.log"))
+    ap.add_argument("--update-expected", action="store_true",
+                    help="--smoke: rewrite tests/smoke/expected.log from this run")
     ap.add_argument("--run-seconds", type=float, default=240.0,
                     help="100 halves take about 150 s after the boot, more with mismatch reports on the UART")
     ap.add_argument("--fault", type=lambda x: int(x, 0), default=0,
@@ -140,34 +330,15 @@ def main():
     ap.add_argument("--inject-seconds", type=float, default=20.0)
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args()
-    elf = os.path.abspath(a.elf)
+    if a.smoke:
+        sys.exit(smoke(a))
+    elf = os.path.abspath(a.elf or os.path.join(ROOT, "build", "adc_dma_40msps_sim.elf"))
     out = os.path.splitext(elf)[0] + ".uart2.txt"
-    if os.path.exists(out):
-        os.remove(out)
-    bat = find_mdb()
-    if not bat or not os.path.exists(elf):
-        sys.exit(f"missing: mdb={bat} elf={elf}")
+    if not os.path.exists(elf):
+        sys.exit(f"missing: elf={elf}")
     fault_addr = symbol_address(elf, "sim_fault_once") if a.fault else 0
-
-    def uart():
-        try:
-            return open(out, "rb").read().decode("ascii", "replace")
-        except FileNotFoundError:
-            return ""
-
-    m = Mdb(bat, a.verbose)
-    m.cmd(f"Device {DEVICE}", 3)
-    m.cmd("Set uart2io.uartioenabled true")
-    m.cmd("Set uart2io.output file")
-    m.cmd(f"Set uart2io.outputfile {out}")
-    m.cmd("Set oscillator.frequency 8")
-    m.cmd("Set oscillator.frequencyunit Mega")
-    m.cmd("Hwtool SIM", 2)
-    if not m.wait_for(r">|Resetting", 60):
-        sys.exit("simulator did not come up")
-    m.cmd(f'Program "{elf}"', 2)
-    if not m.wait_for(r"Program succeeded", 90):
-        sys.exit("programming failed:\n" + "\n".join(m.lines[-10:]))
+    uart = uart_reader(out)
+    m, _, _ = start_sim(elf, out, a.verbose)
 
     print(f"--- phase 1: run {a.run_seconds:.0f} s" + (f", fault 0x{a.fault:X} after {a.fault_seconds:.0f} s" if a.fault else ""))
     m.cmd("Run", 1)

@@ -162,3 +162,105 @@ A full comparison of two hardware ELFs takes about 3 s (three toolchain calls pe
 `objdump -d`, `objdump -s`, `readelf -s`; `xc-dsc-objdump` needs `-mdfp=` exactly like
 `bin2hex`, otherwise "can't disassemble for architecture UNKNOWN"). `hosttest.bat`
 1/1 and `trace.bat` 13/13 still pass; no firmware source changed.
+
+# P0.7 Simulator smoke build (`tools\build.bat smoke`, `tools\sim_trap.py --smoke`)
+
+Git revision: `c25c07e` plus this task. Date: 27.09.2026. MPLAB X v6.35, xc-dsc v3.31.
+
+## What runs
+
+`build.bat smoke` is the simulator build with `-DSIM_SMOKE=1` and `-g`
+(`build\adc_dma_40msps_smoke.elf`). It boots like the normal simulator build up to
+boot stage 8, then - instead of `capture_start()` - `smoke_run()` (`main.c`) types
+`help`, `version` and `status` into the parser through `cmd_parser_feed_char()`, one
+byte at a time with a CR, and prints `[smoke] DONE`; the main loop then idles. The three
+commands are the plan's list, all three exist; `route list` comes with the task that
+adds it. Each script line is announced as `[smoke] > <command>` before its echo.
+`sim_trap.py --smoke` programs the ELF, polls the UART file for the marker, halts,
+prints `boot_stage fail_code trap_seen trap_vec trap_stage INTCON1 W15 SPLIM`, saves
+the console text as `build\smoke.log` and compares it with `tests\smoke\expected.log`.
+
+## How expected.log is compared
+
+Line by line, after `mask_line()` replaced everything from `adc_dma_40msps` to the end
+of the line on the three lines that carry `BUILD_ID`
+(`[boot] adc_dma_40msps <date> <time> git <rev> (<branch>)`, `build: ...`,
+`[build] ...`) - on both sides. Those differ between any two builds and even between
+the three lines of one build (`__TIME__` is per translation unit: 01:48:05, 01:48:15
+and 01:48:21 in the first run). Everything else, ACK bytes (0x06 after each prompt)
+included, must match; the diff is printed and the run fails. `expected.log` is stored
+with LF line endings (git `autocrlf`), the comparison uses `splitlines()` on both. A
+task that changes the console on purpose runs `--update-expected` and commits the
+result with the change. Today's file: 110 lines, 4286 characters of console text.
+
+## Duration
+
+Sequential runs on the desktop, nothing else running (`time python
+tools\sim_trap.py --smoke`):
+
+| run | mdb start | program | run to `[smoke] DONE` | total wall clock |
+|---|---|---|---|---|
+| 1 (`--update-expected`) | 14 s | 29 s | 44 s | 96 s |
+| 2 | 12 s | 23 s | 40 s | 82 s |
+| 3 (fault ELF, first version) | 11 s | 25 s | 49 s | 93 s |
+| 4 (fault ELF, second version) | 12 s | 27 s | 51 s | 99 s |
+| 5 (final, after all edits) | 12 s | 23 s | 50 s | 93 s |
+| 6 (fault ELF, case 3, final) | 15 s | 26 s | 49 s | 98 s |
+
+Four fault runs started at the same time (four MDB instances) took 131-136 s each, so
+the runs do not parallelise well on this machine; run them one after the other.
+
+Where the time goes: 35-40 s is MDB itself (JVM start, `Device`, `Hwtool SIM`, and
+`Program` of a 565 KB ELF) before the firmware executes an instruction; the run itself
+is 40-50 s for 4.3 k characters of console output, about 10 ms per character - the
+simulator's UART model at 115 200 baud on the 8 MHz FRC, with the firmware polling
+`TXBF` in between. The `__delay32` scaling is not involved (the smoke path never
+calls `timebase_check()`), and nothing waits on a clock: every `WAIT_WHILE` is a no-op
+under `__MPLAB_DEBUGGER_SIMULATOR`. The firmware side is therefore under a minute and
+the plan's rule 6 condition holds; the wall clock including MDB is about 1.5 minutes.
+It could be halved by raising the UART baud rate in the smoke build only (a smaller
+`U2BRG` under `SIM_SMOKE`), which was not done: it would make the smoke build's UART
+set-up differ from the other builds for a gain of ~30 s.
+
+## The negative test
+
+`SIM_SMOKE_FAULT=n` (`build.bat smoke fault [n]`) adds one deliberate fault after the
+script. What the simulator did with each (one run each, `sim_trap.py --smoke` verdict):
+
+| n | fault | simulator's reaction | detected by |
+|---|---|---|---|
+| 1 | 32-bit read from an odd address (the plan's case) | **no trap**: the read returns 0, `[smoke] DONE` follows; INTCON1 = 0x8000 (GIE only) | expected.log diff only |
+| 2 | 32-bit read from 0x00FF0000 (unmapped) | **no trap**, as case 1 | expected.log diff only |
+| 3 | W15 set to SPLIM + 64 and a push | INTCON1.STKERR set (0x8010), `E0110-SIM: Failed to execute instruction` at the dispatch, run stops before `DONE` | simulator error line, INTCON1 flag, diff |
+| 4 | call into two words of 0xFFFFFFFF in `.text` | `W0014-CORE: Invalid opcode`, `E0108`/`E0110`, run stops before `DONE` | simulator error line, diff |
+
+The first version of case 1 (`*(volatile uint32_t *)(fault_bytes + 1)`) never issued a
+misaligned load at all: given a constant odd address xc-dsc `-O1` emits four `ze`
+byte loads and shifts; the address now goes through a `volatile uintptr_t`, and the
+disassembly shows `mov.l [w8], w1`. Even so the simulator executes it without an
+address error. **The plan's misaligned read is therefore not a trap in this
+simulator**, and `build.bat smoke fault` defaults to case 3, the one that is. A trap
+in the simulator ends the way the acceptance run's `--inject` documents: the CPU
+flags it, the dispatch fails with E0110, the handler in `diag.c` never runs
+(`trap_seen` stays 0) - so the runner reads INTCON1 and MDB's own error lines rather
+than waiting for a `[TRAP]` block. On the aborted runs the UART file is a few
+characters short of what the firmware wrote (`...SPLIM f`): the simulator's transmit
+FIFO is lost with the abort.
+
+## Verification
+
+`tools\build.bat`, `sim`, `nano`, `smoke`, `smoke fault 1..4`: all `-Wall -Wextra`
+clean. `tools\fncmp.py --ignore-strings` between the ELFs built before and after the
+change: hardware 375/375 functions same, simulator 332/332, nano 375/375 - the smoke
+path is preprocessor-guarded and changes no other build. (Simulator vs smoke ELF, as a
+control: `_main` differs and `smoke_run` is new, nothing else.) One tool defect found
+on the way and fixed in `fncmp.py` in its own commit: `read_contents()` took every
+section `objdump -s` prints, so in the `-g` simulator build `.debug_info` (VMA 0,
+90 KB) shadowed data memory below 0x162d6, and libc's `___intscan` was reported as
+changed after an edit to a comment in `main.c` - its literal 0x64ba (the digit table
+in `.data`) had been hashed as byte 0x64ba of the DWARF. Sections named `.debug_*`,
+`.comment`, `.gnu*` and `__c30_signature` are skipped now; the hardware and nano
+results, which carry no such sections, are unchanged by the fix. `tools\hosttest.bat` 1/1
+PASS, `tools\trace.bat` 13/13 PASS. No MPLAB X configuration was added for the smoke
+build: it would need a fourth `<conf>` with its own macro and file exclusion, and the
+command line is what runs it.
