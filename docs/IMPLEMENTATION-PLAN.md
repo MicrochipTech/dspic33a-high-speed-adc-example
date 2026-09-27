@@ -73,14 +73,23 @@ not counted.
 | P9.1 `src/app/pingpong.c` | done | `4d40f82`, merge `12d2383` | Sonnet | `pingpong_on_half()` static inline; `dma0_event` 124 instructions before and after, `_DMA0Interrupt` 42/0; `late`/`overrun` stay capture.c globals (two literal designs measured slower) |
 | P9.2 Simulator hooks out of pingpong.c | done | `d868bbb`, merge `12d2383` | Sonnet | pingpong.c had none to move; [SIM] run once already: `[simtest] PASS`, 100 halves, 0 mismatches |
 | P9.3 `src/meter/meter.c` | done | `37e9484` | Sonnet | `capture_process_bench/_selftest/_clkoff_probe/_oneshot/_oneshot_n/_measure_rate` moved verbatim (two like-for-like substitutions: direct `buf`/`half_len` reads became `capture_buffer()`/`capture_half_len()` calls); `process_buffer()`/`wait_for_blocks()`/`oneshot_left`/`oneshot_ticks` stay in capture.c, made non-static, reached through `capture_priv.h` (guard_check()/dma_buffer stay private, oneshot_left is also touched by `dma0_event()`); `_DMA0Interrupt` 42/0, `_U2RXInterrupt` 55/0 unchanged, `dma0_event()` 124/124 instructions (only a symbol-label change); traces 13/13, `b2b`/`variants` byte-identical, `stream_on`/`stream_on_input` needed `meter.c` added to their `.sources` (chaintest.c calls the moved functions) but their goldens are unchanged; [SMOKE] PASS |
-| P9.4 `src/app/acquisition.c` | done | this commit | Sonnet | rate setters + variant matrix (capture.c) and the standing stream `chain_stream_*()` (chaintest.c, plus `chain_streaming()`/`chain_stream_state()` not named in the card but sharing their state) moved verbatim; `clkdiv_cur` (capture_priv.h) and `chaintest.c`'s `setup()`/`restore()`/`triangle_for()`/`rate_hz()`/`ksps_of()`/`wait_ticks()`/`g_trig_hz`/`s_core`/`s_pinsel`/`s_samc`/`s_test_dac` (new `chaintest_priv.h`) reached as plain externs; traces `b2b`/`clk`/`variants` needed `acquisition.c` plus `chaintest.c`'s own dependency closure and `-DHAVE_CHAINTEST` (linking one object that mixes both groups); 13/13 traces unchanged, `stream_on`/`stream_on_input` goldens byte-identical, fncmp shows only the moved/renamed symbols differ (identical instruction counts), `_DMA0Interrupt` 42/0, `_U2RXInterrupt` 55/0, [SMOKE] PASS |
-| P9.4b Dependency acquisition -> chaintest inverted | done | this commit | Sonnet | added task: P9.4 left `chaintest.c`'s `setup()`/`restore()`/`triangle_for()`/`rate_hz()`/`ksps_of()`/`wait_ticks()` in `chaintest.c`, reached from `acquisition.c`'s `chain_stream_on_input()` through a `chaintest_priv.h` - the application layer depending on the test layer's internals, backwards, through generic global names in the whole firmware's namespace. Inverted: the six functions moved into `acquisition.c`, renamed `acq_chain_setup()`/`acq_chain_restore()`/`acq_triangle_for()`/`acq_rate_hz()`/`acq_ksps_of()`/`acq_wait_ticks()` (bodies unchanged apart from the rename), `chaintest.c`'s stages call them now (test -> app); `s_core`/`s_pinsel`/`s_samc`/`s_test_dac` became a plain static in `acquisition.c` (both ends of that state now live in one file); the raw state still shared in both directions (`acq_trig_hz`, `acq_setup_rc_pll`/`_trig`/`_dac`/`_ok`, `acq_step_on`) and the shared constants moved to a new `acquisition_priv.h`, which replaces and deletes P9.4's `chaintest_priv.h`; `grep -rn chaintest src/app/` finds no include, only comments. Trace scenarios `b2b`/`clk`/`variants` dropped `chaintest.c`/`tri_eval.c`/`meter.c`/`-DHAVE_CHAINTEST` from their `.sources`/`.cflags` (nothing in `acquisition.c` calls into `chaintest.c` any more) but keep `dac.c` and the board file (`acq_chain_setup()`/`_restore()` call into both directly); `stream_on`/`stream_on_input` untouched, still linking `chaintest.c` (unaffected, not required by the card). Verified: hw/sim/nano/smoke builds `-Wall -Wextra` clean; `tools\trace.bat` 13/13 PASS, `git diff 911cdb9 --stat -- tests/trace/golden tests/smoke` empty; `tools\hosttest.bat` 15/15 PASS; fncmp `_DMA0Interrupt` 42/0, `_U2RXInterrupt` 55/0 unchanged; comparing the pre-task hw ELF against this one, 25 of the 26 differing functions are pure symbol renames at identical instruction counts - the one exception, `chaintest.c:_summary` (180 -> 182 instructions), is `acq_ksps_of(ladder_n[g_best])` losing its intra-translation-unit visibility now that the callee moved to `acquisition.c`: the compiler can no longer see the callee's body to know it does not need to reload `g_best` across the call, so it reloads it from memory instead of keeping it live in a register - same computed values, no behaviour change; `python tools\sim_trap.py --smoke` -> [smoke] PASS |
+| P9.4 `src/app/acquisition.c` | done | `911cdb9` | Sonnet | rate setters + variant matrix (capture.c) and the standing stream `chain_stream_*()` (chaintest.c, plus `chain_streaming()`/`chain_stream_state()` not named in the card but sharing their state) moved verbatim; `clkdiv_cur` (capture_priv.h) and `chaintest.c`'s `setup()`/`restore()`/`triangle_for()`/`rate_hz()`/`ksps_of()`/`wait_ticks()`/`g_trig_hz`/`s_core`/`s_pinsel`/`s_samc`/`s_test_dac` (new `chaintest_priv.h`) reached as plain externs; traces `b2b`/`clk`/`variants` needed `acquisition.c` plus `chaintest.c`'s own dependency closure and `-DHAVE_CHAINTEST` (linking one object that mixes both groups); 13/13 traces unchanged, `stream_on`/`stream_on_input` goldens byte-identical, fncmp shows only the moved/renamed symbols differ (identical instruction counts), `_DMA0Interrupt` 42/0, `_U2RXInterrupt` 55/0, [SMOKE] PASS |
+| P9.4b Dependency acquisition -> chaintest inverted | done | `93c485f` | Sonnet | added task: P9.4 left `chaintest.c`'s `setup()`/`restore()`/`triangle_for()`/`rate_hz()`/`ksps_of()`/`wait_ticks()` in `chaintest.c`, reached from `acquisition.c`'s `chain_stream_on_input()` through a `chaintest_priv.h` - the application layer depending on the test layer's internals, backwards, through generic global names in the whole firmware's namespace. Inverted: the six functions moved into `acquisition.c`, renamed `acq_chain_setup()`/`acq_chain_restore()`/`acq_triangle_for()`/`acq_rate_hz()`/`acq_ksps_of()`/`acq_wait_ticks()` (bodies unchanged apart from the rename), `chaintest.c`'s stages call them now (test -> app); `s_core`/`s_pinsel`/`s_samc`/`s_test_dac` became a plain static in `acquisition.c` (both ends of that state now live in one file); the raw state still shared in both directions (`acq_trig_hz`, `acq_setup_rc_pll`/`_trig`/`_dac`/`_ok`, `acq_step_on`) and the shared constants moved to a new `acquisition_priv.h`, which replaces and deletes P9.4's `chaintest_priv.h`; `grep -rn chaintest src/app/` finds no include, only comments. Trace scenarios `b2b`/`clk`/`variants` dropped `chaintest.c`/`tri_eval.c`/`meter.c`/`-DHAVE_CHAINTEST` from their `.sources`/`.cflags` (nothing in `acquisition.c` calls into `chaintest.c` any more) but keep `dac.c` and the board file (`acq_chain_setup()`/`_restore()` call into both directly); `stream_on`/`stream_on_input` untouched, still linking `chaintest.c` (unaffected, not required by the card). Verified: hw/sim/nano/smoke builds `-Wall -Wextra` clean; `tools\trace.bat` 13/13 PASS, `git diff 911cdb9 --stat -- tests/trace/golden tests/smoke` empty; `tools\hosttest.bat` 15/15 PASS; fncmp `_DMA0Interrupt` 42/0, `_U2RXInterrupt` 55/0 unchanged; comparing the pre-task hw ELF against this one, 25 of the 26 differing functions are pure symbol renames at identical instruction counts - the one exception, `chaintest.c:_summary` (180 -> 182 instructions), is `acq_ksps_of(ladder_n[g_best])` losing its intra-translation-unit visibility now that the callee moved to `acquisition.c`: the compiler can no longer see the callee's body to know it does not need to reload `g_best` across the call, so it reloads it from memory instead of keeping it live in a register - same computed values, no behaviour change; `python tools\sim_trap.py --smoke` -> [smoke] PASS |
 | P9.5 [SIM] acceptance run | open | | | runs without asking since 27.09.2026 |
 | P10.1-P10.4 Split `clock.c` | moved to N+2 | | | user decision 27.09.2026; when it is done: needs `trace_point()` between clock steps (approach (a)) |
 | P11.1 Routing types | done | `4bddb2c` (worktree, beside P9.3) | Sonnet | routing.h/.c, host-only, no apply yet; pin-reachability table from a new generator, tools/gen_route_pins.py, against tools/pins128.py |
 | P11.2 Host tests of the conflict rules | done | `0a5ecca`, merge (see log) | Sonnet | tests/host/test_routing.c, 45/45 checks, one test per rule; a deliberately broken SCCP check caught it (44/45, reverted) |
 | P11.3-P11.5 | open | | | P11.4 is the central proof |
 | P12.1-P12.4 Close-out | open | | | P12.4 = [SIM], runs without asking since 27.09.2026 |
+| BR.1 `tools/board_run.py` | in review | `175b20c` (worktree) | Sonnet | phase BR added 27.09.2026 (not counted in the 52); host-side, worktree beside P9/P11; selftest 10/10 |
+| BR.2 `tools/eval_board.py` + `expected.json` | in progress (worktree) | | Sonnet | |
+| BR.3 Python environment | open | | | worktree |
+| BR.4 `make_board_package.py` | open | | | worktree |
+| BR.5 Merge of the worktree | open | | | after P11 |
+| BR.6 Firmware additions for the board run | open | | | after P11, before P12; [SMOKE] + `expected.log` |
+| BR.7 Documentation | open | | | with or after BR.6 |
+| BR.8 Package for the first board run | open | | | after P12 |
+| BR.9 Board run and loop back | open | | | needs the colleague and the EV74H48A |
 
 ### Decisions taken during the work
 
@@ -95,6 +104,20 @@ not counted.
 | 27.09. | The simulator, including the ~7-minute [SIM] acceptance run, runs without asking; one run at a time | `CLAUDE.md` |
 | 27.09. | Goertzel: damped textbook form `q0 = s + 2D·cos·q1 − D²·q2` (the literal reading of the design is undamped) | `docs/DESIGN-MULTICHANNEL.md` 4.3 |
 | 27.09. | Detector counts once per pulse: re-arm only below threshold × hysteresis | `docs/DESIGN-MULTICHANNEL.md` 4.3 |
+| 27.09. | P9.4b added: P9.4 made `src/app/acquisition.c` depend on `src/tests/chaintest.c` internals (generic global names `setup()`/`restore()`, three trace scenarios linking the whole chain test); inverted before P11.3 builds on the chain setup | Status row P9.4b |
+| 27.09. | Phase BR (board run through a host-side runner) added from `board-run-task.md`; host-side cards in a worktree now, firmware (BR.6) after P11 and before P12 | section BR |
+| 27.09. | BR decision 1 (user): A = `b41af3b`, the parent of P0.1, built from a clean checkout. Run 19's firmware (`fbfd883` + local changes, committed only with `c3bc644`) cannot be rebuilt; A vs run 19's values shows the post-run-19 changes, B vs A the restructuring | section BR |
+| 27.09. | BR decision 2: the run takes place after P12. Reason: B must carry `route list` (P11.5) and the BR.6 status fields, and one board run should cover N+1 as a whole | section BR |
+| 27.09. | BR decision 3 (user): EV74H48A only; the EV17P63A gets its own first run later | section BR |
+| 27.09. | BR decision 4: programming by hand (MPLAB X / IPE), not `ipecmd`. Reason: one dependency fewer at the colleague's; the runner checks the SHA-256 of the file named at the prompt, so a wrong file is caught anyway | section BR |
+| 27.09. | BR decision 5: the package carries a wheelhouse for `requirements-board.txt` (pyserial, numpy, matplotlib; win_amd64, CPython 3.10-3.13) and `gui_setup.bat --offline`. Reason: a few MB against the risk of losing the afternoon to a proxy; the GUI's own requirements stay online | BR.3, BR.4 |
+| 27.09. | BR decision 6: `tests/board/expected.json`, not YAML. Reason: stdlib only, no PyYAML in the colleague's environment | BR.2 |
+| 27.09. | BR decision 7: budget <= 15 min per run, <= 30 min for A + B, one timeout per block; the runner logs each block's duration, and R4's grab count is the knob if the first run overruns | section BR |
+| 27.09. | BR decision 8 (user): distribution as a package (`make_board_package.py`), not a `git pull` | BR.4 |
+| 27.09. | BR decision 9: no signal generator assumed. R5 runs on the default custom input without a signal and judges only the data path (CRC, counters, frame shape); SNR/THD are judged only if the colleague answers the prompt with a connected signal. Reason: availability unknown, and the block must not fail for lack of a generator | BR.1, BR.2 |
+| 27.09. | BR: the P3 libraries' cycle count on silicon is not in the first board run. Reason: keep the new firmware in B minimal; P3.8 stays optional | BR.6 |
+| 27.09. | BR pass criterion adopted from `board-run-task.md` section 10, the stack margin fixed at >= 25 % of the stack unused. Reason: the port layer and visitor callbacks added depth that no host tool measures; a quarter leaves room for interrupt nesting not reached in the run | BR.9 |
+| 27.09. | BR: `sim_trap.py` cannot serve as a transport for the runner - the simulator's UART is write-only to a file, nothing feeds bytes in at run time (BR.1's look); the runner is tested against its stand-in only | BR.1 |
 
 ### Handover to the next lead session (27.09.2026, 18:30)
 
@@ -114,6 +137,7 @@ Fable only for P11.3/P11.4):
 | P11.4 `stream on` through the routing | Fable | the central proof: `stream_on`/`stream_on_input` traces identical |
 | P11.5 `route list` | Sonnet | one parser slot (27 + help = 28 of 32); [SMOKE] with `route list` added to the smoke script and `expected.log` updated on purpose |
 | P12.1-P12.4 close-out | Sonnet | P12.3: HARDWARE-LOG entry "N+1 restructured, not run on silicon" + the board-run checklist; P12.4 [SIM] |
+| BR.1-BR.4 board-run tools (worktree, beside P9.5-P11) | Sonnet | see section BR; BR.6 after P11, before P12 |
 
 **How the lead checks every card** (do not trust the agent's report; it once named
 the wrong branch): `git status` clean; `git log -N --format=%B | grep -ic co-authored`
@@ -635,7 +659,10 @@ One test per rule, each with one case that triggers the rule and one that just p
 
 ### Checklist for the first board run after N+1
 
-To be written into the firmware as far as possible, so that one run answers everything:
+**Superseded by phase BR** (27.09.2026): the first board run after N+1 goes through
+`tools/board_run.py` (A = `b41af3b` against B = N+1, blocks R0..R7), and every item
+below is one of its blocks - 1 = R2, 2 = R3, 3 = R1, 4 = R3/R4, 5 = R6. The list stays as
+the short form of what the run must show:
 
 1. `chain all`: every stage as in the last run before N+1 (compare with the log in
    `docs/logs/`).
@@ -645,6 +672,191 @@ To be written into the firmware as far as possible, so that one run answers ever
 4. `capture_process_bench` and the stream counters: same order as before (`_DMA0Interrupt`
    is unchanged in N+1, 42 instructions; P8.1, which changes it, moved to N+2).
 5. `route list` shows `ROUTE_STREAM` with DMA0, SCCP1, DAC2, core 5.
+
+---
+
+## BR: Board run (host-side runner, one log file back)
+
+Source: `board-run-task.md` (27.09.2026, written outside the repository while N+1 was
+under way; its content is carried over here and the file itself is not needed any more).
+Decisions 1, 3 and 8 were set by the user, the rest by the lead session - all in
+"Decisions taken during the work" above.
+
+**What BR is:** the colleague runs one script next to the board. It drives the existing
+console, runs the same sequence against the pre-N+1 firmware (A = `b41af3b`) and the N+1
+firmware (B), and writes one archive. `eval_board.py` turns that archive into a list of
+deviations; each deviation becomes a correction card or an explained deviation. N+1
+counts as "run on silicon" only when the pass criterion (BR.9) holds.
+
+**Why host-side, not a firmware variant:** A and B run in the same session on the same
+board (A cannot run a sequence built into B); run A is the baseline that `docs/logs/`
+lacks (only run15/run16 are there, runs 18/19 were never committed); `stream grab` is
+tested through `tools/protocol.py`'s `Target.grab()`, the GUI's own code, which has never
+run on a board; a missing test is a new script, not a new hex file; hangs are handled by
+the host (timeout, ask for reset, read the boot banner, carry on).
+
+**Scheduling:** BR.1-BR.5 touch only `tools/` and `tests/` and run in a separate worktree
+alongside P9-P11 (like P6.5 beside P5). BR.6 (firmware) runs after P11 and before P12.
+BR.7 (docs) with or after BR.6. BR.8 (package) after P12. BR.9 is the run itself.
+
+**Rule for every later firmware change (from BR.1 on):** a change to the reply format of
+`version`, `help`, `status`, `regs`, `chain all`'s `@` lines or the GRAB header updates
+`board_run.py`/`eval_board.py` in the same commit, checked by their self-tests.
+
+### Sequence per run (A and B identical)
+
+| Block | Command(s) | Answers |
+|---|---|---|
+| R0 | `sync`, `version`, `help`, `status` | build, revision, board; which commands this firmware has |
+| R1 | `regs` | register state after boot; A/B bitwise diff |
+| R2 | `chain all` | against run 19 and between A and B |
+| R3 | `test all` | the back-to-back suite |
+| R4 | `stream on` at 1, 4, 8 MSPS, each >= 50 `stream grab`, `stream off` | the GUI path: per grab the ov/late/missed delta, CRC, triangle verdict (`eval_chain.tri_eval`/`grid_ok`); raw frame stored on FAIL |
+| R5 | `stream on <ksps> <core> <pinsel>`, 10 grabs | the non-DAC path (`slp=0`) |
+| R6 | `route list` (B only) | P11 on silicon; `NOT_AVAILABLE` in A |
+| R7 | `status` again | end state, trap/fail codes, stack high-water mark (BR.6) |
+
+Every block has its own timeout. On timeout: log it, ask for a reset, read the banner,
+continue with the next block. Budget: <= 15 min per run, <= 30 min for A + B.
+
+### BR.1 `tools/board_run.py` + `tools/board_run.bat` (worktree)
+
+- Interactive: "program the OLD firmware `<file>`, press ENTER" -> run A; the same for
+  NEW -> run B; then a PASS/FAIL overview and the path of the one file to send. It never
+  programs the board.
+- Transport: `tools/protocol.py`'s `Target` (`sync()`, `cmd()`, `grab()`), 115200 8N1.
+  `--list` shows the serial ports with VID:PID and description and marks the likely one
+  (PKOB4 virtual COM port on the EV74H48A); without a port argument and exactly one
+  candidate it uses that one and says so; "access denied" names the usual holders (GUI,
+  terminal program, MPLAB X terminal).
+- Compatibility: reads `version` then `help` first and derives the command set; a
+  command the firmware does not have is `NOT_AVAILABLE`, never a failure; a NAK or
+  unknown reply to a command it claims to have is a finding with the raw reply.
+  `RUNNER_VERSION` goes into `session.json` and the first line of each log.
+- Output: `run-<date>-<time>-<board>.zip` with `A.log`, `B.log` (every byte received and
+  every command sent, host timestamp in ms and direction per line), `A-grab-<n>.bin` /
+  `B-grab-<n>.bin` only for failed grabs, `summary.txt`, `session.json` (runner version,
+  COM port, PC time, Python/pyserial versions, the two hex file names and SHA-256, the
+  R5 signal answer). The hex files named at the prompts are checked against the
+  package's SHA-256 list.
+- `--selftest` / `--fake`: the full sequence against a stand-in target (extend
+  `adc_gui.py`'s `FakeTarget` or a replay stub for `chain all`/`test all`/`regs`) with a
+  timeout in the middle, a reset with a new boot banner, a NAK, and a firmware without
+  `route list`; checks the zip's content.
+- Timebox half a day: can `sim_trap.py`'s console path serve as a transport, to run R0/R1
+  against the simulator build? Result recorded in the commit message either way.
+- **Verify:** `board_run.py --selftest` PASS; run from `tools\hosttest.bat` after the
+  existing Python tests; `adc_gui.py --selftest` still 15/15.
+
+### BR.2 `tools/eval_board.py` + `tests/board/expected.json` (worktree)
+
+- Input: the session zip (or `A.log`/`B.log`). Imports `eval_chain.py` for `chain all`.
+- Completeness: every block in A and B, `@END` reached, no timeout.
+- A/B diff: per `@S..` line, per `regs` register, per counter: equal / different / only
+  in one.
+- Expectations: `tests/board/expected.json`, entries tagged `source: run19` (HARDWARE-LOG
+  25.09.2026: 8 MSPS 15 s with overrun/late/missed 0, triangle clean up to 10 MSPS,
+  slope 1.000, overruns from 10 MSPS, lost triggers from 16 MSPS) or `source:
+  prediction` (S4/S6 pass at 1/4/8 MSPS, S9 picks 8 or 10 MSPS, processing load at
+  8 MSPS well below half), so that a missed prediction is not read as a regression.
+  Every entry cites its HARDWARE-LOG date.
+- Output: one line per deviation - block, A value, B value, expectation and source, the
+  source files the block exercises. Refuses a log from an unknown `RUNNER_VERSION`.
+- **Verify:** `eval_board.py --selftest` on synthetic logs: identical A/B, one FAIL only
+  in B, one timeout, truncated without `@END`, A without the BR.6 fields - each with the
+  expected verdict; run from `hosttest.bat`.
+
+### BR.3 Python environment (worktree)
+
+- `tools/requirements-board.txt`: `pyserial`, `numpy`, `matplotlib` (only for
+  `eval_chain.py --png`). No PyYAML (decision 6).
+- `tools/gui_setup.bat` and `tools/gui_setup.sh`: install both requirement files into
+  `tools/.venv`; after the GUI self-test run `board_run.py --selftest` and
+  `eval_board.py --selftest`; header comment and closing message name all three tools.
+- Offline: `tools/gui_setup.bat --offline <dir>` installs from a wheelhouse
+  (`pip install --no-index --find-links`), used by the package (BR.4, decision 5).
+- **Verify:** a fresh `.venv` in a temporary copy, both self-tests PASS; `--offline`
+  against a wheelhouse made with `pip download`.
+
+### BR.4 `tools/make_board_package.py` (worktree)
+
+- Builds `board-run-<date>.zip`: `A-EV74H48A-<rev>.hex`, `B-EV74H48A-<rev>.hex`, each
+  built by `tools\build.bat` from a clean `git worktree` of its revision (never a working
+  tree with local changes; the script refuses a dirty revision); `SHA256SUMS.txt`; the
+  tools the runner needs (`board_run.py/.bat`, `eval_board.py`, `eval_chain.py`,
+  `protocol.py`, `gui_setup.bat`, both requirement files, `tests/board/expected.json`);
+  a wheelhouse for `requirements-board.txt` (win_amd64, CPython 3.10-3.13);
+  `README-colleague.txt` (`tools/board_package/README-colleague.txt` as its source).
+- `README-colleague.txt`: the steps, what to send back, and the hardware set-up of the
+  EV74H48A (jumpers, the one USB cable on PKOB4, power), checked against the board user
+  guide and how runs 11-19 were set up (HARDWARE-LOG); that R2-R4 need no external
+  wiring (DAC2 -> RA8 -> core 5 / UREF on chip) and that nothing may load RA8; for R5
+  the pin (core, `pinsel`, header pin) and that without a signal R5 tests only the data
+  path.
+- **Verify:** the script run against `b41af3b` and HEAD produces a zip whose hex files
+  are bit-identical to a manual `tools\build.bat` of the same revision in a clean
+  checkout (apart from the build-ID string, if any - say which bytes); the package
+  unpacked into an empty folder, `gui_setup.bat --offline` and `board_run.py --selftest`
+  run from there.
+
+### BR.5 Merge of the worktree
+
+- BR.1-BR.4 merged onto master after P11 (lead). `hosttest.bat` all PASS, including the
+  two new self-tests.
+
+### BR.6 Firmware additions for the board run (after P11, before P12)
+
+| Addition | Where | Why |
+|---|---|---|
+| Stack high-water mark: paint the stack at boot, report the deepest use and the margin to SPLIM | extra field in `status` | stack depth grew with N+1 (port layer, visitor callbacks) |
+| Buffer address, alignment, guard words | extra fields in `status` | placement after relinking |
+| `trap_seen`, `fail_code`, `chain_mark`, RCON after a reset | check what the banner/`status` already report; add what is missing | hang analysis |
+
+- No new parser slot (27 + `route list` + help = 28 of 32 after P11.5): extend `status`.
+- `board_run.py`/`eval_board.py` read the new fields in the same commit (rule above); A
+  has none of them, which the self-tests already cover.
+- The optional cycle count of the P3 libraries on silicon is not in the first board run
+  (decision below).
+- **Verify:** all four builds `-Wall -Wextra` clean, `trace.bat`, `hosttest.bat`,
+  **[SMOKE]** with `tests/smoke/expected.log` updated on purpose (the diff is the
+  review); the stack paint checked in the simulator (the high-water mark after the smoke
+  script is plausible and below SPLIM).
+
+### BR.7 Documentation
+
+- `CLAUDE.md`: module rows for `board_run.py`, `eval_board.py`, `tests/board/expected.json`,
+  `make_board_package.py`; in "Build and verify" a paragraph on the board run, the
+  reply-format rule above, and "a board run goes through `board_run.py`".
+- `README.md`: "Running the board test" (pointer to `README-colleague.txt`);
+  `docs/CHAIN-TEST-PLAN.md` section 7 replaced by the new procedure;
+  `docs/TROUBLESHOOTING.md`: port busy, no reply, timeout/reset, pip behind a proxy.
+
+### BR.8 Package for the first board run (after P12)
+
+- `make_board_package.py` with A = `b41af3b`, B = the P12 close-out revision; the zip and
+  its `SHA256SUMS.txt` recorded in the HARDWARE-LOG entry of P12.3.
+
+### BR.9 The board run and the loop back
+
+1. The session zip is copied unchanged to `docs/logs/run<NN>-<date>/` and committed as
+   it came.
+2. `eval_board.py` on it; the report committed beside it.
+3. Every deviation becomes a correction card here (block, A/B values, expectation,
+   suspected source file, how it is verified without a board and on the next run) or an
+   explained deviation in the HARDWARE-LOG entry (missed prediction, known instrument
+   fault such as S0's PLL readings or SCCP1's OC mode, present in A as well) - never
+   dropped silently.
+4. HARDWARE-LOG: a dated entry for the run, predictions that turned out wrong included,
+   and one per change made in reaction.
+5. `tests/board/expected.json` updated from the confirmed values, tagged with the run
+   number.
+6. The next run uses the same runner with the new B; A stays the fixed baseline.
+
+**Pass criterion for N+1:** B complete (every block, `@END`, no timeout, no trap); every
+deviation of B from A absent or explained; `chain all` S4/S6/S9 at 8 MSPS without
+overrun/late/missed; every `stream grab` cycle with a clean CRC and triangle verdict; the
+stack high-water mark leaves at least 25 % of the stack unused. Only then N+1 counts as
+"run on silicon".
 
 ---
 
@@ -662,6 +874,9 @@ P0 ──► P1 ──► P2 ──► P3
 - **[SMOKE]** runs after P1, P5.2, P6.1, P7, P9.2 and P11.5, and after any other task
   that touches `main.c`, the console or the memory layout.
 - **[SIM]** (full acceptance, ~7 min; without asking since 27.09.2026, one run at a time) runs at P9.5 and P12.4.
+- **BR**: BR.1-BR.4 (tools/ and tests/ only) in a worktree alongside P9-P11; BR.5 merges
+  them after P11; BR.6 (firmware, [SMOKE]) after P11 and before P12; BR.7 with or after
+  BR.6; BR.8 after P12; BR.9 is the board run.
 - The only real risk of changing timing lies in P8.1 (DMA ISR), now in N+2. It is checked with
   `fncmp` (no indirect call, instruction count recorded), but only a board run can
   confirm it.
