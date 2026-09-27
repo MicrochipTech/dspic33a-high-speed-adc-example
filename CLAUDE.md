@@ -57,7 +57,7 @@ the sources still include each other as `"name.h"` without a folder prefix:
 | `fmt.c/.h` | `u32_to_str()`, `u32_to_hex()`, `copy_str()` - the printf-free formatting helpers, moved out of cli.c on 27.09.2026 (P2.1); hardware-free, tested on the host by `tests/host/test_fmt.c` | - |
 | `stats.c/.h` | `half_stats()` (min/max/mean) and `half_mean()` over `const uint16_t *` samples - no `volatile`, no knowledge of the DMA: the callers (cli.c's `completed_half_stats()`, `capture_selftest()`) pass the completed half and cast the volatile away there, with the reason in the comment. Moved out of cli.c/capture.c on 27.09.2026 (P2.2); the mean truncates (`acc / n`), pinned by `tests/host/test_stats.c` | - |
 | `tri_eval.c/.h` | the chain test's triangle evaluator: `fit_line()`, `tri_eval()` (fills a `tri_t`: min/max, turning points, slope lengths, `step`, `zero`/`dbl`, `slip`) and the grid verdict `tri_grid_ok()`, with `TP_MAX`, `STEP_CHECK_LSB`, `GRID_SLIP_MAX`. Moved verbatim out of chaintest.c on 27.09.2026 (P2.3); the sample pointer keeps its `volatile` because the chain test evaluates the DMA buffer in place. No register, no DMA. `tests/host/test_tri_eval.c` repeats the 25.09.2026 host test on synthetic windows (DNL, noise, DAC filter; 2100 clean windows, 0 false alarms; a single lost/repeated sample in the middle half of the window found in 100 % of 4200 windows) and, as `--eval`, evaluates windows from stdin for `tests/host/test_tri_eval_xcheck.py` (P2.4, run by `hosttest.bat` after the C tests), which feeds the same `eval_chain.synth()` windows plus edge cases to both this C code and `tools/eval_chain.py`'s port and requires every integer field and verdict equal and every float field equal to within the float rounding C's `tri_t` applies | - |
-| `sccp.c/.h` | SCCP1 as a trigger source, with clock source, mode and event as parameters; its timer and compare interrupts as event counters - same registers and vectors on both boards, see `adc.c/.h` above | capture, chaintest |
+| `sccp.c/.h` | SCCP1 as a trigger source, with clock source, mode and event as parameters; its timer and compare interrupts as event counters - same registers and vectors on both boards, see `adc.c/.h` above. Its register dump prints through `port/log.h` only (P4.3, 27.09.2026); no `console.h` | port, capture, chaintest |
 | `led.c/.h` | LED0 | - |
 | `timebase.c/.h` | Timer1 as a stopwatch (12.5 MHz) for measuring the delivered rate. It sits on the CPU branch (PLL2) while the ADC is on PLL1, so it cannot flatter the ADC. Not involved in producing the rate. | - |
 | `dac.c/.h` | DAC1 and DAC2 in Triangle Wave mode (DACOUT1 = RA1, DACOUT2 = RA8), one unit table, shared CLKGEN7, plus the internal UREF route to any core; the known signal for `test dac`. `dac2_*()` are DAC2-only aliases for the chain test's fixed pin route and its low-latency ISR path (`dac2_set()`) | console, diag, chaintest |
@@ -78,8 +78,10 @@ only through `port/` (`port_log()`, `port_log_kv()`, `port_panic()`) - never `co
 or `fail()` directly, and it includes none of `console.h`, `diag.h`, `capture.h`.
 `timebase.c` and `led.c` comply as they are (P4.2, 27.09.2026: they never called either -
 `led.c` mentions `fail()` and `capture_service()` in its header comment only, and keeps
-`board.h` until P7); `sccp.c`, `dac.c`, `adc.c`, `dma.c`, `clock.c` move over in P4.3 to
-P4.7. The console never reads the buffer directly;
+`board.h` until P7); `sccp.c` moved over in P4.3 (27.09.2026: the 13 `console_*` calls of
+its register dump became `port_log()`/`port_log_kv()`, the `console.h` include went, and
+every trace scenario that links it lists `src/app/port_impl.c` too); `dac.c`, `adc.c`,
+`dma.c`, `clock.c` move over in P4.4 to P4.7. The console never reads the buffer directly;
 it uses `capture_completed_half()`, or `capture_oneshot_n()` when it needs a window that
 nothing is writing.
 

@@ -6,3 +6,4 @@ src/drivers/dma.c
 src/drivers/led.c
 src/drivers/sccp.c
 src/lib/stats.c
+src/app/port_impl.c

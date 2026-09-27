@@ -21,7 +21,7 @@
 #include <xc.h>
 #include "sccp.h"
 #include "clock.h"
-#include "console.h"
+#include "log.h"        /* port layer (src/port): port_log(), port_log_kv() */
 
 static uint32_t   sccp1_ticks = 0;
 static sccp_clk_t sccp1_clk   = SCCP_CLK_PERIPHERAL;
@@ -154,17 +154,17 @@ void sccp1_regs_dump(void)
      * the reads - so the raw values are printed and not judged here. */
     const uint32_t t1 = CCP1TMR;
     const uint32_t t2 = CCP1TMR;
-    console_puts("[regs] sccp1\r\n");
-    console_kv_hex("CCP1CON1", CCP1CON1);
-    console_kv_hex("CCP1CON2", CCP1CON2);
-    console_kv_hex("CCP1PR", CCP1PR);
-    console_kv("CLKSEL (0 periph, 1 CLKGEN13)", CCP1CON1bits.CLKSEL);
-    console_kv("MOD", CCP1CON1bits.MOD);
-    console_kv("AUXOUT (1 rollover, 2 special event)", CCP1CON2bits.AUXOUT);
-    console_kv("CCP1TMR (first read)", t1);
-    console_kv("CCP1TMR (second read)", t2);
-    console_kv_hex("CCP1RA", CCP1RA);
-    console_kv_hex("CCP1RB", CCP1RB);
-    console_kv("module clock Hz", sccp1_hz());
-    console_kv("nominal ksps", sccp1_nominal_ksps());
+    port_log("[regs] sccp1\r\n");
+    port_log_kv("CCP1CON1", CCP1CON1, true);
+    port_log_kv("CCP1CON2", CCP1CON2, true);
+    port_log_kv("CCP1PR", CCP1PR, true);
+    port_log_kv("CLKSEL (0 periph, 1 CLKGEN13)", CCP1CON1bits.CLKSEL, false);
+    port_log_kv("MOD", CCP1CON1bits.MOD, false);
+    port_log_kv("AUXOUT (1 rollover, 2 special event)", CCP1CON2bits.AUXOUT, false);
+    port_log_kv("CCP1TMR (first read)", t1, false);
+    port_log_kv("CCP1TMR (second read)", t2, false);
+    port_log_kv("CCP1RA", CCP1RA, true);
+    port_log_kv("CCP1RB", CCP1RB, true);
+    port_log_kv("module clock Hz", sccp1_hz(), false);
+    port_log_kv("nominal ksps", sccp1_nominal_ksps(), false);
 }

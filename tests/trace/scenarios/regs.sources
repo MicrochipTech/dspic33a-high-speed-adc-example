@@ -8,3 +8,4 @@ src/drivers/sccp.c
 src/drivers/timebase.c
 src/drivers/led.c
 src/lib/stats.c
+src/app/port_impl.c
