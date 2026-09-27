@@ -84,7 +84,7 @@ if /i "%1"=="nano" (
 )
 set SRC=..\src
 set INC=-I%SRC%\drivers -I%SRC%\app -I%SRC%\cli -I%SRC%\tests -I%SRC%\lib -I%SRC%\diag -I%SRC%\sim -I%SRC%\port -I%SRC%\link -I%SRC%\boards -I%SRC%\meter
-set SOURCES=%SRC%\app\main.c %SRC%\app\config_bits.c %SRC%\app\port_impl.c %SRC%\drivers\clock.c %SRC%\drivers\adc.c %DMA% %SRC%\app\pingpong.c %SRC%\app\capture.c %SRC%\app\acquisition.c %SRC%\meter\meter.c %SRC%\lib\crc16.c %SRC%\lib\fmt.c %SRC%\lib\stats.c %SRC%\lib\tri_eval.c %SRC%\lib\iir1.c %SRC%\lib\goertzel_f.c %SRC%\lib\goertzel_i.c %SRC%\lib\detect.c %SRC%\lib\wavegen.c %SRC%\lib\frame.c %SRC%\drivers\sccp.c %SRC%\drivers\led.c %SRC%\diag\diag.c %SRC%\drivers\timebase.c %SRC%\drivers\dac.c %SRC%\drivers\uart.c %SRC%\tests\dactest.c %SRC%\tests\chaintest.c %SRC%\tests\bench.c %SRC%\link\gui_link.c %SRC%\cli\cli.c %SRC%\cli\cmd_parser.c %BOARDFILE%
+set SOURCES=%SRC%\app\main.c %SRC%\app\config_bits.c %SRC%\app\port_impl.c %SRC%\drivers\clock.c %SRC%\drivers\adc.c %DMA% %SRC%\app\pingpong.c %SRC%\app\capture.c %SRC%\app\acquisition.c %SRC%\app\routing.c %SRC%\meter\meter.c %SRC%\lib\crc16.c %SRC%\lib\fmt.c %SRC%\lib\stats.c %SRC%\lib\tri_eval.c %SRC%\lib\iir1.c %SRC%\lib\goertzel_f.c %SRC%\lib\goertzel_i.c %SRC%\lib\detect.c %SRC%\lib\wavegen.c %SRC%\lib\frame.c %SRC%\drivers\sccp.c %SRC%\drivers\led.c %SRC%\diag\diag.c %SRC%\drivers\timebase.c %SRC%\drivers\dac.c %SRC%\drivers\uart.c %SRC%\tests\dactest.c %SRC%\tests\chaintest.c %SRC%\tests\bench.c %SRC%\link\gui_link.c %SRC%\cli\cli.c %SRC%\cli\cmd_parser.c %BOARDFILE%
 
 if not exist ..\build mkdir ..\build
 

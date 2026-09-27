@@ -24,9 +24,11 @@
  * state a few of them still share with chaintest.c (the measured trigger
  * frequency, the setup diagnostics, the CPU-stepped ADC flag) is declared
  * in acquisition_priv.h instead - too raw for this public header. P11.3's
- * routing_apply() (ROUTE_STREAM, next week) is expected to call the same
- * six functions, which is why they belong here rather than staying
- * chaintest.c's private business.
+ * routing_apply() (routing.c, 27.09.2026) calls acq_chain_setup_input()
+ * (below - acq_chain_setup() with the route's input) and acq_chain_
+ * restore(), which is why they belong here rather than staying
+ * chaintest.c's private business; ROUTE_STREAM/ROUTE_B2B (routing.h) are
+ * defined in acquisition.c from the same board.h macros this code runs.
  *
  * Declared here rather than in capture.h/chaintest.h so that this file,
  * not capture.c/chaintest.c, documents them; both of those headers pull
@@ -135,6 +137,14 @@ void        capture_variant_regs(void);        /* the defining registers */
  * back and clears the counters. */
 bool acq_chain_setup(void);
 void acq_chain_restore(void);
+
+/* acq_chain_setup() with the input chosen for this one call - ADC core
+ * 1..5, PINSEL, SAMC, and whether DAC2 is started as the signal - and the
+ * chain-test default (core 5, RA8, SAMC 0, with the DAC) put back
+ * afterwards for chaintest.c's own acq_chain_setup() calls. What routing_
+ * apply() (routing.h, P11.3) calls; chain_stream_on_input() does the same
+ * three statements inline until P11.4. */
+bool acq_chain_setup_input(uint8_t core, uint8_t pinsel, uint8_t samc, bool test_dac);
 
 /* Pick SLPDAT so that one triangle slope lasts about SLOPE_TARGET samples
  * at `rate` Hz, the widest range the DAC's limits allow. */

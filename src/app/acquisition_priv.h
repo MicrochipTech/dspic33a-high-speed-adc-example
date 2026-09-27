@@ -14,7 +14,8 @@
  * functions moved into acquisition.c, as acq_chain_setup()/acq_chain_
  * restore()/acq_triangle_for()/acq_rate_hz()/acq_ksps_of()/acq_wait_ticks()
  * (declared in acquisition.h - they are operations, not raw state, and
- * P11.3's routing_apply() is expected to call them too), and chaintest.c
+ * P11.3's routing_apply() calls acq_chain_setup_input()/acq_chain_restore()
+ * from there), and chaintest.c
  * now calls INTO acquisition.c (test -> app, the normal direction; see
  * CLAUDE.md's module table). What follows here is the raw state those six
  * functions and chaintest.c's own stages still need to read or write

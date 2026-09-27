@@ -62,6 +62,7 @@
 
 #include "acquisition.h"
 #include "acquisition_priv.h"
+#include "routing.h"         /* route_t: ROUTE_STREAM/ROUTE_B2B are defined here (P11.3) */
 #include "capture.h"
 #include "capture_priv.h"
 #include "adc.h"
@@ -315,6 +316,25 @@ void acq_wait_ticks(uint32_t t)
 static uint8_t s_core = CHAIN_CORE, s_pinsel = CHAIN_PINSEL, s_samc = CHAIN_SAMC;
 static bool    s_test_dac = true;
 
+/* The two paths as route_t data (routing.h, P11.3, 27.09.2026), defined
+ * here so that they are built from the same board.h macros the code below
+ * runs them with - CHAIN_CORE/CHAIN_PINSEL/CHAIN_SAMC (chain_stream_on(),
+ * acq_chain_setup()'s defaults above) and ADC_INSTANCE/ADC_PINSEL/ADC_SAMC
+ * (acq_chain_restore()) - on both boards, without routing.h including
+ * board.h. ROUTE_STREAM's DAC2 rides its own pin (DACOUT2 = RA8 = AD5AN3,
+ * board.h), so ROUTE_SRC_DAC_PIN, dac 2; ROUTE_B2B has no signal of its
+ * own. ROUTE_B2B is data only in N+1: nothing applies it yet. */
+const route_t ROUTE_STREAM = {
+    .src = ROUTE_SRC_DAC_PIN, .core = CHAIN_CORE, .pinsel = CHAIN_PINSEL,
+    .dac = 2u, .sink = ROUTE_SINK_STREAM, .table_samples = 0u,
+    .samc = CHAIN_SAMC,
+};
+const route_t ROUTE_B2B = {
+    .src = ROUTE_SRC_EXT, .core = ADC_INSTANCE, .pinsel = ADC_PINSEL,
+    .dac = 0u, .sink = ROUTE_SINK_STREAM, .table_samples = 0u,
+    .samc = ADC_SAMC,
+};
+
 bool acq_chain_setup(void)
 {
     timebase_init();
@@ -332,6 +352,20 @@ bool acq_chain_setup(void)
     if (acq_trig_hz == 0u) { acq_trig_hz = TRIG_HZ_NOMINAL; }
     acq_setup_ok = (acq_setup_rc_pll == CLKDIV_OK) && acq_setup_trig && acq_setup_dac;
     return acq_setup_ok;
+}
+
+/* acq_chain_setup() with the input chosen for this one call: the three
+ * lines chain_stream_on_input() wraps around its own call (below), as a
+ * function, so that routing_apply() (routing.c, P11.3) can run the same
+ * setup for a route_t without reaching this file's statics. chain_stream_
+ * on_input() itself keeps its inline copy until P11.4 routes it through
+ * routing_apply(); the two are the same three statements on purpose. */
+bool acq_chain_setup_input(uint8_t core, uint8_t pinsel, uint8_t samc, bool test_dac)
+{
+    s_core = core; s_pinsel = pinsel; s_samc = samc; s_test_dac = test_dac;
+    const bool ok = acq_chain_setup();
+    s_core = CHAIN_CORE; s_pinsel = CHAIN_PINSEL; s_samc = CHAIN_SAMC; s_test_dac = true;
+    return ok;
 }
 
 void acq_chain_restore(void)

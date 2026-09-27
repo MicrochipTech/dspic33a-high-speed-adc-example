@@ -16,9 +16,39 @@
  * top comment for the DMA/SCCP check order this relies on.
  */
 #include <stdint.h>
+#include <stdbool.h>
 
 #include "routing.h"
+#include "acquisition.h"
 #include "check.h"
+
+/* ---- P11.3: the two acquisition.c functions routing_apply() calls, as
+ * counting stubs (acquisition.c itself needs the device: xc.h, the drivers).
+ * What matters to the tests below is WHETHER and with WHAT they were called,
+ * and that a refused route never reaches them. ---- */
+static int      stub_setup_calls, stub_restore_calls;
+static uint8_t  stub_core, stub_pinsel, stub_samc;
+static bool     stub_test_dac;
+static bool     stub_setup_result = true;
+
+bool acq_chain_setup_input(uint8_t core, uint8_t pinsel, uint8_t samc, bool test_dac)
+{
+    stub_setup_calls++;
+    stub_core = core; stub_pinsel = pinsel; stub_samc = samc; stub_test_dac = test_dac;
+    return stub_setup_result;
+}
+
+void acq_chain_restore(void)
+{
+    stub_restore_calls++;
+}
+
+static void stubs_reset(bool setup_result)
+{
+    stub_setup_calls = 0; stub_restore_calls = 0;
+    stub_core = 0u; stub_pinsel = 0u; stub_samc = 0u; stub_test_dac = false;
+    stub_setup_result = setup_result;
+}
 
 static void test_route_pin_reachable(void)
 {
@@ -180,6 +210,122 @@ static void test_not_yet(void)
     CHECK_EQ(routing_add(&stream_sink), ROUTE_OK);
 }
 
+/* ---- P11.3: routing_apply() ---- */
+
+/* The stream route as acquisition.c defines ROUTE_STREAM for the EV74H48A
+ * (that definition lives in acquisition.c, which does not build on the
+ * host - the trace scenario tests/trace/scenarios/route_stream.c applies
+ * the real one). */
+static const route_t stream_like = {
+    .src = ROUTE_SRC_DAC_PIN, .core = 5u, .pinsel = 3u, .dac = 2u,
+    .sink = ROUTE_SINK_STREAM, .table_samples = 0u, .samc = 0u,
+};
+
+static void test_apply_stream(void)
+{
+    routing_clear();
+    stubs_reset(true);
+    CHECK_EQ(routing_apply(&stream_like), ROUTE_OK);
+    CHECK_EQ(stub_setup_calls, 1);         /* the one setup call ...        */
+    CHECK_EQ(stub_restore_calls, 0);       /* ... and no restore            */
+    CHECK_EQ(stub_core, 5u);               /* with the route's input ...    */
+    CHECK_EQ(stub_pinsel, 3u);
+    CHECK_EQ(stub_samc, 0u);
+    CHECK(stub_test_dac);                  /* ... and DAC2 as the signal    */
+
+    /* the route is recorded: core 5 is now taken */
+    route_t again = { .src = ROUTE_SRC_EXT, .core = 5u, .pinsel = 0u,
+                      .sink = ROUTE_SINK_STREAM };
+    CHECK_EQ(routing_add(&again), ROUTE_ERR_CORE_IN_USE);
+}
+
+static void test_apply_ext(void)
+{
+    /* "stream on <ksps> <core> <pinsel> <samc>": any reachable pin, the DAC
+     * left alone, SAMC passed through */
+    routing_clear();
+    stubs_reset(true);
+    route_t ext = { .src = ROUTE_SRC_EXT, .core = 2u, .pinsel = ROUTE_PINSEL_UREF,
+                    .sink = ROUTE_SINK_STREAM, .samc = 1u };
+    CHECK_EQ(routing_apply(&ext), ROUTE_OK);
+    CHECK_EQ(stub_setup_calls, 1);
+    CHECK_EQ(stub_core, 2u);
+    CHECK_EQ(stub_pinsel, ROUTE_PINSEL_UREF);
+    CHECK_EQ(stub_samc, 1u);
+    CHECK(!stub_test_dac);
+}
+
+static void test_apply_precheck_refuses_before_any_call(void)
+{
+    /* a conflicting route: core 5 already in use (added, not applied) */
+    routing_clear();
+    stubs_reset(true);
+    route_t holder = { .src = ROUTE_SRC_EXT, .core = 5u, .pinsel = 0u,
+                       .sink = ROUTE_SINK_STREAM };
+    CHECK_EQ(routing_add(&holder), ROUTE_OK);
+    CHECK_EQ(routing_apply(&stream_like), ROUTE_ERR_CORE_IN_USE);
+    CHECK_EQ(stub_setup_calls, 0);
+    CHECK_EQ(stub_restore_calls, 0);
+
+    /* an unreachable pin: the first rule, same result */
+    routing_clear();
+    stubs_reset(true);
+    route_t bad_pin = { .src = ROUTE_SRC_EXT, .core = 1u, .pinsel = 5u,
+                        .sink = ROUTE_SINK_STREAM };
+    CHECK_EQ(routing_apply(&bad_pin), ROUTE_ERR_PIN_UNREACHABLE);
+    CHECK_EQ(stub_setup_calls, 0);
+
+    /* a sink that is not wired up: routing_add()'s own NOT_YET */
+    routing_clear();
+    stubs_reset(true);
+    route_t ram_sink = stream_like;
+    ram_sink.sink = ROUTE_SINK_RAM;
+    CHECK_EQ(routing_apply(&ram_sink), ROUTE_ERR_NOT_YET);
+    CHECK_EQ(stub_setup_calls, 0);
+}
+
+static void test_apply_not_yet_shapes(void)
+{
+    /* every shape acquisition.c cannot run today: NOT_YET, no driver call,
+     * nothing recorded (the same core applies fine afterwards) */
+    const route_t shapes[] = {
+        { .src = ROUTE_SRC_DAC_INT, .core = 5u, .pinsel = ROUTE_PINSEL_UREF,
+          .dac = 2u, .sink = ROUTE_SINK_STREAM },            /* UREF route     */
+        { .src = ROUTE_SRC_DAC_PIN, .core = 5u, .pinsel = 3u, .dac = 1u,
+          .sink = ROUTE_SINK_STREAM },                       /* not DAC2       */
+        { .src = ROUTE_SRC_DAC_PIN, .core = 5u, .pinsel = 3u, .dac = 2u,
+          .sink = ROUTE_SINK_STREAM, .table_samples = 256u }, /* plays a table  */
+        { .src = ROUTE_SRC_EXT, .core = 5u, .pinsel = 3u,
+          .sink = ROUTE_SINK_STREAM, .table_samples = 256u }, /* plays a table  */
+        { .src = ROUTE_SRC_RAM_TABLE, .core = ROUTE_CORE_NONE, .dac = 1u,
+          .sink = ROUTE_SINK_STREAM, .table_samples = 256u }, /* no ADC at all  */
+    };
+    for (uint32_t i = 0; i < sizeof shapes / sizeof shapes[0]; i++) {
+        routing_clear();
+        stubs_reset(true);
+        CHECK_EQ(routing_apply(&shapes[i]), ROUTE_ERR_NOT_YET);
+        CHECK_EQ(stub_setup_calls, 0);
+        CHECK_EQ(stub_restore_calls, 0);
+        CHECK_EQ(routing_apply(&stream_like), ROUTE_OK);  /* nothing recorded */
+    }
+}
+
+static void test_apply_setup_failure(void)
+{
+    /* the clock tree/DAC refused: restore once, SETUP, and the route is not
+     * recorded - the same route applies cleanly on the next try */
+    routing_clear();
+    stubs_reset(false);
+    CHECK_EQ(routing_apply(&stream_like), ROUTE_ERR_SETUP);
+    CHECK_EQ(stub_setup_calls, 1);
+    CHECK_EQ(stub_restore_calls, 1);
+
+    stubs_reset(true);
+    CHECK_EQ(routing_apply(&stream_like), ROUTE_OK);
+    CHECK_EQ(stub_setup_calls, 1);
+    CHECK_EQ(stub_restore_calls, 0);
+}
+
 int main(void)
 {
     test_route_pin_reachable();
@@ -191,6 +337,12 @@ int main(void)
     test_uref();
     test_ram_budget();
     test_not_yet();
+
+    test_apply_stream();
+    test_apply_ext();
+    test_apply_precheck_refuses_before_any_call();
+    test_apply_not_yet_shapes();
+    test_apply_setup_failure();
 
     return check_summary();
 }

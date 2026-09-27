@@ -1,16 +1,20 @@
 /*
  * routing.h - the routing core: data model and conflict/resource checks for
  * signal paths (docs/DESIGN-MULTICHANNEL.md section 4.4). P11.1 (27.09.2026):
- * types and routing_add()/routing_clear() only - no routing_apply() yet, so
- * this header pulls in no device header and no driver header, and compiles
- * with a host gcc (tests/host/test_routing.c does exactly that).
+ * types and routing_add()/routing_clear(); P11.3 (27.09.2026): routing_apply()
+ * for the one route N+1 runs, ROUTE_STREAM. This header still pulls in no
+ * device header and no driver header, and compiles with a host gcc
+ * (tests/host/test_routing.c does exactly that, with two acquisition.c
+ * functions stubbed - see routing.c's top comment).
  *
  * A route describes one signal path: where its ADC-side signal comes from
  * (route_src_t), which core/pin it uses to get there, and where its data
  * goes (route_sink_t). routing_add() checks a candidate route against every
  * route already added and, if it fits, records it; it never writes a
- * register - that is routing_apply()'s job (P11.3), over the drivers, not
- * here.
+ * register. routing_apply() (P11.3) runs the same checks and then brings
+ * the path up through acquisition.c - it touches no register itself either;
+ * the drivers do, in the fixed order routing_apply()'s comment in routing.c
+ * lays out.
  *
  * Resource model (docs/DESIGN-MULTICHANNEL.md section 2, the ATDF of
  * dsPIC33AK-MP_DFP 1.4.260):
@@ -121,9 +125,14 @@ typedef enum {
     ROUTE_ERR_DAC_OUTPUTS,     /* more than ROUTE_DAC_OUTPUTS DACs external */
     ROUTE_ERR_UREF_BUSY,       /* a second DAC on UREF at the same time     */
     ROUTE_ERR_RAM_BUDGET,      /* halves x channels + tables over budget    */
-    ROUTE_ERR_NOT_YET,         /* every check above passed, but this sink is
-                                * not wired up yet in N+1                   */
-    ROUTE_ERR_TABLE_FULL       /* routing.c's own route_t storage is full   */
+    ROUTE_ERR_NOT_YET,         /* every check above passed, but this sink -
+                                * or, in routing_apply(), this route shape -
+                                * is not wired up yet in N+1                */
+    ROUTE_ERR_TABLE_FULL,      /* routing.c's own route_t storage is full   */
+    ROUTE_ERR_SETUP            /* routing_apply() only: the checks passed but
+                                * the clock tree, trigger clock or DAC
+                                * refused (acq_chain_setup_input() returned
+                                * false); the boot configuration is back    */
 } route_err_t;
 
 /* One signal path. `core`/`pinsel` are meaningful (and checked) for every
@@ -142,15 +151,44 @@ typedef enum {
  * reading it, but if it is also being played out (the ordinary
  * signal-generator case) it still needs the DMA/SCCP/RAM a playback table
  * needs, which is exactly what this field already charges for. 0 when no
- * table is involved. */
+ * table is involved.
+ *
+ * `samc` (P11.3): the ADC sample time of the core's channel, the value
+ * adc_init() writes to ADnCH0CON1.SAMC (0 = 0.5 TAD, the shortest; the
+ * citation is at that write in adc.c) - how the core samples this pin, so
+ * part of the source
+ * description, not a rate: the sample RATE is not in a route at all.
+ * Requirement A1 (docs/DESIGN-MULTICHANNEL.md: "all ADCs run on the same
+ * clock") makes it one shared trigger period for every ADC-consuming
+ * route, set by the caller after routing_apply() - see routing_apply(). */
 typedef struct {
     route_src_t  src;
     uint8_t      core;
     uint8_t      pinsel;
     uint8_t      dac;
+    uint8_t      samc;          /* beside the other bytes: 16 bytes a route,
+                                 * not 20 - routing.c keeps 24 of them      */
     route_sink_t sink;
     uint32_t     table_samples;
 } route_t;
+
+/* The two paths this firmware runs today, as data (P11.3, 27.09.2026).
+ * Defined in acquisition.c, next to the code that runs them, because their
+ * core/pin come from board.h's macros (DAC_ADC_CORE/DAC_ADC_PINSEL,
+ * ADC_INSTANCE/ADC_PINSEL/ADC_SAMC) - the same macros chain_stream_on() and
+ * acq_chain_restore() already use, so the data cannot drift from the code,
+ * and both boards get their own values without this header (which the host
+ * test compiles) including board.h.
+ *
+ *   ROUTE_STREAM  SCCP1 -> ADC core 5 (Single mode) -> DMA0 -> ping-pong ->
+ *                 CPU, DAC2 on its pin (RA8 = AD5AN3) as the signal: the
+ *                 chain "stream on <ksps>" runs, docs/ANALYSIS.md C.8.
+ *   ROUTE_B2B     the back-to-back capture on the board's default core and
+ *                 input, one channel: what "snap"/"blk"/"test ..." run.
+ *                 Data only in N+1 - the `test` suite keeps its own path;
+ *                 switching it to routing_apply(&ROUTE_B2B) is N+2's. */
+extern const route_t ROUTE_STREAM;
+extern const route_t ROUTE_B2B;
 
 /* Every ADC core reaches PINSEL 7 (UREF); for any other PINSEL, whether
  * `core` reaches it as a package pin is a silicon fact, not a policy - see
@@ -165,5 +203,23 @@ void routing_clear(void);
  * counts against the resource table for the next call; on any other
  * return, nothing changed. */
 route_err_t routing_add(const route_t *r);
+
+/* Checks `r` exactly as routing_add() would (every rule, the same order,
+ * against the routes already added), then brings the path up through
+ * acquisition.c in the fixed order docs/DESIGN-MULTICHANNEL.md 4.4 gives -
+ * DMA off, cores off, clock and trigger, cores on, DMA from scratch (see
+ * routing.c for which call is which step) - and records the route. Nothing
+ * converts yet when it returns: the trigger (SCCP1) is stopped and the DMA
+ * channel is down, exactly where acq_chain_setup() leaves them, and the
+ * caller starts the shared trigger at its rate (capture_chain_start(), as
+ * chain_stream_on_input() does). Only routes whose shape acquisition.c can
+ * run today are applied: ROUTE_SINK_STREAM, no table, src ROUTE_SRC_EXT
+ * (any core/pin, the DAC left alone - "stream on <ksps> <core> <pinsel>")
+ * or ROUTE_SRC_DAC_PIN with dac 2 (DAC2 started at mid-scale first -
+ * ROUTE_STREAM); every other shape returns ROUTE_ERR_NOT_YET before any
+ * driver is called, as does any conflict with a route already added. On
+ * ROUTE_ERR_SETUP the boot configuration has been restored
+ * (acq_chain_restore()) and the route is not recorded. */
+route_err_t routing_apply(const route_t *r);
 
 #endif /* ROUTING_H */

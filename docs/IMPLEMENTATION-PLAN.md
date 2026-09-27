@@ -23,7 +23,7 @@ commit message stays the detailed record; this table is the one place to see whe
 work stands. `done` = committed and re-checked by the lead session (builds, `trace.bat`,
 `hosttest.bat`, goldens, no trailer).
 
-As of 27.09.2026, 18:30. Done: 44 of 52 tasks in the N+1 scope (63 planned plus P0.9 = 64; P8 and P10, 12
+As of 27.09.2026, 21:00. Done: 45 of 52 tasks in the N+1 scope (63 planned plus P0.9 = 64; P8 and P10, 12
 tasks, moved to N+2 on 27.09.2026); P0.5b and P4.6a were added along the way and are
 not counted.
 
@@ -79,7 +79,8 @@ not counted.
 | P10.1-P10.4 Split `clock.c` | moved to N+2 | | | user decision 27.09.2026; when it is done: needs `trace_point()` between clock steps (approach (a)) |
 | P11.1 Routing types | done | `4bddb2c` (worktree, beside P9.3) | Sonnet | routing.h/.c, host-only, no apply yet; pin-reachability table from a new generator, tools/gen_route_pins.py, against tools/pins128.py |
 | P11.2 Host tests of the conflict rules | done | `0a5ecca`, merge (see log) | Sonnet | tests/host/test_routing.c, 45/45 checks, one test per rule; a deliberately broken SCCP check caught it (44/45, reverted) |
-| P11.3-P11.5 | open | | | P11.4 is the central proof |
+| P11.3 `routing_apply()` for `ROUTE_STREAM` | done | this commit | Fable | `routing_apply()` = `route_check()` (routing_add()'s rules, shared) + shape gate (STREAM sink, no table, EXT or DAC_PIN/dac 2; else NOT_YET before any driver call) + `acq_chain_setup_input()` (new in acquisition.c: the three statements chain_stream_on_input() wraps around acq_chain_setup(), as a function; the fixed order is acq_chain_setup()'s body, mapped step by step in routing.c's comment) + restore/`ROUTE_ERR_SETUP` on refusal; `route_t` gained `samc` (the rate stays outside a route, A1); `ROUTE_STREAM`/`ROUTE_B2B` defined in acquisition.c from board.h's macros (both boards); pin table per DEVICE macro (`pins64.py` added to gen_route_pins.py; Nano: AD5AN3 = RA8 reachable); routing.c in every build. New golden `route_stream`: W/C lines equal `stream_on`'s except six IEC2/DMACON/DMA0CH down/up lines its extra snapshot point exposes - without that point byte-identical (checked, not committed); `slp=0` in both (clock_dac_hz() reads COSC the model never switches). `stream on` NOT routed through it yet (P11.4). Verified: hw/sim/nano/smoke clean; trace 14/14, 13 existing goldens unchanged; hosttest 15/15 (test_routing 93 checks); fncmp `_DMA0Interrupt` 42/0, `_U2RXInterrupt` 55/0, 427 functions identical, 5 differ only in BUILD_ID string hashes or a relabelled RAM address (`_cmd_parser_feed_char`: the same constant now falls inside `route_table`), 14 new (none dropped by the linker); [SMOKE] PASS |
+| P11.4-P11.5 | open | | | P11.4 is the central proof |
 | P12.1-P12.4 Close-out | open | | | P12.4 = [SIM], runs without asking since 27.09.2026 |
 | BR.1 `tools/board_run.py` | in review | `175b20c` (worktree) | Sonnet | phase BR added 27.09.2026 (not counted in the 52); host-side, worktree beside P9/P11; selftest 10/10 |
 | BR.2 `tools/eval_board.py` + `expected.json` | in progress (worktree) | | Sonnet | |
