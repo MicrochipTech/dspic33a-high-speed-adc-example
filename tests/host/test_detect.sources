@@ -1,0 +1,4 @@
+src/lib/detect.c
+src/lib/goertzel_f.c
+src/lib/goertzel_i.c
+src/lib/iir1.c
