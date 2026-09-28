@@ -81,7 +81,7 @@ from eval_chain import synth as chain_synth  # noqa: E402
 # serial console client) moved out to tools/protocol.py (P6.5), so a
 # host-side tool can talk to the board's console without pulling in NiceGUI.
 # ACK/NAK stay in use here too, for FakeTarget and the self-test below.
-from protocol import ACK, NAK, crc16_ccitt_false, parse_grab_frame, Target  # noqa: E402
+from protocol import ACK, NAK, crc16_ccitt_false, format_rtt, parse_grab_frame, Target  # noqa: E402
 # "Remote" connection choice (below): a bench_client tunnel (tools/remote.py)
 # instead of a local COM port - see RemoteBench's own docstring for the
 # fixed contract this codes against. No flashing here: that stays in
@@ -2419,6 +2419,16 @@ def main_gui(args):
             conn_chip.text = (lines[0] if ok and lines else f"{port_sel.value}: connected")
             if found:
                 conn_chip.text += f"   ·   {found}"
+            # Round trip to the board right after connecting (Target.ping():
+            # empty line out, prompt + ACK back) - over "remote" that is host
+            # -> relay -> agent -> COM port and back. FakeTarget has no ping.
+            if hasattr(state["target"], "ping"):
+                try:
+                    rtt = state["target"].ping(n=3)
+                    conn_chip.text += f"   ·   RTT {rtt['avg_ms']:.0f} ms"
+                    push_log(f"--- round trip to the board: {format_rtt(rtt)} ---")
+                except TimeoutError:
+                    conn_chip.text += "   ·   RTT: no reply"
             conn_chip.icon = "link"
             conn_chip.props("color=positive")
             conn_btn.text, conn_btn.icon = "disconnect", "usb_off"

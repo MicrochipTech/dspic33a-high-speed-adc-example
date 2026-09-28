@@ -363,6 +363,18 @@ def run_r0(target, log, ui, remote=False):
             log.ev(block, "sync: ready")
     except TimeoutError:
         handle_timeout(target, log, block, ui, remote=remote)
+    # The round trip to the board's parser, first thing once it answers
+    # (protocol.Target.ping(): an empty line out, prompt + ACK back, 5 times).
+    # Locally the USB/UART path; with --remote also host -> relay -> agent.
+    # An EV line only - no RX line, so eval_board.py's A/B diffs never see it.
+    rtt = None
+    if hasattr(target, "ping"):
+        try:
+            rtt = target.ping()
+            log.ev(block, "rtt " + protocol.format_rtt(rtt))
+            ui.say(f"{block}: round trip to the board: {protocol.format_rtt(rtt)}")
+        except TimeoutError:
+            log.ev(block, "rtt: no reply")
     ok_v, version_lines = send(target, log, block, "version", timeout=TIMEOUT_CMD)
     ok_h, help_lines = send(target, log, block, "help", timeout=TIMEOUT_CMD)
     ok_s, status_lines = send(target, log, block, "status", timeout=TIMEOUT_CMD)
@@ -370,7 +382,7 @@ def run_r0(target, log, ui, remote=False):
     log.ev(block, "capabilities: " + " ".join(sorted(caps)))
     verdict = "ok" if (ok_v and ok_h and ok_s) else "fail"
     log.ev(block, f"block end {verdict}")
-    return dict(verdict=verdict, caps=caps, version=version_lines, status=status_lines)
+    return dict(verdict=verdict, caps=caps, version=version_lines, status=status_lines, rtt=rtt)
 
 
 def run_simple_block(target, log, caps, ui, block, cap_name, command, timeout, remote=False):
@@ -875,6 +887,9 @@ class RemoteTarget:
     def sync(self, timeout=20.0):
         return self.target.sync(timeout=timeout)
 
+    def ping(self, n=5, timeout=5.0):
+        return self.target.ping(n=n, timeout=timeout)
+
     def close(self):
         self.target.close()
         self.bench.close_tunnel()
@@ -1212,6 +1227,11 @@ class ReplayTarget:
     def sync(self, timeout=20.0):
         return True
 
+    def ping(self, n=5, timeout=5.0):
+        samples = [12.0 + i for i in range(n)]
+        return dict(n=n, min_ms=min(samples), avg_ms=sum(samples) / n, max_ms=max(samples),
+                    samples_ms=samples)
+
     def boot_banner(self):
         """Called once up front (the "power-up" banner) and again after a
         simulated reset, deliberately with a different reset cause the
@@ -1385,6 +1405,9 @@ def selftest():
           results_b["R1"]["verdict"] == "fail"
           and any("R1" in l and "[NAK]" in l for l in log_b.lines))
     check("B: R6 (route list) runs (has 'route' in help)", results_b["R6"]["verdict"] == "ok")
+    check("R0 measures the round trip first and logs it as an EV line",
+          results_b["R0"]["rtt"] is not None and results_b["R0"]["rtt"]["n"] == 5
+          and any(" EV R0 rtt RTT " in l for l in log_b.lines))
     gui_b = [r for r in results_b["R4"]["rates"] if r.get("gui")]
     check("B: R4.gui ran - buf set and restored, dac 2 on/off, grabs clean",
           len(gui_b) == 1 and gui_b[0]["buf_restored"] == 1024 and gui_b[0]["dac_ok"]

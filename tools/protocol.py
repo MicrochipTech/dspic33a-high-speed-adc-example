@@ -39,6 +39,11 @@ BAUD = 115200
 _CRC_LINE_RE = re.compile(rb"CRC ([0-9A-Fa-f]{4})")
 
 
+def format_rtt(r) -> str:
+    """Target.ping()'s result as one line, e.g. "RTT 84 ms (min 79, max 97, n=5)"."""
+    return f"RTT {r['avg_ms']:.0f} ms (min {r['min_ms']:.0f}, max {r['max_ms']:.0f}, n={r['n']})"
+
+
 def crc16_ccitt_false(data: bytes) -> int:
     """poly 0x1021, init 0xFFFF, no reflect, no xorout -- the frame's CRC."""
     crc = 0xFFFF
@@ -146,6 +151,34 @@ class Target:
         self.ser.reset_input_buffer()
         self.ser.write(b"\r")
         self._read_until_ready(timeout)
+
+    def ping(self, n: int = 5, timeout: float = 5.0):
+        """Round-trip delay to the board's parser: n times an empty line out,
+        the prompt and its ACK back - the shortest exchange the console has
+        (a few bytes each way, no command runs). Over a local COM port that
+        is the USB/UART path, over a bench_client tunnel ("socket://...")
+        additionally host -> relay -> agent -> COM port and back, which is
+        what this is for: one number at the start of a remote session.
+        Reads byte-wise (ser.read(1) returns on the first byte, in_waiting
+        for the rest) rather than through _read_until_ready(), whose
+        ser.read(4096) waits out the port's 50 ms timeout whenever fewer than
+        4096 bytes arrive and would add up to 50 ms to every sample.
+        Returns dict(n, min_ms, avg_ms, max_ms, samples_ms)."""
+        samples = []
+        for _ in range(n):
+            self.ser.reset_input_buffer()
+            t0 = time.perf_counter()
+            self.ser.write(b"\r")
+            buf = b""
+            while not (buf.endswith(ACK) or buf.endswith(NAK)):
+                if time.perf_counter() - t0 > timeout:
+                    raise TimeoutError(f"ping: no ACK/NAK within {timeout} s; got {buf[-40:]!r}")
+                buf += self.ser.read(max(1, self.ser.in_waiting))
+            samples.append((time.perf_counter() - t0) * 1000.0)
+        r = dict(n=n, min_ms=min(samples), avg_ms=sum(samples) / n, max_ms=max(samples),
+                 samples_ms=samples)
+        self._log(f"# round trip: {format_rtt(r)}")
+        return r
 
     def cmd(self, line: str, timeout: float = 5.0):
         """Send one command, return (ok, reply_lines) without echo and prompt."""

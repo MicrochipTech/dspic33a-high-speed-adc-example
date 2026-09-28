@@ -109,6 +109,50 @@ def check_target_over_socket_url():
                  ok and list(decoded) == samples, f"ok={ok} samples={list(decoded)} meta={meta}")
 
 
+def check_ping_over_socket_url():
+    """Target.ping() over a real loopback socket against a stand-in that
+    answers every bare "\\r" with "\\r\\n> " + ACK after DELAY_S: the
+    measured round trip must show that delay - and NOT the port's 50 ms
+    read timeout on top of it, which is what ping() reads byte-wise to
+    avoid (a ser.read(4096) would wait it out on every sample)."""
+    DELAY_S, N = 0.030, 5
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", 0))
+    port = srv.getsockname()[1]
+    srv.listen(1)
+
+    def serve():
+        conn, _ = srv.accept()
+        try:
+            conn.recv(1)                              # Target.__init__'s sync()
+            conn.sendall(protocol.ACK)
+            for _ in range(N):
+                if not conn.recv(1):
+                    return
+                time.sleep(DELAY_S)
+                conn.sendall(b"\r\n> " + protocol.ACK)
+            time.sleep(0.2)
+        finally:
+            conn.close()
+
+    th = threading.Thread(target=serve, daemon=True)
+    th.start()
+    try:
+        t = protocol.Target(f"socket://127.0.0.1:{port}")
+        try:
+            r = t.ping(n=N, timeout=2.0)
+        finally:
+            t.close()
+    finally:
+        srv.close()
+        th.join(timeout=2)
+    ms = DELAY_S * 1000.0
+    ok = r["n"] == N and len(r["samples_ms"]) == N and ms * 0.9 <= r["min_ms"] and r["max_ms"] < ms + 40.0
+    return check(f"Target.ping() measures a {ms:.0f} ms stand-in delay without the 50 ms read timeout",
+                 ok, protocol.format_rtt(r))
+
+
 def main() -> int:
     ok_all = True
 
@@ -184,6 +228,7 @@ def main() -> int:
     ok_all &= check("Target.grab() timeout with no bytes caught", ok_timeout)
 
     ok_all &= check_target_over_socket_url()
+    ok_all &= check_ping_over_socket_url()
 
     print("test_protocol", "PASS" if ok_all else "FAIL")
     return 0 if ok_all else 1
