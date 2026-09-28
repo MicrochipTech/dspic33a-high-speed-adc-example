@@ -731,7 +731,7 @@ BR.7 (docs) with or after BR.6. BR.8 (the B image) after P12. BR.9 is the run it
 | R1 | `regs` | register state after boot; A/B bitwise diff |
 | R2 | `chain all` | against run 19 and between A and B |
 | R3 | `test all` | the back-to-back suite |
-| R4 | `stream on` at 1, 4, 8 MSPS, each >= 50 `stream grab`, `stream off` | the GUI path: per grab the ov/late/missed delta, CRC, triangle verdict (`eval_chain.tri_eval`/`grid_ok`); raw frame stored on FAIL |
+| R4 | `stream on` at 1, 4, 8 MSPS, each >= 50 `stream grab`, `stream off` | the GUI path: per grab the ov/late/missed delta, CRC, triangle verdict (`eval_chain.tri_eval`/`grid_ok`); raw frame stored on FAIL. Since 28.09.2026 also R4.gui: `buf 512` while stopped, `stream on 4000`, `dac 2 on 256 3000 39`, 10 grabs (CRC and counters, no triangle verdict), `dac 2 off`, `stream off`, `buf` restored - the two commands `adc_gui.py` sends on a board that no other block did (`docs/TEST-COVERAGE.md`) |
 | R5 | `stream on <ksps> <core> <pinsel>`, 10 grabs | the non-DAC path (`slp=0`) |
 | R6 | `route list` (B only) | P11 on silicon; `NOT_AVAILABLE` in A |
 | R7 | `status` again | end state, trap/fail codes, stack high-water mark (BR.6) |

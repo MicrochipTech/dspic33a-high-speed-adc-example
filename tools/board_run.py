@@ -35,6 +35,7 @@ Sequence per run (board-run-task.md section 4.2 / the BR card's table):
     R2  chain all                    - the one-command chain test
     R3  test all                     - the back-to-back suite
     R4  stream on <1000|4000|8000>, >= 50 grabs, stream off   - the GUI path
+        R4.gui: buf 512, stream on 4000, dac 2 on ..., 10 grabs, all restored
     R5  stream on <ksps core pinsel>, 10 grabs                - non-DAC path
     R6  route list (B only)          - P11 on silicon; NOT_AVAILABLE in A
     R7  status again                 - end state
@@ -151,7 +152,7 @@ TIMEOUT_R0 = 30.0       # sync, version, help, status
 TIMEOUT_R1 = 10.0       # regs
 TIMEOUT_R2 = 90.0       # chain all - "within a minute" (CLAUDE.md) + margin
 TIMEOUT_R3 = 180.0      # test all - the back-to-back suite (first estimate)
-TIMEOUT_R4 = 300.0      # 3 rates x (on + >=50 grabs + off), 10s/grab ceiling
+TIMEOUT_R4 = 330.0      # 3 rates x (on + >=50 grabs + off) + R4.gui (10 grabs), 10s/grab ceiling
 TIMEOUT_R5 = 60.0       # one rate x (on + 10 grabs + off)
 TIMEOUT_R6 = 10.0       # route list (B only)
 TIMEOUT_R7 = 10.0       # status again
@@ -159,6 +160,14 @@ TIMEOUT_R7 = 10.0       # status again
 MIN_GRABS_PER_RATE = 50            # R4
 GRABS_R5 = 10                      # R5
 R4_RATES_KSPS = (1000, 4000, 8000)  # 1, 4, 8 MSPS - "stream on" takes ksps
+# R4.gui (28.09.2026): the two commands tools/adc_gui.py sends on a real
+# board and no other block does - "buf <n>" while stopped, "dac 2 on ..."
+# while the test input streams (docs/TEST-COVERAGE.md, "Tests still to
+# add" 1). The DAC values are the GUI self-test's own.
+R4_GUI_BUF = 512
+R4_GUI_KSPS = 4000
+R4_GUI_DAC = "dac 2 on 256 3000 39"
+R4_GUI_GRABS = 10
 R5_DEFAULT_KSPS = 1000
 # core 3 / pinsel 5 = AD3AN5 = RA0 = DIM pin P77 = mikroBUS A socket, pin
 # "AN" - tools/boards.py's own "default_core"/"default_pinsel" for
@@ -433,6 +442,38 @@ def _stream_grabs(target, log, block, label, n_grabs, check_triangle, fail_frame
     return grabs, ok_all
 
 
+_BUF_HALF_RE = re.compile(r"samples per half\D*(\d+)")
+
+
+def _r4_gui(target, log, sub, label, fail_frames):
+    """R4.gui: what the GUI's "apply" buttons send (adc_gui.py's apply_buf()
+    and send_dac()), in the order the GUI allows them: "buf <n>" only while
+    stopped (cli.c refuses it otherwise), then "stream on", "dac 2 on ..."
+    replacing the firmware's own triangle on RA8, R4_GUI_GRABS grabs, and
+    everything put back ("dac 2 off", "stream off", "buf <the size read
+    first>"). No triangle verdict on these grabs: the frame's slp still
+    reports the firmware's triangle, not the one "dac" replaced it with -
+    the GUI's own triangle card has the same caveat (state["test_dac2"]).
+    CRC and the ov/late/missed deltas are judged as in every grab."""
+    ok_q, q_lines = send(target, log, sub, "buf", timeout=TIMEOUT_CMD)
+    m = next((_BUF_HALF_RE.search(l) for l in q_lines if _BUF_HALF_RE.search(l)), None)
+    orig = int(m.group(1)) if m else None
+    ok_b, _ = send(target, log, sub, f"buf {R4_GUI_BUF}", timeout=TIMEOUT_CMD)
+    ok_on, _ = send(target, log, sub, f"stream on {R4_GUI_KSPS}", timeout=TIMEOUT_CMD)
+    ok_d, grabs, ok_g = False, [], False
+    if ok_on:
+        ok_d, _ = send(target, log, sub, R4_GUI_DAC, timeout=TIMEOUT_CMD)
+        grabs, ok_g = _stream_grabs(target, log, sub, label, R4_GUI_GRABS, False, fail_frames)
+    ok_doff, _ = send(target, log, sub, "dac 2 off", timeout=TIMEOUT_CMD)
+    ok_off, _ = send(target, log, sub, "stream off", timeout=TIMEOUT_CMD)
+    ok_r = True
+    if orig is not None:
+        ok_r, _ = send(target, log, sub, f"buf {orig}", timeout=TIMEOUT_CMD)
+    ok = all((ok_q, orig is not None, ok_b, ok_on, ok_d, ok_g, ok_doff, ok_off, ok_r))
+    return ok, dict(ksps=R4_GUI_KSPS, gui=True, buf=R4_GUI_BUF, buf_restored=orig,
+                    on_ok=ok_on, dac_ok=ok_d, grabs=grabs, off_ok=ok_off)
+
+
 def run_r4(target, log, caps, ui, label, fail_frames, remote=False):
     """`fail_frames` is the ONE list shared across R4 and R5 (run_session
     passes the same object to both) and mutated in place: the file names
@@ -463,6 +504,12 @@ def run_r4(target, log, caps, ui, label, fail_frames, remote=False):
             ok_off, _ = send(target, log, sub, "stream off", timeout=TIMEOUT_CMD)
             ok_all = ok_all and ok_off
             per_rate.append(dict(ksps=ksps, on_ok=ok_on, grabs=grabs, off_ok=ok_off))
+        if "buf" in caps and "dac" in caps:
+            ok_gui, gui = _r4_gui(target, log, f"{block}.gui", label, fail_frames)
+            ok_all = ok_all and ok_gui
+            per_rate.append(gui)
+        else:
+            log.ev(block, "not_available buf/dac")
     except TimeoutError:
         handle_timeout(target, log, block, ui, remote=remote)
         log.ev(block, "block end timeout")
@@ -1179,7 +1226,12 @@ class ReplayTarget:
             f"adc_dma_40msps - ADC at 40 MSPS into RAM via DMA (replay {self.label})",
         ]
 
+    half_len = 1024     # "buf" state, as cli.c's capture_half_len() reports it
+    dac_log = None
+
     def cmd(self, line, timeout=5.0):
+        if self.dac_log is None:
+            self.dac_log = []
         if self.timeout_block is not None and line == self.timeout_block and not self._timeout_fired:
             self._timeout_fired = True
             raise TimeoutError(f"replay: simulated hang on {line!r}")
@@ -1202,7 +1254,9 @@ class ReplayTarget:
                      "  regs - clock, ADC, DMA and UART registers",
                      "  chain all|<n>|from <n>|run <ksps> [s] - the chain test",
                      "  test [all|self|clock|clkoff|bursts|matrix|rate|sweep|dac] [n]",
-                     "  stream on <ksps> [core pinsel [samc]]|off|grab - the chain streaming"]
+                     "  stream on <ksps> [core pinsel [samc]]|off|grab - the chain streaming",
+                     "  buf [n] - samples per buffer half (16..1024, even)",
+                     "  dac <1|2> <on|off> [low] [high] [slpdat] - triangle on DACOUT1/2"]
             if self.has_route:
                 lines.append("  route list - the active route(s) and the resource table")
             return True, lines
@@ -1229,6 +1283,16 @@ class ReplayTarget:
                           "ram_used: 0", "ram_budget: 57344"]
         if c == "stream":
             return self._stream_cmd(parts[1:])
+        if c == "buf":
+            # cli.c's cmd_buf_fn(): refused while streaming
+            if len(parts) > 1:
+                if self.chain_on:
+                    return False, ["buf: stop the stream first, and give an even number"]
+                self.half_len = int(parts[1])
+            return True, [f"samples per half: {self.half_len}", "maximum: 1024"]
+        if c == "dac" and len(parts) >= 3:
+            self.dac_log.append(line)
+            return True, [f"dac: {parts[1]}", "off" if parts[2] == "off" else "RA8"]
         return False, ["unknown command"]
 
     def _stream_cmd(self, args):
@@ -1321,6 +1385,14 @@ def selftest():
           results_b["R1"]["verdict"] == "fail"
           and any("R1" in l and "[NAK]" in l for l in log_b.lines))
     check("B: R6 (route list) runs (has 'route' in help)", results_b["R6"]["verdict"] == "ok")
+    gui_b = [r for r in results_b["R4"]["rates"] if r.get("gui")]
+    check("B: R4.gui ran - buf set and restored, dac 2 on/off, grabs clean",
+          len(gui_b) == 1 and gui_b[0]["buf_restored"] == 1024 and gui_b[0]["dac_ok"]
+          and len(gui_b[0]["grabs"]) == R4_GUI_GRABS and all(g["ok"] for g in gui_b[0]["grabs"])
+          and target_b.half_len == 1024
+          and target_b.dac_log == [R4_GUI_DAC, "dac 2 off"])
+    check("B: R4.gui's buf was sent while stopped (no refusal in the log)",
+          not any("stop the stream first" in l for l in log_b.lines))
     check("BR.6: B's status carries the new fields, A's does not",
           any("stack_free_pct: 90" in l for l in log_b.lines)
           and not any("stack_free_pct" in l for l in log_a.lines))

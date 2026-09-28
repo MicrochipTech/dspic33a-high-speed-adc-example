@@ -20,11 +20,13 @@ STYLE = """<style>
 svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--accent:#0d7a6b;
 --b-host:#eceef1;--s-host:#8b95a3;--b-cli:#e5edf9;--s-cli:#4f74b3;--b-test:#f0e9f8;--s-test:#8062ad;
 --b-app:#e2f2ee;--s-app:#2f8a78;--b-lib:#f8efe0;--s-lib:#b07a2a;--s-diag:#b0574d;
---b-port:#ebeae6;--s-port:#7c7768;--b-drv:#e7f0e1;--s-drv:#5c8a3f;--b-hw:#e3e7ec;--s-hw:#4a5868}
+--b-port:#ebeae6;--s-port:#7c7768;--b-drv:#e7f0e1;--s-drv:#5c8a3f;--b-hw:#e3e7ec;--s-hw:#4a5868;
+--st-proven:#2e9d57;--st-restructured:#d08a00;--st-never:#d64545}
 @media (prefers-color-scheme:dark){svg{--bg:#11161c;--ink:#e3e8ee;--muted:#9aa6b4;--line:#3a4552;
 --surface:#1a2129;--accent:#3cc2ab;--b-host:#1a1f25;--s-host:#6f7b89;--b-cli:#172236;--s-cli:#7fa3e0;
 --b-test:#221b2e;--s-test:#a88bd6;--b-app:#12251f;--s-app:#52b8a2;--b-lib:#2a2215;--s-lib:#d6a352;
---s-diag:#d98277;--b-port:#22211d;--s-port:#a8a292;--b-drv:#18231a;--s-drv:#86b865;--b-hw:#1b2027;--s-hw:#8c9aab}}
+--s-diag:#d98277;--b-port:#22211d;--s-port:#a8a292;--b-drv:#18231a;--s-drv:#86b865;--b-hw:#1b2027;--s-hw:#8c9aab;
+--st-proven:#4cc47a;--st-restructured:#f0b030;--st-never:#f06a6a}}
 .bg{fill:var(--bg)} text{fill:var(--ink)}
 .b-host{fill:var(--b-host)}.b-cli{fill:var(--b-cli)}.b-test{fill:var(--b-test)}.b-app{fill:var(--b-app)}
 .b-lib{fill:var(--b-lib)}.b-port{fill:var(--b-port)}.b-drv{fill:var(--b-drv)}.b-hw{fill:var(--b-hw)}
@@ -40,6 +42,8 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 .ar,.ar2{fill:none;stroke:var(--accent);stroke-width:1.6;marker-end:url(#arr)}
 .ar2{marker-start:url(#arrs)} .ar.dash{stroke-dasharray:5 4}
 .ln1{stroke:var(--line);stroke-width:1.3} .mk{fill:var(--accent)}
+.st-proven{fill:var(--st-proven)}.st-restructured{fill:var(--st-restructured)}.st-never{fill:var(--st-never)}
+.nooff{fill:none;stroke:var(--st-never);stroke-width:1.6}
 </style>
 <defs>
 <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="mk" d="M0 0 L10 5 L0 10 z"/></marker>
@@ -47,8 +51,97 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 </defs>"""
 
 
+# Test status per box, as of the last board run - the source is
+# docs/TEST-COVERAGE.md ("Before N+1"/"N+1 change" and "Off-board" columns);
+# update both together after every board run (BR.9). A box that holds several
+# modules takes the WORST status among them. Key = the box title exactly.
+#   status:   "proven"       ran on silicon, code unchanged since (moves only)
+#             "restructured" ran on silicon, N+1 changed the code - board run pending
+#             "never"        never ran on silicon in any form
+#   offboard: False = no test without a board covers it (TEST-COVERAGE.md "none")
+# A title missing here (the silicon boxes, "terminal", unused libraries) gets no mark.
+STATUS_AS_OF = "28.09.2026, before the first board run after N+1"
+STATUS = {
+    # host tools - none has run against a board yet
+    "adc_gui.py": ("never", True),
+    "adc_gui.py (host)": ("never", True),
+    "board_run.py · eval_board.py": ("never", True),
+    "remote.py → bench_client": ("never", True),
+    # console
+    "cli.c · console.h": ("restructured", True),
+    "cli.c": ("restructured", True),
+    "cmd_parser.c": ("proven", True),
+    "gui_link.c": ("never", False),
+    "gui_link_stream_grab()": ("never", False),
+    # tests and meters
+    "chaintest.c": ("restructured", False),
+    "bench.c": ("restructured", False),
+    "dactest.c": ("proven", False),
+    "meter.c": ("restructured", False),
+    # application
+    "main.c": ("restructured", True),
+    "acquisition.c": ("restructured", True),
+    "routing.c": ("never", True),
+    "routing_apply()": ("never", True),
+    "board.h · board_cfg": ("restructured", True),
+    "capture.c": ("restructured", True),
+    "capture_service()": ("restructured", True),
+    "dma0_event()": ("restructured", True),
+    "pingpong.c": ("restructured", True),
+    "port_impl.c": ("never", True),
+    # libraries (frame.c is new, so the shared box is "never")
+    "frame · crc16 · fmt · stats · tri_eval": ("never", True),
+    "diag.c": ("restructured", True),
+    # port layer - new in N+1
+    "log.h · port_log/trace": ("never", True),
+    "panic.h · port_panic()": ("never", True),
+    "wait.h · PORT_WAIT_WHILE()": ("never", True),
+    "regs.h · reg_visit_t": ("never", True),
+    # drivers
+    "clock.c": ("restructured", True),
+    "adc.c": ("restructured", True),
+    "dma.c": ("restructured", True),
+    "_DMA0Interrupt": ("proven", True),
+    "sccp.c": ("restructured", True),
+    "dac.c": ("restructured", True),
+    "uart.c": ("restructured", True),
+    "uart.c · UART2": ("restructured", True),
+    "timebase.c": ("proven", True),
+    "led.c": ("proven", True),
+}
+
+
+def marks(x, y, w, title):
+    st = STATUS.get(title)
+    if not st:
+        return ""
+    status, offboard = st
+    cx, cy = x + w - 11, y + 11
+    s = f'<circle class="st-{status}" cx="{cx}" cy="{cy}" r="5"><title>{status}</title></circle>'
+    if not offboard:
+        s += f'<circle class="nooff" cx="{cx-15}" cy="{cy}" r="4.5"><title>no off-board test</title></circle>'
+    return s
+
+
+def legend(x, y):
+    items = [("st-proven", "ran on silicon, unchanged since"),
+             ("st-restructured", "ran on silicon, changed in N+1 - board run pending"),
+             ("st-never", "never ran on silicon"),
+             ("nooff", "no test without a board")]
+    s = [f'<text class="s" x="{x}" y="{y+4}">Test status, {E(STATUS_AS_OF)} (docs/TEST-COVERAGE.md):</text>']
+    y += 20
+    cx = x + 6
+    for cls, label in items:
+        r = "4.5" if cls == "nooff" else "5"
+        s.append(f'<circle class="{cls}" cx="{cx}" cy="{y}" r="{r}"/>')
+        s.append(f'<text class="s" x="{cx+10}" y="{y+4}">{E(label)}</text>')
+        cx += 34 + int(len(label) * 5.4)
+    return "\n".join(s)
+
+
 def box(x, y, w, h, title, lines=(), cls="app", dashed=False):
     s = [f'<rect class="bx s-{cls}{" dash" if dashed else ""}" x="{x}" y="{y}" width="{w}" height="{h}" rx="4"/>']
+    s.append(marks(x, y, w, title))
     lines = [l for l in lines if l]
     lh = 14
     top = y + h / 2 - ((1 + len(lines)) * lh) / 2 + 11
@@ -112,7 +205,7 @@ def layers():
     d.append(box(874, 464, 266, 62, "diag.c", ["fail() codes, trap, boot record,", "reg_print(), stack high-water mark"], "diag"))
 
     d.append(band(554, 50, "port", "Port layer", ["src/port/ · headers"]))
-    for i, t in enumerate(["log.h · port_log / port_trace", "panic.h · port_panic()",
+    for i, t in enumerate(["log.h · port_log/trace", "panic.h · port_panic()",
                            "wait.h · PORT_WAIT_WHILE()", "regs.h · reg_visit_t"]):
         d.append(box(170 + i * 245, 562, 233, 34, t, (), "port"))
 
@@ -131,7 +224,8 @@ def layers():
         d.append(box(x, 632, 110, 62, t, l, "drv"))
         d.append(f'<path class="ln1" d="M{x+55} 694 V734"/>')
         d.append(box(x, 734, 110, 62, ht, hl, "hw"))
-    return svg(1160, 824, "Firmware layers and modules", "\n".join(d))
+    d.append(legend(20, 834))
+    return svg(1160, 872, "Firmware layers and modules", "\n".join(d))
 
 
 def datapath():
@@ -177,7 +271,8 @@ def datapath():
     g.append('<text class="an" x="862" y="244">HALF / DONE</text>')
     g.append('<text class="an" x="1072" y="372">ready_half</text>')
     g.append('<text class="an" x="308" y="372">command</text>')
-    return svg(1190, 480, "Data path while streaming", "\n".join(g))
+    g.append(legend(20, 490))
+    return svg(1190, 528, "Data path while streaming", "\n".join(g))
 
 
 if __name__ == "__main__":

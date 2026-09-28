@@ -8,6 +8,15 @@ The diagrams are generated: `python docs/gen_architecture.py` writes both SVGs n
 this file. When a module is added, moved or renamed, change the generator and
 regenerate - do not edit the SVGs by hand.
 
+**Test status.** The dot in each box's top-right corner says what is still to be tested:
+green = ran on silicon, code unchanged since; amber = ran on silicon, but N+1 changed the
+code, so the board run has to confirm it again; red = never ran on silicon. A hollow red
+ring next to it means no test without a board covers the module either - a failure there
+can only be narrowed down on the board. A box holding several modules shows the worst
+of them. The source is [TEST-COVERAGE.md](TEST-COVERAGE.md), module by module; the
+generator's `STATUS` table carries the same verdicts and is updated with it after every
+board run.
+
 ## Layers and modules
 
 ![Firmware layers and modules](architecture_layers.svg)
