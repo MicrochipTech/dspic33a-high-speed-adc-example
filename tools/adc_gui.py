@@ -109,6 +109,39 @@ SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 DEFAULTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              "adc_gui_defaults.json")
 SETTINGS_VERSION = 3
+
+# ---------------------------------------------------------------------------
+# The "documentation" button: docs/ARCHITECTURE.md and the block diagrams next
+# to it (docs/gen_architecture.py writes them). Read from disk on every click
+# and served straight out of docs/ - never copied into this tool - so the page
+# shows whatever the repository says now, and an update to the architecture
+# needs no change here.
+DOCS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "docs")
+DOCS_URL = "/repo-docs"
+
+
+def architecture_markdown(docs_dir=DOCS_DIR, url=DOCS_URL):
+    """docs/ARCHITECTURE.md with its relative image links pointed at the GUI's
+    static route for docs/. Returns (markdown, [image file names]). Each image
+    gets "?v=<mtime>" so a regenerated SVG is not taken from the browser cache."""
+    path = os.path.join(docs_dir, "ARCHITECTURE.md")
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    except OSError as e:
+        return f"`{path}` could not be read: {e.strerror}.", []
+    images = []
+
+    def local(m):
+        alt, src = m.group(1), m.group(2)
+        if re.match(r"^([a-z][a-z0-9+.-]*:|/)", src, re.I):
+            return m.group(0)
+        f = os.path.join(docs_dir, src)
+        v = int(os.path.getmtime(f)) if os.path.exists(f) else 0
+        images.append(src)
+        return f"![{alt}]({url}/{src}?v={v})"
+    return re.sub(r"!\[([^\]]*)\]\(([^)\s]+)\)", local, text), images
+
 SETTINGS_DEFAULTS = {
     "version": SETTINGS_VERSION,
     "board": "EV74H48A",
@@ -1391,6 +1424,16 @@ def selftest() -> int:
         print("remote: disconnect (close_tunnel) ends the tunnel subprocess:",
               "PASS" if ok_closed else "FAIL")
 
+    # "documentation": the real docs/ARCHITECTURE.md, both diagrams linked
+    # through the static route, each image file present next to it
+    doc_md, doc_imgs = architecture_markdown()
+    ok_doc = (doc_md.startswith("# ") and len(doc_imgs) >= 2
+              and all(os.path.exists(os.path.join(DOCS_DIR, i)) for i in doc_imgs)
+              and all(f"]({DOCS_URL}/{i}?v=" in doc_md for i in doc_imgs))
+    ok_all &= ok_doc
+    print("documentation: ARCHITECTURE.md read, its diagrams routed to", DOCS_URL + ":",
+          "PASS" if ok_doc else "FAIL", f"- images={doc_imgs}")
+
     print("selftest", "PASS" if ok_all else "FAIL")
     return 0 if ok_all else 1
 
@@ -1451,6 +1494,21 @@ def main_gui(args):
       .q-tooltip { font-size: 18px !important; line-height: 1.45 !important;
                    max-width: 38rem !important; padding: 10px 14px !important; }
       body.no-tips .q-tooltip { display: none !important; }
+      /* The "documentation" dialog: ARCHITECTURE.md rendered as markdown.
+         The diagrams carry their own background, so they stay readable. */
+      /* The whole window's width (owner's request, 28.09.2026): the
+         markdown element's own prose width limit is lifted, the diagrams
+         scale to the full width. */
+      .arch-doc, .arch-doc .nicegui-markdown, .arch-doc .nicegui-markdown * { max-width: none !important; }
+      .arch-doc { color: #e5e7eb; line-height: 1.6; font-size: 1.05rem; }
+      .arch-doc img { width: 100%; height: auto; border-radius: 8px; margin: 8px 0 4px; }
+      .arch-doc h1 { font-size: 1.6rem; font-weight: 600; margin: 0 0 .5rem; }
+      .arch-doc h2 { font-size: 1.2rem; font-weight: 600; margin: 1.6rem 0 .4rem; color: #22d3ee; }
+      .arch-doc code { font-family: ui-monospace, Consolas, monospace; font-size: .9em;
+                       background: #1f2937; padding: 1px 5px; border-radius: 4px; }
+      .arch-doc table { border-collapse: collapse; margin: .5rem 0; }
+      .arch-doc th, .arch-doc td { border: 1px solid #334155; padding: 4px 10px; text-align: left; }
+      .arch-doc th { background: #1f2937; }
       /* Collapsible tiles: a click on a tile's title folds everything below
          the title (its first child) away; the arrow says which state. */
       .tile .card-title { cursor: pointer; user-select: none; }
@@ -1529,6 +1587,9 @@ def main_gui(args):
             ui.label("dsPIC33A ADC / DMA").classes("text-lg font-medium leading-tight")
             ui.label("triggered chain · capture · plot · FFT").classes("text-xs text-slate-400 leading-tight")
         ui.space()
+        doc_btn = ui.button("documentation", icon="menu_book").props("flat").classes("text-slate-200")
+        doc_btn.tooltip("the firmware's architecture: docs/ARCHITECTURE.md with its block diagrams, "
+                        "read from the repository at every click")
         # Every control on this page explains itself in a tooltip; this
         # switches them all off (a CSS class on <body>, see the style above).
         tips_cb = ui.checkbox("tooltips", value=True).classes("text-slate-300")
@@ -1556,6 +1617,23 @@ def main_gui(args):
                        bench_client_hint.set_visibility(e.value == "remote")))
         conn_btn = ui.button("connect", icon="usb").props("unelevated")
         conn_chip = ui.chip("not connected", icon="link_off", color="grey-8").props("outline")
+
+    # ---- documentation dialog (header button) ----
+    app.add_static_files(DOCS_URL, DOCS_DIR)
+    with ui.dialog().props("maximized") as doc_dlg, ui.card().classes("w-full p-6"):
+        with ui.row().classes("w-full items-center"):
+            ui.label("documentation · docs/ARCHITECTURE.md").classes("card-title")
+            ui.space()
+            ui.button(icon="close", on_click=doc_dlg.close).props("flat round dense")
+        doc_box = ui.column().classes("w-full arch-doc")
+
+    def show_docs():
+        text, _ = architecture_markdown()
+        doc_box.clear()
+        with doc_box:
+            ui.markdown(text).classes("w-full")
+        doc_dlg.open()
+    doc_btn.on_click(lambda e: show_docs())
 
     with ui.row().classes("w-full p-4 gap-4 items-start no-wrap"):
         # ---- left: settings ----

@@ -346,6 +346,22 @@ try:
               json.dumps(saved.get("view", {}))[:120])
 
         page.screenshot(path=SCREENSHOT, full_page=True)
+
+        # "documentation": docs/ARCHITECTURE.md in a dialog, both diagrams
+        # actually loaded through the GUI's static route (naturalWidth > 0)
+        page.get_by_role("button", name=re.compile(r"documentation", re.I)).click()
+        heading = page.locator(".arch-doc h2", has_text="Layers and modules")
+        try:
+            heading.wait_for(timeout=10000)
+            shown = True
+        except Exception:
+            shown = False
+        time.sleep(1.0)
+        widths = page.eval_on_selector_all(".arch-doc img", "els => els.map(e => e.naturalWidth)")
+        check("documentation opens ARCHITECTURE.md with both diagrams loaded",
+              shown and len(widths) >= 2 and all(w > 0 for w in widths), f"shown={shown} widths={widths}")
+        page.screenshot(path=SCREENSHOT.replace(".png", "_docs.png"))
+        page.keyboard.press("Escape")
         b.close()
 finally:
     gui.terminate()
