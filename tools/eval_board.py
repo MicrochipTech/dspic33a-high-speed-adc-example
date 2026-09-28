@@ -445,7 +445,22 @@ def evaluate(log_a_lines, log_b_lines, expected_entries=None):
     deviations += diff_kv_block(entries_a, entries_b, "R0", "status")
     deviations += diff_kv_block(entries_a, entries_b, "R1", "regs")
     deviations += diff_chain(chain_results_a, chain_results_b)
-    deviations += diff_raw_block(entries_a, entries_b, "R3")
+    # diff_raw_block("R3") only makes sense when BOTH sides actually got a
+    # "test all" reply. A timeout already produces its own "incomplete"
+    # deviation above (verdicts[b] in ("missing", "timeout")) - without this
+    # guard, diff_raw_block() would ALSO run, and read_reset_banner()
+    # (board_run.py) logs the reboot's boot banner as RX lines under the
+    # SAME block it timed out in, so the "R3" RX lines it compares against
+    # the other side's real reply are that banner text, not a second "test
+    # all" reply - producing a confusing, redundant "ab_diff" alongside the
+    # correct "incomplete" one (e.g. "A=[test] self: PASS
+    # B=[boot] uart up on FRC, ..."), for the one block (R3) that uses a
+    # raw, unfiltered line diff rather than diff_kv_block()'s key/value
+    # parse (which already ignores non-"key: value" banner lines on its
+    # own). Found running a real remote board-run rehearsal against a
+    # deliberate mid-run hang recovered by re-flash (2026-09-28).
+    if verdicts_a["R3"] not in ("missing", "timeout") and verdicts_b["R3"] not in ("missing", "timeout"):
+        deviations += diff_raw_block(entries_a, entries_b, "R3")
     deviations += diff_grab_family(entries_a, entries_b, "R4")
     deviations += diff_grab_family(entries_a, entries_b, "R5")
     deviations += diff_kv_block(entries_a, entries_b, "R7", "status")
@@ -629,6 +644,24 @@ def selftest():
     r3 = evaluate(log_a3.lines, log_b3.lines)
     check("a timeout is reported as incomplete",
           any(d["block"] == "R1" and "timeout" in d["detail"] for d in r3["deviations"]))
+
+    # 3b. A timeout on R3 specifically (free-text diff_raw_block(), not the
+    # key/value diff_kv_block() R1 above already exercises): the reboot's
+    # boot banner (read_reset_banner(), board_run.py) is logged as RX lines
+    # under the SAME block it timed out in, and must not leak into an
+    # "ab_diff" alongside the correct "incomplete" deviation - a real
+    # remote board-run rehearsal hit exactly this (2026-09-28: B hung on
+    # "test all", recovered by re-flash, and the report showed both
+    # "R3 incomplete: B block timeout" AND a spurious
+    # "R3 ab_diff: ... A=[test] self: PASS B=[boot] uart up on FRC, ...").
+    log_a3b, _, _ = board_run.run_session(
+        board_run.ReplayTarget("A", has_route=True, timeout_block="test all"), ui, "A")
+    log_b3b, _, _ = board_run.run_session(board_run.ReplayTarget("B", has_route=True), ui, "B")
+    r3b = evaluate(log_a3b.lines, log_b3b.lines)
+    check("R3 timeout: still reported as incomplete",
+          any(d["block"] == "R3" and d["kind"] == "incomplete" for d in r3b["deviations"]))
+    check("R3 timeout: no spurious ab_diff against the recovery boot banner",
+          not any(d["block"] == "R3" and d["kind"] == "ab_diff" for d in r3b["deviations"]))
 
     # 4. Truncated without @END: cut a clean A log off partway through R2,
     # before "@END" and before R2's own "block end" line ever arrive - the
