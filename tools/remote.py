@@ -47,7 +47,8 @@ DEFAULT_BENCH_CLIENT = r"C:\work\Claas\Relay\bench_client.py"
 # 2/3/4 unchanged and needs no code of its own.
 _EXIT_TEXTS = {
     2: "the agent refused or failed",
-    3: "the bench agent is not reachable (offline at the relay)",
+    3: "no bench agent at the relay (or its TLS handshake failed)",
+    5: "the relay server is not reachable",
     4: "the connection to the agent was lost",
     9: "the programmer was not found (ipecmd exit 9 - \"Programmer not found\")",
 }
@@ -251,6 +252,19 @@ class RemoteBench:
                 steps[2].update(ok=False, detail=f"{uart or 'no status'} - on the agent's PC: "
                                                  "board USB cable plugged in? COM port used by "
                                                  "another program (terminal, MPLAB X)?")
+            # An agent from VERSION 5 on probes the board itself ("board":
+            # answers/silent/garbled/unknown) - a board that does not answer
+            # is then known without opening a tunnel. "answers" and "unknown"
+            # leave the fourth step to check_board(), which also measures
+            # the round trip through the whole chain.
+            board = data.get("board")
+            if steps[2]["ok"] and board in ("silent", "garbled"):
+                why = ("no answer to an empty line" if board == "silent" else
+                       "bytes come back, but no prompt/ACK - wrong baud rate or other firmware?")
+                steps.append(dict(name="board", ok=False,
+                                  detail=f"the console port is open, but the board does not answer "
+                                         f"({why}; the agent's own probe) - board powered? firmware "
+                                         "running (not held in a debug session)?"))
             return steps
         kind, sentence = classify(code, text)
         if kind == "relay":
@@ -293,21 +307,29 @@ class RemoteBench:
 
 
 def classify(code, text):
-    """(kind, sentence) for a failed bench_client call. Exit 3 covers two
-    different failures that only the printed text tells apart (bench_client
-    prints "[client] relay/agent not reachable: <error>" when no relay port
-    accepts the connection, "[client] no agent at the relay within N s"
-    when the relay answers but no agent is registered): kind "relay" or
-    "agent". A failed TLS handshake with the agent lands in the first text
-    too; the error text passed through says which it was."""
+    """(kind, sentence) for a failed bench_client call. Since 28.09.2026
+    bench_client exits 5 when the relay itself is not reachable and keeps 3
+    for "no agent at the relay" ("[client] no agent at the relay within N
+    s") and for a failed TLS handshake with an agent that is there
+    ("[client] agent found at the relay, but the TLS handshake with it
+    failed"). An older bench_client exits 3 for the relay case too, with
+    "[client] relay/agent not reachable: <error>" - that text is kept as the
+    fallback, so both versions are told apart correctly."""
     t = text or ""
     detail = t.splitlines()[-1].strip() if t.strip() else ""
     if "can't open file" in t or "No such file or directory" in t:
         # python itself exits 2 for a missing script - not the agent's exit 2
         return "client", f"bench_client.py not found - check the path ({detail})"
+    if code == 5:
+        return "relay", ("the relay server is not reachable - network, VPN or proxy, or the "
+                         "relay is down" + (f" ({detail})" if detail else ""))
     if code == 3 and "no agent at the relay" in t:
         return "agent", ("the relay answers, but no bench agent is online there - "
                          "bench_agent not started on the board's PC, or started with another token")
+    if code == 3 and "TLS handshake" in t:
+        return "agent", ("the bench agent is at the relay, but the TLS handshake with it failed - "
+                         "certificates of agent and client from different packages?"
+                         + (f" ({detail})" if detail else ""))
     if code == 3:
         return "relay", ("the relay server is not reachable - network, VPN or proxy, or the "
                          "relay is down" + (f" ({detail})" if detail else ""))
@@ -343,13 +365,13 @@ def main(argv=None):
     a = ap.parse_args(argv)
     bench = RemoteBench(bench_client=a.bench_client)
     steps = bench.check(wait=a.wait)
-    if all(s["ok"] for s in steps):
+    if len(steps) == 3 and all(s["ok"] for s in steps):
         step, t = bench.check_board()
         steps.append(step)
         if t is not None:
             t.close()
         bench.close_tunnel()
-    else:
+    elif len(steps) == 3:
         steps.append(dict(name="board", ok=None, detail=""))
     print(format_steps(steps))
     return 0 if all(s["ok"] for s in steps) else 1

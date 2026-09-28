@@ -145,10 +145,10 @@ def cmd_tunnel(args):
         print("[client] agent refused: the console port is not open", file=sys.stderr)
         return 2
     state_path, hang_marker = _state_paths()
-    if sc in ("ok", "board_silent") and not os.path.exists(state_path):
+    if sc in ("ok", "board_silent", "board_silent_v4") and not os.path.exists(state_path):
         with open(state_path, "w") as f:   # no flash first: play board B
             json.dump({"label": "B", "has_route": True}, f)
-    if sc == "board_silent":
+    if sc in ("board_silent", "board_silent_v4"):
         host, port_s = args.listen.rsplit(":", 1)
         srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -193,7 +193,11 @@ def _scenario_exit(args):
     """The two exit-3 failures, before any request runs - exactly where the
     real bench_client's connect() fails. None: carry on."""
     sc = os.environ.get("FAKE_BENCH_SCENARIO")
-    if sc == "relay_down":
+    if sc == "relay_down":          # bench_client since 28.09.2026: its own exit 5
+        print("[client] relay not reachable: [WinError 10061] No connection could be made "
+              "because the target machine actively refused it")
+        return 5
+    if sc == "relay_down_old":      # an older bench_client: exit 3, the shared text
         print("[client] relay/agent not reachable: [WinError 10061] No connection could be made "
               "because the target machine actively refused it")
         return 3
@@ -210,7 +214,13 @@ def cmd_info(args):
             }.get(sc, "open COM5 115200")
     print(json.dumps({"t": "info", "agent_version": 3, "host": "BENCH-PC", "uart": uart,
                       "ipecmd": None, "supports_tunnel": True,
-                      "tunnel_open": sc == "tunnel_open"}, indent=2))
+                      "tunnel_open": sc == "tunnel_open",
+                      # VERSION 5 agents probe the board themselves; the
+                      # "_v4" variant plays an older agent without the field
+                      **({} if sc.endswith("_v4") else
+                         {"board": "silent" if sc.startswith("board_silent") else "answers",
+                          "board_rtt_ms": None if sc.startswith("board_silent") else 12.5})},
+                     indent=2))
     return 0
 
 

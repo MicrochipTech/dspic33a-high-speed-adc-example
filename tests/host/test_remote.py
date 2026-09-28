@@ -132,11 +132,13 @@ def main() -> int:
     # console port (None = not reached), then what check_board() must say.
     cases = [
         ("relay_down", (False, None, None), None, "relay server is not reachable"),
+        ("relay_down_old", (False, None, None), None, "relay server is not reachable"),
         ("agent_offline", (True, False, None), None, "no bench agent is online"),
         ("no_port", (True, True, False), None, "no MCP2221A port found"),
         ("port_busy", (True, True, False), None, "Access is denied"),
         ("tunnel_open", (True, True, False), None, "another client holds the console"),
-        ("board_silent", (True, True, True), False, "no board answers"),
+        ("board_silent", (True, True, True, False), None, "the agent's own probe"),
+        ("board_silent_v4", (True, True, True), False, "no board answers"),
         ("ok", (True, True, True), True, "RTT"),
     ]
     for sc, want, want_board, text in cases:
@@ -145,7 +147,7 @@ def main() -> int:
             steps = b.check(wait=2)
             got = tuple(s["ok"] for s in steps)
             board_ok, board_detail, t = None, "", None
-            if all(got):
+            if len(got) == 3 and all(got):
                 step, t = b.check_board(sync_timeout=1.5)
                 board_ok, board_detail = step["ok"], step["detail"]
                 if t is not None:
