@@ -110,7 +110,7 @@ def parse_grab_frame(header_line: str, payload: bytes, tail: bytes):
 class Target:
     """One command at a time, synchronised on the parser's ACK/NAK byte."""
 
-    def __init__(self, port: str, baud: int = BAUD, on_log=None):
+    def __init__(self, port: str, baud: int = BAUD, on_log=None, sync_timeout: float = 20.0):
         import serial  # pyserial
         self.on_log = on_log  # optional callable(str): the console transcript
         # serial_for_url() opens a plain COM port exactly like serial.Serial()
@@ -120,7 +120,16 @@ class Target:
         # back, transparent to everything below this line.
         self.ser = serial.serial_for_url(port, baud, timeout=0.05)
         self.port = port
-        self.sync()
+        # sync_timeout: 20 s covers a board still booting; a caller that only
+        # wants to know whether a board answers at all (remote.py's
+        # RemoteBench.check_board()) passes less. On a timeout the port is
+        # closed again before the TimeoutError leaves - the caller never got
+        # an object to close.
+        try:
+            self.sync(timeout=sync_timeout)
+        except TimeoutError:
+            self.ser.close()
+            raise
 
     def close(self):
         self.ser.close()

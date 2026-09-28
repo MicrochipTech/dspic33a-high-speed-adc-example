@@ -41,6 +41,22 @@ fixed a CLI takes no other interactive input:
   FAKE_BENCH_WRONG_REV=1  flash "boots" with a revision that does NOT match
                            the hex file's own name - the banner-revision-
                            mismatch selftest case.
+  FAKE_BENCH_SCENARIO=<name>
+                           the reachability cases tools/remote.py's
+                           RemoteBench.check()/check_board() tell apart,
+                           each with the real bench_client's own exit code
+                           and text (C:\work\Claas\Relay\bench_client.py,
+                           connect()): "relay_down" (exit 3, "[client]
+                           relay/agent not reachable: ..."), "agent_offline"
+                           (exit 3, "[client] no agent at the relay within N
+                           s"), "no_port" (info: uart "no MCP2221A port
+                           found"; tunnel refused, exit 2), "port_busy"
+                           (info: uart "<port>: <error>"), "tunnel_open"
+                           (info: tunnel_open true), "board_silent" (info:
+                           port open; the tunnel accepts but nothing ever
+                           answers), "ok" (info: port open; the tunnel
+                           plays board B). Unset: the flash/tunnel behaviour
+                           below, unchanged.
   FAKE_BENCH_TIMEOUT_BLOCK=<cmd>
                            the tunnel hangs (sends nothing back, exactly
                            what a wedged board looks like on the wire) on
@@ -124,7 +140,24 @@ def _serve(conn, replay, hang_cmd, hang_marker):
 
 
 def cmd_tunnel(args):
+    sc = os.environ.get("FAKE_BENCH_SCENARIO")
+    if sc in ("no_port", "port_busy", "tunnel_open"):
+        print("[client] agent refused: the console port is not open", file=sys.stderr)
+        return 2
     state_path, hang_marker = _state_paths()
+    if sc in ("ok", "board_silent") and not os.path.exists(state_path):
+        with open(state_path, "w") as f:   # no flash first: play board B
+            json.dump({"label": "B", "has_route": True}, f)
+    if sc == "board_silent":
+        host, port_s = args.listen.rsplit(":", 1)
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        srv.bind((host, int(port_s)))
+        srv.listen(1)
+        print(f"tunnel ready {host}:{port_s}", flush=True)
+        _serve_silent(srv)
+        srv.close()
+        return 0
     if not os.path.exists(state_path):
         print("fake_bench_client: tunnel with no prior flash - no state", file=sys.stderr)
         return 2
@@ -156,15 +189,61 @@ def cmd_tunnel(args):
     return 0
 
 
+def _scenario_exit(args):
+    """The two exit-3 failures, before any request runs - exactly where the
+    real bench_client's connect() fails. None: carry on."""
+    sc = os.environ.get("FAKE_BENCH_SCENARIO")
+    if sc == "relay_down":
+        print("[client] relay/agent not reachable: [WinError 10061] No connection could be made "
+              "because the target machine actively refused it")
+        return 3
+    if sc == "agent_offline":
+        print(f"[client] no agent at the relay within {args.wait:g} s")
+        return 3
+    return None
+
+
+def cmd_info(args):
+    sc = os.environ.get("FAKE_BENCH_SCENARIO") or "ok"
+    uart = {"no_port": "no MCP2221A port found",
+            "port_busy": "COM5: could not open port 'COM5': PermissionError(13, 'Access is denied.')"
+            }.get(sc, "open COM5 115200")
+    print(json.dumps({"t": "info", "agent_version": 3, "host": "BENCH-PC", "uart": uart,
+                      "ipecmd": None, "supports_tunnel": True,
+                      "tunnel_open": sc == "tunnel_open"}, indent=2))
+    return 0
+
+
+def _serve_silent(srv):
+    """board_silent: accept, read and drop everything, never answer."""
+    try:
+        while True:
+            conn, _ = srv.accept()
+            try:
+                while conn.recv(64):
+                    pass
+            finally:
+                conn.close()
+    except (KeyboardInterrupt, OSError):
+        pass
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
+    ap.add_argument("--wait", type=float, default=30)
     sub = ap.add_subparsers(dest="op", required=True)
+    sub.add_parser("info")
     p_flash = sub.add_parser("flash")
     p_flash.add_argument("hex")
     p_flash.add_argument("--after", type=float, default=5)
     p_tunnel = sub.add_parser("tunnel")
     p_tunnel.add_argument("--listen", required=True)
     args = ap.parse_args(argv)
+    rc = _scenario_exit(args)
+    if rc is not None:
+        return rc
+    if args.op == "info":
+        return cmd_info(args)
     if args.op == "flash":
         return cmd_flash(args)
     return cmd_tunnel(args)

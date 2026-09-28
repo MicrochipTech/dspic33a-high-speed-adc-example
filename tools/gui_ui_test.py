@@ -469,6 +469,64 @@ finally:
     errs = server_errors(out)
     check("settings restart: no server-side exceptions", not errs, "; ".join(errs[:5]))
 
+# ---- "remote": which link is missing, and the page stays responsive ----
+# A GUI started with --remote against tests/host/fake_bench_client.py (never
+# the real relay), once per FAKE_BENCH_SCENARIO: the chip of the missing link
+# turns negative, the ones before it positive, and the page never shows
+# NiceGUI's "Connection lost" (the connect used to block the event loop).
+FAKE_BENCH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tests", "host",
+                          "fake_bench_client.py")
+REMOTE_CASES = [("agent_offline", {"relay": "positive", "bench agent": "negative"}),
+                ("no_port", {"relay": "positive", "bench agent": "positive", "console port": "negative"}),
+                ("board_silent", {"console port": "positive", "board": "negative"}),
+                ("ok", {"relay": "positive", "bench agent": "positive", "console port": "positive",
+                        "board": "positive"})]
+for sc, want in REMOTE_CASES:
+    port_r = free_port()
+    env = dict(os.environ, FAKE_BENCH_SCENARIO=sc,
+               FAKE_BENCH_STATE_DIR=tempfile.mkdtemp(prefix="fake_bench_"))
+    gui_r = subprocess.Popen(["python", GUI_SCRIPT, "--remote", "--bench-client", FAKE_BENCH,
+                              "--settings", os.path.join(tempfile.mkdtemp(prefix="adc_gui_r_"), "s.json"),
+                              "--no-browser", "--http-port", str(port_r)],
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+    try:
+        time.sleep(10)
+        with sync_playwright() as p:
+            b = p.chromium.launch(channel="chrome", headless=True)
+            page = b.new_page(viewport={"width": 1600, "height": 1200})
+            page.goto(f"http://127.0.0.1:{port_r}/")
+            got, deadline = {}, time.time() + 40
+            while time.time() < deadline:
+                got = {}
+                for name in want:
+                    # the chip's text is exactly "<icon ligature> <name>"; the
+                    # connection chip's error text also mentions the links
+                    chip = page.locator(".q-chip").filter(
+                        has_text=re.compile(r"(^|[a-z_]\s*)" + re.escape(name) + r"$")).first
+                    cls = chip.get_attribute("class") or ""
+                    got[name] = ("positive" if "positive" in cls else
+                                 "negative" if "negative" in cls else "grey")
+                if got == want:
+                    break
+                time.sleep(1)
+            lost = sum(1 for i in range(page.get_by_text(re.compile(r"Connection lost", re.I)).count())
+                       if page.get_by_text(re.compile(r"Connection lost", re.I)).nth(i).is_visible())
+            check(f"remote {sc!r}: the chips name the missing link, page stays connected",
+                  got == want and lost == 0, f"{got} lost={lost}")
+            if sc == "ok":
+                conn = page.locator(".q-chip").filter(has_text="RTT").count()
+                check("remote 'ok': connected, the round trip shown in the connection chip",
+                      conn >= 1, f"chips with RTT: {conn}")
+            b.close()
+    finally:
+        gui_r.terminate()
+        try:
+            out = gui_r.communicate(timeout=10)[0]
+        except Exception:
+            out = ""
+        errs = server_errors(out)
+        check(f"remote {sc!r}: no server-side exceptions", not errs, "; ".join(errs[:5]))
+
 print("UI TEST", "PASS" if all(results) else "FAIL")
 print("screenshot:", SCREENSHOT)
 sys.exit(0 if all(results) else 1)

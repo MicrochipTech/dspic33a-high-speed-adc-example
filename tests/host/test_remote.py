@@ -126,6 +126,49 @@ def main() -> int:
         ok_all &= check("context manager: __exit__ closes an open tunnel",
                          proc_ref["p"].poll() is not None)
 
+    # ---- check()/check_board(): which link is missing ----
+    # Each FAKE_BENCH_SCENARIO plays one failure with the real bench_client's
+    # own exit code and text; expected = the ok-state of relay / bench agent /
+    # console port (None = not reached), then what check_board() must say.
+    cases = [
+        ("relay_down", (False, None, None), None, "relay server is not reachable"),
+        ("agent_offline", (True, False, None), None, "no bench agent is online"),
+        ("no_port", (True, True, False), None, "no MCP2221A port found"),
+        ("port_busy", (True, True, False), None, "Access is denied"),
+        ("tunnel_open", (True, True, False), None, "another client holds the console"),
+        ("board_silent", (True, True, True), False, "no board answers"),
+        ("ok", (True, True, True), True, "RTT"),
+    ]
+    for sc, want, want_board, text in cases:
+        with tempfile.TemporaryDirectory() as tmp:
+            b = bench(tmp, FAKE_BENCH_SCENARIO=sc)
+            steps = b.check(wait=2)
+            got = tuple(s["ok"] for s in steps)
+            board_ok, board_detail, t = None, "", None
+            if all(got):
+                step, t = b.check_board(sync_timeout=1.5)
+                board_ok, board_detail = step["ok"], step["detail"]
+                if t is not None:
+                    t.close()
+                b.close_tunnel()
+            all_text = " | ".join(s["detail"] for s in steps) + " | " + board_detail
+            ok = got == want and board_ok == want_board and text in all_text
+            ok_all &= check(f"check(): scenario {sc!r} names the missing link", ok,
+                            f"{got} board={board_ok}: {all_text[:160]}")
+
+    # open_tunnel() passes bench_client's own reason through (both exit-3 cases)
+    for sc, text in (("relay_down", "relay server is not reachable"),
+                     ("agent_offline", "no bench agent is online")):
+        with tempfile.TemporaryDirectory() as tmp:
+            b = bench(tmp, FAKE_BENCH_SCENARIO=sc)
+            try:
+                b.open_tunnel(timeout=10)
+                msg = "opened"
+            except (RuntimeError, TimeoutError) as e:
+                msg = str(e)
+            ok_all &= check(f"open_tunnel(): {sc!r} fails with bench_client's own reason",
+                            text in msg, msg[:160])
+
     print("test_remote", "PASS" if ok_all else "FAIL")
     return 0 if ok_all else 1
 

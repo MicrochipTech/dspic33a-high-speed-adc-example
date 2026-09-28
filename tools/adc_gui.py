@@ -1617,6 +1617,33 @@ def main_gui(args):
                        bench_client_hint.set_visibility(e.value == "remote")))
         conn_btn = ui.button("connect", icon="usb").props("unelevated")
         conn_chip = ui.chip("not connected", icon="link_off", color="grey-8").props("outline")
+        # "remote": one chip per link the connection needs - relay, bench
+        # agent, the agent's console port, a board answering on it - so a
+        # failed connect says WHICH link is missing (remote.py's
+        # RemoteBench.check()/check_board()); the tooltip carries the detail.
+        with ui.row().classes("gap-1 items-center") as remote_row:
+            remote_chips = {}
+            for _name in ("relay", "bench agent", "console port", "board"):
+                with ui.chip(_name, icon="radio_button_unchecked", color="grey-8") \
+                        .props("outline dense") as _c:
+                    _tip = ui.tooltip("not checked yet")
+                remote_chips[_name] = (_c, _tip)
+        remote_row.set_visibility(False)
+
+        def show_step(step):
+            chip, tip = remote_chips[step["name"]]
+            if step["ok"] is None:
+                chip.icon = "radio_button_unchecked"
+                chip.props("color=grey-8")
+                tip.text = step.get("detail") or "not checked - an earlier link failed"
+            else:
+                chip.icon = "check_circle" if step["ok"] else "cancel"
+                chip.props("color=positive" if step["ok"] else "color=negative")
+                tip.text = step["detail"]
+
+        def reset_steps():
+            for _n in remote_chips:
+                show_step(dict(name=_n, ok=None, detail="not checked yet"))
 
     # ---- documentation dialog (header button) ----
     app.add_static_files(DOCS_URL, DOCS_DIR)
@@ -2360,7 +2387,11 @@ def main_gui(args):
         c.props(f'color={"positive" if value == 0 else "negative"}')
 
     # ---- connection ----
-    def do_connect():
+    async def do_connect():
+        # async, and every call that can wait (bench_client subprocesses,
+        # the tunnel, a board's sync) through run.io_bound(): a blocking
+        # connect stalled NiceGUI's event loop long enough for the browser
+        # to show "Connection lost. Trying to reconnect..." (28.09.2026).
         if state["target"]:
             push_log(f"--- disconnected: {state['target'].port} ---")
             state["live"] = False
@@ -2379,6 +2410,7 @@ def main_gui(args):
             buf_lbl.text = "buf: not queried yet"
             return
         try:
+            remote_row.set_visibility(port_sel.value == "remote")
             if port_sel.value == "fake":
                 push_log("--- connecting: fake target ---")
                 state["target"] = FakeTarget(board=args.fake_board,
@@ -2390,13 +2422,30 @@ def main_gui(args):
                                              on_log=push_log)
             elif port_sel.value == "remote":
                 push_log(f"--- connecting: remote via {bench_client_in.value} ---")
-                state["remote_bench"] = remote.RemoteBench(bench_client=bench_client_in.value)
-                url = state["remote_bench"].open_tunnel()
-                push_log(f"--- tunnel open: {url} ---")
-                state["target"] = Target(url, on_log=push_log)
+                bench = remote.RemoteBench(bench_client=bench_client_in.value)
+                state["remote_bench"] = bench
+                reset_steps()
+                remote_row.set_visibility(True)
+                conn_chip.text, conn_chip.icon = "remote: checking relay, agent, port ...", "hourglass_top"
+                conn_chip.props("color=grey-8")
+                steps = await run.io_bound(bench.check, 10.0)
+                for st in steps:
+                    show_step(st)
+                    if st["ok"] is not None:
+                        push_log(f"--- {st['name']}: {'ok' if st['ok'] else 'FAILED'} - {st['detail']} ---")
+                failed = next((st for st in steps if st["ok"] is False), None)
+                if failed:
+                    raise RuntimeError(f"{failed['name']}: {failed['detail']}")
+                conn_chip.text = "remote: tunnel open, waiting for the board ..."
+                step, t = await run.io_bound(bench.check_board, 8.0, push_log)
+                show_step(step)
+                push_log(f"--- board: {'ok' if step['ok'] else 'FAILED'} - {step['detail']} ---")
+                if t is None:
+                    raise RuntimeError(f"board: {step['detail']}")
+                state["target"] = t
             else:
                 push_log(f"--- connecting: {port_sel.value} ---")
-                state["target"] = Target(port_sel.value, on_log=push_log)
+                state["target"] = await run.io_bound(Target, port_sel.value, on_log=push_log)
             ok, lines = state["target"].cmd("version")
             state["acq_active"] = None
             # The firmware names its board: follow it, and start from that
@@ -2437,6 +2486,7 @@ def main_gui(args):
             buf_lbl.text = f"buf: {state['buf_size']} (half {state['buf_size'] // 2})"
         except Exception as ex:
             push_log(f"--- connect failed: {ex} ---")
+            ui.notify(f"connect failed - {ex}", type="negative", multi_line=True, timeout=12000)
             conn_chip.text = f"connect failed: {ex}"
             conn_chip.icon = "error"
             conn_chip.props("color=negative")
