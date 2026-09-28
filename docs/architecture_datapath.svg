@@ -1,0 +1,127 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1190 480" width="1190" height="480" role="img" aria-label="Data path while streaming">
+<style>
+svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--accent:#0d7a6b;
+--b-host:#eceef1;--s-host:#8b95a3;--b-cli:#e5edf9;--s-cli:#4f74b3;--b-test:#f0e9f8;--s-test:#8062ad;
+--b-app:#e2f2ee;--s-app:#2f8a78;--b-lib:#f8efe0;--s-lib:#b07a2a;--s-diag:#b0574d;
+--b-port:#ebeae6;--s-port:#7c7768;--b-drv:#e7f0e1;--s-drv:#5c8a3f;--b-hw:#e3e7ec;--s-hw:#4a5868}
+@media (prefers-color-scheme:dark){svg{--bg:#11161c;--ink:#e3e8ee;--muted:#9aa6b4;--line:#3a4552;
+--surface:#1a2129;--accent:#3cc2ab;--b-host:#1a1f25;--s-host:#6f7b89;--b-cli:#172236;--s-cli:#7fa3e0;
+--b-test:#221b2e;--s-test:#a88bd6;--b-app:#12251f;--s-app:#52b8a2;--b-lib:#2a2215;--s-lib:#d6a352;
+--s-diag:#d98277;--b-port:#22211d;--s-port:#a8a292;--b-drv:#18231a;--s-drv:#86b865;--b-hw:#1b2027;--s-hw:#8c9aab}}
+.bg{fill:var(--bg)} text{fill:var(--ink)}
+.b-host{fill:var(--b-host)}.b-cli{fill:var(--b-cli)}.b-test{fill:var(--b-test)}.b-app{fill:var(--b-app)}
+.b-lib{fill:var(--b-lib)}.b-port{fill:var(--b-port)}.b-drv{fill:var(--b-drv)}.b-hw{fill:var(--b-hw)}
+.bx{fill:var(--surface);stroke-width:1.3}
+.s-host{stroke:var(--s-host)}.s-cli{stroke:var(--s-cli)}.s-test{stroke:var(--s-test)}.s-app{stroke:var(--s-app)}
+.s-lib{stroke:var(--s-lib)}.s-diag{stroke:var(--s-diag)}.s-port{stroke:var(--s-port)}.s-drv{stroke:var(--s-drv)}.s-hw{stroke:var(--s-hw)}
+.dash{stroke-dasharray:5 4}
+.t{font:600 12.5px Consolas,"Cascadia Mono","DejaVu Sans Mono",monospace}
+.s{font:400 11px "Segoe UI",Arial,"Helvetica Neue",sans-serif;fill:var(--muted)}
+.ln{font:600 13px "Segoe UI",Arial,"Helvetica Neue",sans-serif}
+.lf{font:400 10.5px Consolas,"Cascadia Mono","DejaVu Sans Mono",monospace;fill:var(--muted)}
+.an{font:500 11px "Segoe UI",Arial,"Helvetica Neue",sans-serif;fill:var(--accent)}
+.ar,.ar2{fill:none;stroke:var(--accent);stroke-width:1.6;marker-end:url(#arr)}
+.ar2{marker-start:url(#arrs)} .ar.dash{stroke-dasharray:5 4}
+.ln1{stroke:var(--line);stroke-width:1.3} .mk{fill:var(--accent)}
+</style>
+<defs>
+<marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="mk" d="M0 0 L10 5 L0 10 z"/></marker>
+<marker id="arrs" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="mk" d="M10 0 L0 5 L10 10 z"/></marker>
+</defs>
+<rect class="bg" x="0" y="0" width="1190" height="480"/>
+<rect class="b-hw" x="10" y="10" width="1170" height="222" rx="6"/>
+<text class="ln" x="24" y="34"></text>
+<text class="ln" x="24" y="32">Silicon: clock and data</text>
+<rect class="b-app" x="10" y="248" width="1170" height="222" rx="6"/>
+<text class="ln" x="24" y="272"></text>
+<text class="ln" x="24" y="270">Firmware</text>
+<rect class="bx s-hw" x="20" y="90" width="120" height="56" rx="4"/>
+<text class="t" x="30" y="108">PLL1</text>
+<text class="s" x="30" y="122">VCO 1600 MHz</text>
+<text class="s" x="30" y="136">÷ p1 · p2</text>
+<rect class="bx s-hw" x="180" y="40" width="140" height="44" rx="4"/>
+<text class="t" x="190" y="59">CLKGEN13</text>
+<text class="s" x="190" y="73">PLL1 / 2 = 160 MHz</text>
+<rect class="bx s-hw" x="180" y="100" width="140" height="44" rx="4"/>
+<text class="t" x="190" y="119">CLKGEN6</text>
+<text class="s" x="190" y="133">ADC clock</text>
+<rect class="bx s-hw" x="180" y="160" width="140" height="44" rx="4"/>
+<text class="t" x="190" y="179">CLKGEN7</text>
+<text class="s" x="190" y="193">VCO divider, 400 MHz</text>
+<rect class="bx s-hw" x="360" y="40" width="150" height="44" rx="4"/>
+<text class="t" x="370" y="59">SCCP1</text>
+<text class="s" x="370" y="73">period = sample rate</text>
+<rect class="bx s-hw" x="360" y="160" width="150" height="44" rx="4"/>
+<text class="t" x="370" y="179">DAC2</text>
+<text class="s" x="370" y="193">triangle, test signal</text>
+<rect class="bx s-hw" x="560" y="80" width="170" height="84" rx="4"/>
+<text class="t" x="570" y="105">ADC core 5</text>
+<text class="s" x="570" y="119">single mode</text>
+<text class="s" x="570" y="133">PINSEL 3 = AD5AN3</text>
+<text class="s" x="570" y="147">trigger 0x20 = SCCP1</text>
+<rect class="bx s-hw" x="780" y="80" width="150" height="84" rx="4"/>
+<text class="t" x="790" y="105">DMA0</text>
+<text class="s" x="790" y="119">repeated one-shot</text>
+<text class="s" x="790" y="133">TRMODE = 1</text>
+<text class="s" x="790" y="147">1 transfer / trigger</text>
+<text class="an" x="980" y="52">ping-pong buffer in RAM</text>
+<rect class="bx s-hw" x="980" y="60" width="170" height="52" rx="4"/><text class="t" x="990" y="91">half A</text>
+<rect class="bx s-hw" x="980" y="112" width="170" height="52" rx="4"/><text class="t" x="990" y="143">half B</text>
+<rect class="bx s-diag" x="980" y="164" width="170" height="20" rx="3"/><text class="s" x="990" y="178">guard words</text>
+<path class="ar" d="M140 118 H160 V62 H180"/>
+<path class="ar" d="M140 118 H160 V122 H180"/>
+<path class="ar" d="M140 118 H160 V182 H180"/>
+<path class="ar" d="M320 62 H360"/>
+<path class="ar" d="M320 182 H360"/>
+<path class="ar" d="M320 122 H560"/>
+<path class="ar" d="M510 62 H535 V96 H560"/>
+<path class="ar" d="M510 182 H535 V148 H560"/>
+<path class="ar" d="M730 122 H780"/>
+<path class="ar" d="M930 122 H980"/>
+<text class="an" x="392" y="116">ADC clock</text>
+<text class="an" x="516" y="54">trigger</text>
+<text class="an" x="516" y="200">RA8</text>
+<text class="an" x="738" y="114">result</text>
+<rect class="bx s-cli" x="200" y="290" width="200" height="56" rx="4"/>
+<text class="t" x="210" y="315">cli.c</text>
+<text class="s" x="210" y="329">stream on &lt;ksps&gt; [core pinsel]</text>
+<rect class="bx s-app" x="450" y="290" width="280" height="56" rx="4"/>
+<text class="t" x="460" y="308">routing_apply()</text>
+<text class="s" x="460" y="322">→ acq_chain_setup_input()</text>
+<text class="s" x="460" y="336">DMA off, cores off, clock, cores on, DMA anew</text>
+<rect class="bx s-drv" x="780" y="290" width="150" height="56" rx="4"/>
+<text class="t" x="790" y="315">_DMA0Interrupt</text>
+<text class="s" x="790" y="329">dma.c · 42 instr.</text>
+<rect class="bx s-app" x="980" y="290" width="170" height="56" rx="4"/>
+<text class="t" x="990" y="308">dma0_event()</text>
+<text class="s" x="990" y="322">capture.c</text>
+<text class="s" x="990" y="336">→ pingpong_on_half()</text>
+<rect class="bx s-host dash" x="200" y="390" width="200" height="56" rx="4"/>
+<text class="t" x="210" y="415">adc_gui.py (host)</text>
+<text class="s" x="210" y="429">time signal, FFT, tri_eval</text>
+<rect class="bx s-drv" x="450" y="390" width="200" height="56" rx="4"/>
+<text class="t" x="460" y="415">uart.c · UART2</text>
+<text class="s" x="460" y="429">GRAB header, data, CRC</text>
+<rect class="bx s-cli" x="700" y="390" width="250" height="56" rx="4"/>
+<text class="t" x="710" y="408">gui_link_stream_grab()</text>
+<text class="s" x="710" y="422">halt → completed half → frame_send()</text>
+<text class="s" x="710" y="436">→ resume</text>
+<rect class="bx s-app" x="980" y="390" width="170" height="56" rx="4"/>
+<text class="t" x="990" y="408">capture_service()</text>
+<text class="s" x="990" y="422">main loop:</text>
+<text class="s" x="990" y="436">process_buffer()</text>
+<path class="ar" d="M400 318 H450"/>
+<path class="ar" d="M855 164 V290"/>
+<path class="ar" d="M930 318 H980"/>
+<path class="ar" d="M1065 346 V390"/>
+<path class="ar" d="M980 418 H950"/>
+<path class="ar" d="M700 418 H650"/>
+<path class="ar" d="M450 418 H400"/>
+<path class="ar" d="M300 390 V346"/>
+<path class="ar dash" d="M640 290 V164"/>
+<path class="ar dash" d="M1150 150 H1168 V418 H1150"/>
+<text class="an" x="648" y="244">sets up</text>
+<text class="an" x="862" y="244">HALF / DONE</text>
+<text class="an" x="1072" y="372">ready_half</text>
+<text class="an" x="308" y="372">command</text>
+</svg>

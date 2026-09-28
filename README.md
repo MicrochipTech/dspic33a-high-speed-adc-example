@@ -256,7 +256,8 @@ A **routing core** (`src/app/routing.c/.h`) tracks which resources — DMA chann
 DAC output, UREF, RAM — a route such as `ROUTE_STREAM` needs, refuses a conflict or an
 unreachable pin before any driver call, and is what `stream on` goes through; `route
 list` prints the active route and the resource table. `CLAUDE.md`'s module table is the
-complete, authoritative file list and who may call what; `docs/FIRMWARE-STRUCTURE.md`
+complete, authoritative file list and who may call what; [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+draws it as a block diagram (layers, and the data path while streaming); `docs/FIRMWARE-STRUCTURE.md`
 and `docs/REFACTORING-PROPOSAL.md` are the analysis and the plan that led here.
 
 **This needs real hardware.** The clock generators, the PLLs, the ADC and the DMA are
