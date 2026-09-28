@@ -878,6 +878,9 @@ his side (decision 8, changed 27.09.2026).
    and one per change made in reaction.
 5. `tests/board/expected.json` updated from the confirmed values, tagged with the run
    number.
+5a. `python docs/gen_architecture.py --apply-run <session zip>` (since 28.09.2026): every
+   module whose board-run blocks all passed in B turns green in `docs/ARCHITECTURE.md`'s
+   diagrams (`docs/test_status.json`); `docs/TEST-COVERAGE.md` updated to match.
 6. The next run uses the same runner with the new B; A stays the fixed baseline.
 
 **Pass criterion for N+1:** B complete (every block, `@END`, no timeout, no trap); every

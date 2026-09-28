@@ -9,9 +9,20 @@ through an <img> on GitHub/Bitbucket and in the VS Code Markdown preview.
 
 When a module is added, moved or renamed (CLAUDE.md's module table), change the
 box here and regenerate; do not edit the SVGs by hand.
+
+    python docs/gen_architecture.py --apply-run <board-run session zip>
+
+turns every box green whose board-run blocks all passed in B (tools/eval_board.py)
+and that has nothing in scope left open, writes docs/test_status.json and
+regenerates. See test_status.json's "_comment" for its fields.
 """
+import argparse
 import html
+import json
 import os
+import re
+import subprocess
+import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 E = html.escape
@@ -51,81 +62,112 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 </defs>"""
 
 
-# Test status per box, as of the last board run - the source is
-# docs/TEST-COVERAGE.md ("Before N+1"/"N+1 change" and "Off-board" columns);
-# update both together after every board run (BR.9). A box that holds several
-# modules takes the WORST status among them. Key = the box title exactly.
-#   status:   "proven"       ran on silicon, code unchanged since (moves only)
-#             "restructured" ran on silicon, N+1 changed the code - board run pending
-#             "never"        never ran on silicon in any form
-#   offboard: False = no test without a board covers it (TEST-COVERAGE.md "none")
-# A title missing here (the silicon boxes, "terminal", unused libraries) gets no mark.
-STATUS_AS_OF = "28.09.2026, before the first board run after N+1"
-STATUS = {
-    # host tools - none has run against a board yet
-    "adc_gui.py": ("never", True),
-    "adc_gui.py (host)": ("never", True),
-    "board_run.py · eval_board.py": ("never", True),
-    "remote.py → bench_client": ("never", True),
-    # console
-    "cli.c · console.h": ("restructured", True),
-    "cli.c": ("restructured", True),
-    "cmd_parser.c": ("proven", True),
-    "gui_link.c": ("never", False),
-    "gui_link_stream_grab()": ("never", False),
-    # tests and meters
-    "chaintest.c": ("restructured", False),
-    "bench.c": ("restructured", False),
-    "dactest.c": ("proven", False),
-    "meter.c": ("restructured", False),
-    # application
-    "main.c": ("restructured", True),
-    "acquisition.c": ("restructured", True),
-    "routing.c": ("never", True),
-    "routing_apply()": ("never", True),
-    "board.h · board_cfg": ("restructured", True),
-    "capture.c": ("restructured", True),
-    "capture_service()": ("restructured", True),
-    "dma0_event()": ("restructured", True),
-    "pingpong.c": ("restructured", True),
-    "port_impl.c": ("never", True),
-    # libraries (frame.c is new, so the shared box is "never")
-    "frame · crc16 · fmt · stats · tri_eval": ("never", True),
-    "diag.c": ("restructured", True),
-    # port layer - new in N+1
-    "log.h · port_log/trace": ("never", True),
-    "panic.h · port_panic()": ("never", True),
-    "wait.h · PORT_WAIT_WHILE()": ("never", True),
-    "regs.h · reg_visit_t": ("never", True),
-    # drivers
-    "clock.c": ("restructured", True),
-    "adc.c": ("restructured", True),
-    "dma.c": ("restructured", True),
-    "_DMA0Interrupt": ("proven", True),
-    "sccp.c": ("restructured", True),
-    "dac.c": ("restructured", True),
-    "uart.c": ("restructured", True),
-    "uart.c · UART2": ("restructured", True),
-    "timebase.c": ("proven", True),
-    "led.c": ("proven", True),
-}
+# Test status per box: docs/test_status.json (its "_comment" explains every
+# field). Green means fully tested on silicon with the current code; a box
+# turns green through --apply-run <session zip> (below) once every board-run
+# block that covers it passed in B and nothing in scope is left open, and
+# drops back to amber on its own as soon as one of its files changes after
+# the revision it was tested at. docs/TEST-COVERAGE.md is the prose next to it.
+STATUS_FILE = os.path.join(HERE, "test_status.json")
+REPO = os.path.dirname(HERE)
+
+
+def load_status(path=STATUS_FILE):
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def changed_since(rev, files):
+    """True when any of `files` differs between `rev` and the working tree
+    (committed or not) - the code a green box was tested with is gone."""
+    if not rev or not files:
+        return False
+    r = subprocess.run(["git", "-C", REPO, "diff", "--quiet", rev, "--", *files],
+                       capture_output=True)
+    return r.returncode == 1
+
+
+def effective(box):
+    """(status, note) as drawn: a green box whose files changed since its
+    tested revision is drawn amber."""
+    st = box["status"]
+    if st == "proven" and changed_since(box.get("rev"), box.get("files", [])):
+        return "restructured", f"changed since {box['rev']}"
+    return st, ""
+
+
+STATUS_DATA = load_status()
+STATUS_AS_OF = STATUS_DATA["as_of"]
+STATUS = STATUS_DATA["boxes"]
+LABEL = {"proven": "fully tested on silicon", "restructured": "ran on silicon, code changed since - to be tested",
+         "never": "never ran on silicon"}
 
 
 def marks(x, y, w, title):
-    st = STATUS.get(title)
-    if not st:
+    box = STATUS.get(title)
+    if not box:
         return ""
-    status, offboard = st
+    status, note = effective(box)
+    tip = LABEL[status] + (f" ({note})" if note else "")
+    if box.get("open"):
+        tip += "; open: " + "; ".join(box["open"])
     cx, cy = x + w - 11, y + 11
-    s = f'<circle class="st-{status}" cx="{cx}" cy="{cy}" r="5"><title>{status}</title></circle>'
-    if not offboard:
+    s = f'<circle class="st-{status}" cx="{cx}" cy="{cy}" r="5"><title>{E(tip)}</title></circle>'
+    if not box["offboard"]:
         s += f'<circle class="nooff" cx="{cx-15}" cy="{cy}" r="4.5"><title>no off-board test</title></circle>'
     return s
 
 
+def apply_run(zip_path, data):
+    """Turn every box green whose blocks all passed in B with no deviation.
+    Returns (promoted, held) - held = [(title, reason)] for the boxes that
+    stay as they are, so the caller can print why."""
+    sys.path.insert(0, os.path.join(REPO, "tools"))
+    import eval_board  # noqa: E402  (tools/ on the path above)
+    log_a, log_b = eval_board.load_session_zip_logs(zip_path)
+    try:
+        expected = eval_board.load_expected()
+    except (OSError, ValueError):
+        expected = None
+    result = eval_board.evaluate(log_a, log_b, expected)
+    bad = {d["block"] for d in result["deviations"]}
+    if result["expectation_deviations"]:
+        bad.add("R2")          # every expectation in expected.json is a chain-all line
+    passed = {b for b, v in result["verdicts_b"].items() if v == "ok" and b not in bad}
+    rev = None       # the B image's revision: what the firmware boxes were tested at
+    tools_rev = None  # the runner's own checkout: what the host-tool boxes were tested at
+    try:
+        import zipfile
+        with zipfile.ZipFile(zip_path) as z:
+            session = json.loads(z.read("session.json"))
+        tools_rev = (session.get("git") or {}).get("head")
+        for h in session.get("hex", []):
+            m = re.match(r"B-[^-]+-([0-9a-f]{7,40})\.hex$", os.path.basename(h.get("path") or ""))
+            if m:
+                rev = m.group(1)
+    except (KeyError, ValueError, OSError):
+        pass
+    promoted, held = [], []
+    for title, box in data["boxes"].items():
+        if box["status"] == "proven" and not changed_since(box.get("rev"), box.get("files", [])):
+            continue
+        if not box["blocks"]:
+            held.append((title, "no board-run block reaches it"))
+        elif box["open"]:
+            held.append((title, "open: " + "; ".join(box["open"])))
+        elif not set(box["blocks"]) <= passed:
+            held.append((title, "not passed in B: " + ", ".join(sorted(set(box["blocks"]) - passed))))
+        else:
+            host = all(f.startswith("tools/") for f in box.get("files", [])) and box.get("files")
+            box.update(status="proven", rev=tools_rev if host else rev, run=os.path.basename(zip_path))
+            promoted.append(title)
+    data["as_of"] = f"after {os.path.basename(zip_path)}"
+    return promoted, held
+
+
 def legend(x, y):
-    items = [("st-proven", "ran on silicon, unchanged since"),
-             ("st-restructured", "ran on silicon, changed in N+1 - board run pending"),
+    items = [("st-proven", "fully tested on silicon"),
+             ("st-restructured", "ran on silicon, code changed since - to be tested"),
              ("st-never", "never ran on silicon"),
              ("nooff", "no test without a board")]
     s = [f'<text class="s" x="{x}" y="{y+4}">Test status, {E(STATUS_AS_OF)} (docs/TEST-COVERAGE.md):</text>']
@@ -275,9 +317,36 @@ def datapath():
     return svg(1190, 528, "Data path while streaming", "\n".join(g))
 
 
-if __name__ == "__main__":
+def write_svgs():
     for name, text in (("architecture_layers.svg", layers()), ("architecture_datapath.svg", datapath())):
         path = os.path.join(HERE, name)
         with open(path, "w", encoding="utf-8", newline="\n") as f:
             f.write(text)
         print("wrote", path)
+
+
+if __name__ == "__main__":
+    # box titles carry "·" and "→"; a Windows console in cp1252 would stop on them
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--apply-run", metavar="ZIP",
+                    help="a board-run session zip (tools/board_run.py): turn every box green whose "
+                         "blocks all passed in B, write docs/test_status.json, then regenerate")
+    a = ap.parse_args()
+    if a.apply_run:
+        data = load_status()
+        promoted, held = apply_run(a.apply_run, data)
+        with open(STATUS_FILE, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+        print("green now:", ", ".join(promoted) if promoted else "(none)")
+        for title, why in held:
+            print(f"  stays: {title} - {why}")
+        STATUS_DATA.clear()
+        STATUS_DATA.update(data)
+        STATUS.clear()
+        STATUS.update(data["boxes"])
+    stale = [t for t, b in STATUS.items() if b["status"] == "proven" and effective(b)[0] != "proven"]
+    for t in stale:
+        print(f"  amber again: {t} - its files changed since {STATUS[t]['rev']}")
+    write_svgs()

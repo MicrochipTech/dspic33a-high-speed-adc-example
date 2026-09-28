@@ -1,0 +1,66 @@
+{
+  "_comment": [
+    "Test status per box of docs/architecture_*.svg, read by docs/gen_architecture.py.",
+    "status:   proven = fully tested on silicon with the current code (green);",
+    "          restructured = ran on silicon, but the code changed since (amber);",
+    "          never = never ran on silicon (red).",
+    "offboard: false = no test without a board covers it (hollow ring).",
+    "blocks:   the board-run blocks (tools/board_run.py, R0..R7) that exercise it -",
+    "          'gen_architecture.py --apply-run <zip>' turns a box green when every one",
+    "          of them passed in B with no deviation (tools/eval_board.py) and 'open' is empty.",
+    "          An empty list: no board-run block reaches it, it cannot turn green that way.",
+    "open:     parts in scope that no test reaches yet (docs/TEST-COVERAGE.md) - while",
+    "          any is listed the box stays as it is; remove one when a test covers it.",
+    "files:    its source files - a green box whose files changed since 'rev' is drawn",
+    "          amber again (the code changed after it was tested).",
+    "rev/run:  written by --apply-run: the B image's git revision and the session zip."
+  ],
+  "as_of": "28.09.2026, before the first board run after N+1",
+  "boxes": {
+    "adc_gui.py": {"status": "never", "offboard": true, "blocks": [], "open": ["the GUI itself on a board (LIVE loop, cards)"], "files": ["tools/adc_gui.py"]},
+    "adc_gui.py (host)": {"status": "never", "offboard": true, "blocks": [], "open": ["the GUI itself on a board (LIVE loop, cards)"], "files": ["tools/adc_gui.py"]},
+    "board_run.py · eval_board.py": {"status": "never", "offboard": true, "blocks": ["R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7"], "open": [], "files": ["tools/board_run.py", "tools/eval_board.py"]},
+    "remote.py → bench_client": {"status": "never", "offboard": true, "blocks": [], "open": ["a --remote run against the real relay"], "files": ["tools/remote.py"]},
+
+    "cli.c · console.h": {"status": "restructured", "offboard": true, "blocks": ["R0", "R6", "R7"], "open": [], "files": ["src/cli/cli.c", "src/cli/console.h"]},
+    "cli.c": {"status": "restructured", "offboard": true, "blocks": ["R4", "R5"], "open": [], "files": ["src/cli/cli.c"]},
+    "cmd_parser.c": {"status": "proven", "offboard": true, "blocks": ["R0"], "open": [], "files": ["src/cli/cmd_parser.c", "src/cli/cmd_parser.h"]},
+    "gui_link.c": {"status": "never", "offboard": false, "blocks": ["R4", "R5"], "open": ["snap, rate, blk"], "files": ["src/link/gui_link.c", "src/link/gui_link.h"]},
+    "gui_link_stream_grab()": {"status": "never", "offboard": false, "blocks": ["R4", "R5"], "open": [], "files": ["src/link/gui_link.c"]},
+
+    "chaintest.c": {"status": "restructured", "offboard": false, "blocks": ["R2"], "open": [], "files": ["src/tests/chaintest.c", "src/tests/chaintest.h"]},
+    "bench.c": {"status": "restructured", "offboard": false, "blocks": ["R3"], "open": [], "files": ["src/tests/bench.c", "src/tests/bench.h"]},
+    "dactest.c": {"status": "proven", "offboard": false, "blocks": ["R3"], "open": [], "files": ["src/tests/dactest.c", "src/tests/dactest.h"]},
+    "meter.c": {"status": "restructured", "offboard": false, "blocks": ["R3"], "open": [], "files": ["src/meter/meter.c", "src/meter/meter.h"]},
+
+    "main.c": {"status": "restructured", "offboard": true, "blocks": ["R0"], "open": [], "files": ["src/app/main.c"]},
+    "acquisition.c": {"status": "restructured", "offboard": true, "blocks": ["R2", "R3", "R4", "R5"], "open": [], "files": ["src/app/acquisition.c", "src/app/acquisition.h", "src/app/acquisition_priv.h"]},
+    "routing.c": {"status": "never", "offboard": true, "blocks": ["R4", "R5", "R6"], "open": [], "files": ["src/app/routing.c", "src/app/routing.h"]},
+    "routing_apply()": {"status": "never", "offboard": true, "blocks": ["R4", "R5"], "open": [], "files": ["src/app/routing.c"]},
+    "board.h · board_cfg": {"status": "restructured", "offboard": true, "blocks": ["R0", "R2", "R3"], "open": ["the EV17P63A (Nano) profile - its own first run"], "files": ["src/app/board.h", "src/boards/board_cfg.h", "src/boards/ev74h48a.c", "src/boards/ev17p63a.c"]},
+    "capture.c": {"status": "restructured", "offboard": true, "blocks": ["R2", "R3", "R4", "R5"], "open": [], "files": ["src/app/capture.c", "src/app/capture.h", "src/app/capture_priv.h"]},
+    "capture_service()": {"status": "restructured", "offboard": true, "blocks": ["R2", "R4"], "open": [], "files": ["src/app/capture.c"]},
+    "dma0_event()": {"status": "restructured", "offboard": true, "blocks": ["R2", "R4", "R5"], "open": [], "files": ["src/app/capture.c", "src/app/pingpong.h"]},
+    "pingpong.c": {"status": "restructured", "offboard": true, "blocks": ["R2", "R4", "R5"], "open": [], "files": ["src/app/pingpong.c", "src/app/pingpong.h"]},
+    "port_impl.c": {"status": "never", "offboard": true, "blocks": ["R0", "R1"], "open": [], "files": ["src/app/port_impl.c"]},
+
+    "frame · crc16 · fmt · stats · tri_eval": {"status": "never", "offboard": true, "blocks": ["R0", "R2", "R3", "R4", "R5"], "open": [], "files": ["src/lib/frame.c", "src/lib/crc16.c", "src/lib/fmt.c", "src/lib/stats.c", "src/lib/tri_eval.c"]},
+    "diag.c": {"status": "restructured", "offboard": true, "blocks": ["R0", "R1", "R7"], "open": [], "files": ["src/diag/diag.c", "src/diag/diag.h"]},
+
+    "log.h · port_log/trace": {"status": "never", "offboard": true, "blocks": ["R0", "R1"], "open": [], "files": ["src/port/log.h"]},
+    "panic.h · port_panic()": {"status": "never", "offboard": true, "blocks": [], "open": ["runs only on a fault"], "files": ["src/port/panic.h"]},
+    "wait.h · PORT_WAIT_WHILE()": {"status": "never", "offboard": true, "blocks": ["R0"], "open": [], "files": ["src/port/wait.h"]},
+    "regs.h · reg_visit_t": {"status": "never", "offboard": true, "blocks": ["R1"], "open": [], "files": ["src/port/regs.h"]},
+
+    "clock.c": {"status": "restructured", "offboard": true, "blocks": ["R0", "R1", "R2", "R3"], "open": [], "files": ["src/drivers/clock.c", "src/drivers/clock.h"]},
+    "adc.c": {"status": "restructured", "offboard": true, "blocks": ["R1", "R2", "R3", "R4", "R5"], "open": [], "files": ["src/drivers/adc.c", "src/drivers/adc.h"]},
+    "dma.c": {"status": "restructured", "offboard": true, "blocks": ["R1", "R2", "R3", "R4", "R5"], "open": [], "files": ["src/drivers/dma.c", "src/drivers/dma.h"]},
+    "_DMA0Interrupt": {"status": "proven", "offboard": true, "blocks": ["R2", "R4", "R5"], "open": [], "files": []},
+    "sccp.c": {"status": "restructured", "offboard": true, "blocks": ["R1", "R2", "R4", "R5"], "open": [], "files": ["src/drivers/sccp.c", "src/drivers/sccp.h"]},
+    "dac.c": {"status": "restructured", "offboard": true, "blocks": ["R1", "R2", "R3", "R4"], "open": ["dac 1 (DACOUT1 = RA1) - the GUI has a DAC1 card"], "files": ["src/drivers/dac.c", "src/drivers/dac.h"]},
+    "uart.c": {"status": "restructured", "offboard": true, "blocks": ["R0", "R4", "R5"], "open": [], "files": ["src/drivers/uart.c", "src/drivers/uart.h"]},
+    "uart.c · UART2": {"status": "restructured", "offboard": true, "blocks": ["R4", "R5"], "open": [], "files": ["src/drivers/uart.c"]},
+    "timebase.c": {"status": "proven", "offboard": true, "blocks": ["R2", "R3"], "open": [], "files": ["src/drivers/timebase.c", "src/drivers/timebase.h"]},
+    "led.c": {"status": "proven", "offboard": true, "blocks": ["R2"], "open": [], "files": ["src/drivers/led.c", "src/drivers/led.h"]}
+  }
+}

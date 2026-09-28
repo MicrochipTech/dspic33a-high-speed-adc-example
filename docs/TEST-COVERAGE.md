@@ -27,8 +27,13 @@ Every block needs boot and console, so `main.c`, `config_bits.c`, `clock.c`'s
 `clock_init()`, `uart.c`, `cli.c`, `cmd_parser.c` and `fmt.c` are exercised by all of
 them; the table names the block where a module is the thing being tested.
 
-After the run, update this file from the result: a module moves from restructured/never
-to proven only when the block that covers it passed the BR.9 criterion.
+After the run, update this file from the result. The dots in `docs/ARCHITECTURE.md`'s
+diagrams follow by themselves: `python docs/gen_architecture.py --apply-run <session zip>`
+turns a box green (fully tested) once every board-run block covering it passed in B with
+no deviation and nothing in scope is left open (`docs/test_status.json`, fields `blocks`
+and `open`), and draws a green box amber again as soon as its files change after the
+revision it was tested at. When a gap in the "Not reached" column is closed, remove it
+from that box's `open` list too.
 
 ## Drivers (`src/drivers/`, `src/sim/`)
 
