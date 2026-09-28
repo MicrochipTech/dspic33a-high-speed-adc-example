@@ -95,6 +95,9 @@ not counted.
 | BR.7 Documentation | done | this commit | Sonnet | `CLAUDE.md`: module rows for `tools/board_run.py`/`.bat`, `tools/eval_board.py`, `tests/board/expected.json`, `board_run/`, plus a "Build and verify" paragraph on the board run (the reply-format rule, "a board run goes through `board_run.py`", and that it talks to a local COM port directly - `grep -i "bench\|relay" tools/board_run.py` finds nothing, so it does not use the relay/bench_client above). `README.md`: the old one-line pointer became a "Running the board test" section pointing at `board_run/README.md`. `docs/CHAIN-TEST-PLAN.md` section 7: the manual procedure replaced by `git pull`/`gui_setup.bat`/`board_run.bat`, pointing at `board_run/README.md`. `docs/TROUBLESHOOTING.md`: new §2.6 - port busy (who holds it, from `board_run.py`'s own message), no reply (timeout, reset, the runner carries on), pip behind a proxy (`HTTPS_PROXY`, `gui_setup.bat`'s own wording). Plan: a Decisions row (28.09., BR decision 4 superseded for remote runs by bench_client) and the P12.1 row's commit hash filled in |
 | BR.8 B image for the first board run | done | this commit | Sonnet | B = dead53c (P12 close-out HEAD), 262492 B, SHA-256 1e1a27d414a2b7af0d1ba4ecc488fe4b4d7fca10e2826b8127324f659a8eac9b; built from two independent clean worktree checkouts, differing only in 4 `__TIME__` records (git revision/dirty flag identical, banner has no "+local changes"); `SHA256SUMS.txt`/`README.md` updated (A kept), HARDWARE-LOG's 2026-09-27 entry gained both SHA-256 under phase BR |
 | BR.9 Board run and loop back | open | | | needs the colleague and the EV74H48A |
+| DBG.1 `mem` command | open | | | after BR.9 (a firmware change invalidates B); one parser slot, address check before any access |
+| DBG.2 `tools/sym.py` | open | | | name -> address from the ELF/map and the pack; refuses a map that does not match the banner's revision |
+| DBG.3 Documentation, board-run integration | open | | | the `help` change is a reply-format change (BR rule) |
 
 ### Decisions taken during the work
 
@@ -125,6 +128,7 @@ not counted.
 | 27.09. | BR: `sim_trap.py` cannot serve as a transport for the runner - the simulator's UART is write-only to a file, nothing feeds bytes in at run time (BR.1's look); the runner is tested against its stand-in only | BR.1 |
 | 27.09. | `stream on` custom input through the routing: PINSEL 6/7 (the internal 15/16 VDD reference and UREF) always reachable, and the internal channels the ATDF names on core 5 (AD5AN5 "Touch ADC Input", AD5AN8 "VDDCORE") likewise; PINSEL 9..15 (unnamed in the ATDF) and package pins a core does not bring out are refused - intended by P11.2's rule "a pin the core cannot reach", the only console behaviour change of N+1 (same "set-up failed" line as any other refusal; the GUI already snapped its PINSEL field to the core's pins plus 6/7, its hint narrowed) | P11.4: `routing.c`'s `route_int_mask[]`, `acquisition.h` |
 | 28.09. | BR decision 4 superseded for remote runs: with bench_client (`CLAUDE.md`, `1a1464e`) the lead can flash through `ipecmd` over the relay; runs by the colleague stay by hand | `CLAUDE.md` "Remote board access" |
+| 28.09. | DBG added after BR.9: a `mem rd/wr` console command (one parser slot, `diag.c`) and `tools/sym.py`, so an agent can read and change memory over the relay without a rebuild; deliberately after the first board run, since any firmware change invalidates the B image | this plan, section DBG |
 
 ### Handover to the next lead session (27.09.2026, 18:30)
 
@@ -888,6 +892,72 @@ deviation of B from A absent or explained; `chain all` S4/S6/S9 at 8 MSPS withou
 overrun/late/missed; every `stream grab` cycle with a clean CRC and triangle verdict; the
 stack high-water mark leaves at least 25 % of the stack unused. Only then N+1 counts as
 "run on silicon".
+
+---
+
+## DBG: memory access for remote diagnosis (after BR.9)
+
+Added 28.09.2026 (user decision). **Why:** since the relay (`bench_client`), an agent can
+drive the board's console from here - but every question about a register or variable
+the firmware does not already print costs a rebuild, a flash and a run. A read/write
+command answers such a question in one console line, while the chain streams, and
+narrows a board-run deviation down without a second board run - the cost CLAUDE.md's
+rule "a board run costs a person their afternoon" is about.
+
+**Why after BR.9, not before:** any firmware change invalidates the committed B image
+(`dead53c`, SHA-256 in `board_run/SHA256SUMS.txt`); the first board run after N+1 tests
+exactly N+1. DBG goes into the next B image, so it is available for chasing the
+deviations BR.9 produces.
+
+### DBG.1 `mem` command (firmware)
+
+- One parser slot, sub-commands dispatched inside `cmd_mem_fn()` like `stream`/`route`
+  (28 of 32 slots in use before; 29 after): `mem rd <addr> [n]` (n 32-bit words, `n` <=
+  16, one `addr: value` line each) and `mem wr <addr> <value> [mask]` (read-modify-write
+  of the bits in `mask`, default all; the value read back is the reply).
+- Lives in `src/diag/diag.c` (diagnosis, not a driver); `cli.c` only registers and
+  parses.
+- **Checked before any access**, never trapped on: 4-byte alignment (a misaligned
+  32-bit access is an address-error trap on silicon, see [SMOKE]'s fault case 1) and
+  the address against a table of mapped ranges taken from the device pack's ATDF /
+  linker script for the MPS512 and the MPS506 (RAM, SFR space read/write, flash
+  read-only; anything else refused with one line naming the range it is not in). The
+  table cites its source like every register value in this repository.
+- **Writes:** only RAM and SFR space; each one is echoed with the old and new value, so
+  the console log is the record. No unlock sequences (protected registers such as the
+  PLL's stay out of reach on purpose - that is `clock.c`'s job).
+- **Stated in `help` and in CLAUDE.md:** `mem wr` deliberately bypasses the register
+  ownership rules ("nobody outside `dma.c` touches a DMA register"); it is a diagnosis
+  tool, and a write to a clock or DMA register while the chain streams can hang the
+  chip (recovery: reset, as for any board-run timeout).
+- Verify: host test of the address check (`tests/host/test_mem.c`: every range edge,
+  misaligned, unmapped, flash write refused); [SMOKE] with `mem rd` of a known variable
+  and a refused misaligned read added to the script (`expected.log` updated);
+  `-Wall -Wextra` clean on hw/sim/nano/smoke; `trace.bat` unchanged; fncmp of both ISRs
+  unchanged.
+
+### DBG.2 `tools/sym.py` (host)
+
+- Resolves a name to an address so the agent writes `mem rd dma_overrun` rather than a
+  hex number: firmware variables from the build's `.map`/ELF (`xc-dsc-objdump -t`), SFR
+  names (e.g. `CLK6CON`, `DMA0STAT`) from the pack's device header/ATDF. Checks that the
+  ELF it reads matches the revision in the board's boot banner (the same check
+  `board_run.py --remote` makes for the hex), and refuses otherwise - a stale map gives
+  the wrong address silently.
+- A `mem` wrapper usable over `protocol.Target` (local COM port or the bench_client
+  tunnel): `python tools/sym.py rd dma_overrun`, `... wr CLK6CON 0x... --mask ...`.
+- Verify: self-test against a committed small ELF/map fixture and the replay target.
+
+### DBG.3 Documentation and board-run integration
+
+- CLAUDE.md: module rows (`diag.c` gains `mem`), the parser slot count (29/32), the
+  exception to the register-ownership rule; README command table; HARDWARE-LOG entry
+  for the first board run that uses it.
+- `tools/board_run.py`: `help`'s new line is a reply-format change (BR rule) -
+  `board_run.py`/`eval_board.py` updated in the same commit; optionally one `mem rd`
+  of a variable `status` already reports, as a cross-check in R7.
+- `docs/test_status.json` / `docs/TEST-COVERAGE.md`: the new code in `diag.c` starts
+  amber/never like any new code.
 
 ---
 
