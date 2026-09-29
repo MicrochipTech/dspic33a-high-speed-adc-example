@@ -321,7 +321,13 @@ on that PC** (run 20, 29.09.2026: two instances registered with the same token, 
 hung, the agent killed `ipecmd` mid-programming and the part stayed unreachable until
 MPLAB X reprogrammed it on site) - check `info`'s `uptime_s` after a restart. MPLAB X open
 without a project did not disturb a full remote run. `board_run.py --skip R3` leaves out a
-block (`test all` hangs A's firmware in the sweep, run 20).
+block (`test all` hangs A's firmware in the sweep, run 20). A timeout recovers in three steps
+(`board_run.py`'s `cli_reset()`/`handle_timeout()`, `RemoteTarget.boot_banner()`, 29.09.2026):
+the firmware's own `reset` command (0.22 s over the tunnel, measured - but only while the
+parser still reads), then `RemoteBench.reset()` = `bench_client reset` = `ipecmd -OK -OL`
+(agent VERSION 6: connect + release from reset, nothing written; 29.4 s measured, the
+banner came back with the same revision and all counters 0), then the re-flash only if
+that fails or the agent is older. `docs/research-ipecmd-reset.md` has the ipecmd options.
 
 ```
 python C:\work\Claas\Relay\bench_client.py info                        agent online? UART port, ipecmd

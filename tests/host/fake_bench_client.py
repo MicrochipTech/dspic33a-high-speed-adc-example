@@ -99,9 +99,29 @@ def cmd_flash(args):
     true_rev = m.group(2) if m else "0000000"
     reported_rev = "ffffff0" if os.environ.get("FAKE_BENCH_WRONG_REV") == "1" else true_rev
     with open(state_path, "w") as f:
-        json.dump({"label": label, "has_route": label == "B"}, f)
+        json.dump({"label": label, "has_route": label == "B", "rev": reported_rev}, f)
     print("[boot] uart up on FRC, 115200 8N1")
     print(f"[boot] adc_dma_40msps fake-selftest fake-time git {reported_rev} (master)")
+    print("[boot] READY - nothing is converting, the console has the CPU")
+    return 0
+
+
+def cmd_reset(args):
+    """bench_client reset (agent VERSION 6): the programmer reset - the
+    firmware "flashed" last keeps running, its banner comes back.
+    FAKE_BENCH_NO_RESET=1 plays an older agent that refuses the request."""
+    if os.environ.get("FAKE_BENCH_NO_RESET") == "1":
+        print("[agent] error: unknown request 'reset'", file=sys.stderr)
+        return 2
+    state_path, _ = _state_paths()
+    rev = "0000000"
+    try:
+        with open(state_path) as f:
+            rev = json.load(f).get("rev", rev)
+    except OSError:
+        pass
+    print("[boot] uart up on FRC, 115200 8N1")
+    print(f"[boot] adc_dma_40msps fake-selftest fake-time git {rev} (master)")
     print("[boot] READY - nothing is converting, the console has the CPU")
     return 0
 
@@ -246,6 +266,8 @@ def main(argv=None):
     p_flash = sub.add_parser("flash")
     p_flash.add_argument("hex")
     p_flash.add_argument("--after", type=float, default=5)
+    p_reset = sub.add_parser("reset")
+    p_reset.add_argument("--after", type=float, default=5)
     p_tunnel = sub.add_parser("tunnel")
     p_tunnel.add_argument("--listen", required=True)
     args = ap.parse_args(argv)
@@ -256,6 +278,8 @@ def main(argv=None):
         return cmd_info(args)
     if args.op == "flash":
         return cmd_flash(args)
+    if args.op == "reset":
+        return cmd_reset(args)
     return cmd_tunnel(args)
 
 

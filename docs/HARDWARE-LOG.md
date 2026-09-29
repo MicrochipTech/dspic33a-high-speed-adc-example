@@ -1796,3 +1796,12 @@ running, the full A/B run - two flashes plus two recovery re-flashes - went thro
 MPLAB X open on the colleague's PC (no project loaded), so a running MPLAB X without a
 project did not disturb the remote path. Rules from this: one agent only; never kill
 `ipecmd` mid-programming (a half-programmed part needs MPLAB X on site to recover).
+
+**Afterwards, same day - two ways to reset the board without re-flashing, both run on
+this board:** `bench_client reset` (new, agent VERSION 6: `ipecmd -TPPKOB4
+-P33AK512MPS512 -OK -OL`, nothing erased or written) with `stream on 1000` running:
+29.4 s, then a fresh boot banner, `git dead53c` unchanged, `running 0`, `blocks 0`,
+`isr_entries 0`. Not faster than a flash - ipecmd's connect is most of the time - but it
+cannot leave a half-programmed part behind. The firmware's own `reset` command over the
+tunnel, also with the stream running: banner back after 0.22 s, counters 0. Both are now
+the first two recovery steps of `board_run.py --remote`, the re-flash the third.

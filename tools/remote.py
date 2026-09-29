@@ -123,6 +123,25 @@ class RemoteBench:
             text = f"{classify(code, (r.stdout or '') + (r.stderr or ''))[1]} (exit {code})"
         return code, text
 
+    def reset(self, after=5):
+        """python bench_client.py reset --after <after> (agent VERSION 6,
+        29.09.2026): ipecmd -OK -OL on the agent's side - connect, release
+        from reset, nothing erased or written. Same (code, text) shape as
+        flash(): on success text is the boot banner. About 30 s on the
+        colleague's PKOB4 (run 20: 29.4 s, almost all of it ipecmd's own
+        connect) - not faster than a flash, but it cannot leave a half-
+        programmed part behind and needs no hex file. An older agent
+        refuses the request (bench_client exit 2); callers fall back to
+        flash(). Auto-closes an open tunnel first, like flash()."""
+        self.close_tunnel()
+        cmd = [self.python, self.bench_client, "reset", "--after", str(after)]
+        r = subprocess.run(cmd, capture_output=True, text=True, env=self.env)
+        code = r.returncode
+        if code == 0:
+            return code, r.stdout
+        detail = (r.stderr or r.stdout or "").strip()
+        return code, f"reset failed (exit {code})" + (f": {detail[-300:]}" if detail else "")
+
     # -- tunnel ----------------------------------------------------------
     def open_tunnel(self, timeout=15.0):
         """Starts `bench_client.py tunnel --listen 127.0.0.1:<port>` and

@@ -297,6 +297,40 @@ def read_reset_banner(target, log, block, timeout=5.0):
     return lines
 
 
+def cli_reset(target, log, block, timeout=3.0):
+    """First recovery step (29.09.2026): the firmware's own `reset` command
+    (cli.c cmd_reset_fn(): "resetting", then a software reset - in A and B
+    alike). Takes milliseconds, but only helps while the parser still
+    reads the console: a wedged firmware (run 20's hang after `stream off`
+    at 8 MSPS) never sees it. Returns True when the boot banner came back
+    within `timeout` s. Needs a target with a serial object (protocol.Target,
+    RemoteTarget.target); a stand-in without one skips straight on."""
+    ser = getattr(getattr(target, "target", target), "ser", None)
+    if ser is None:
+        return False
+    try:
+        ser.reset_input_buffer()
+        ser.write(b"\rreset\r")
+        buf = b""
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            chunk = ser.read(4096)
+            if chunk:
+                buf += chunk
+                if b"[boot]" in buf and b"READY" in buf:
+                    break
+    except Exception as e:                 # a dead tunnel: go on to the next step
+        log.ev(block, f"reset: cli reset not possible ({type(e).__name__})")
+        return False
+    got = b"[boot]" in buf
+    log.ev(block, "reset: cli reset - boot banner seen" if got else "reset: cli reset - no answer")
+    if got:
+        for l in buf.decode("ascii", "replace").split("\n"):
+            if l.strip():
+                log.rx(block, l.rstrip("\r"))
+    return got
+
+
 def handle_timeout(target, log, block, ui, remote=False):
     """board-run-task.md section 2 decision 6 / section 4.2: log it, ask
     for a reset, read the banner, then let the caller carry on with the
@@ -311,10 +345,18 @@ def handle_timeout(target, log, block, ui, remote=False):
     local --selftest, RemoteTarget here), so the only difference at this
     level is what is printed and that no ENTER is waited for."""
     log.ev(block, "timeout")
+    if cli_reset(target, log, block):
+        ui.say(f"{block}: no reply within the timeout - the firmware's own 'reset' brought it back")
+        try:
+            target.sync(timeout=TIMEOUT_SYNC)
+            log.ev(block, "reset: board ready again")
+            return
+        except TimeoutError:
+            log.ev(block, "reset: cli reset answered but no prompt - falling back")
     if remote:
-        ui.say(f"{block}: no reply within the timeout - closing the tunnel and "
-               "re-flashing to reset the board")
-        log.ev(block, "reset: remote re-flash")
+        ui.say(f"{block}: no reply within the timeout - resetting the board through the "
+               "programmer (re-flash if that fails)")
+        log.ev(block, "reset: remote programmer reset")
     else:
         ui.say(f"{block}: no reply within the timeout - press RESET on the board, then ENTER")
         ui.prompt("")
@@ -907,7 +949,14 @@ class RemoteTarget:
             self._used_initial = True
             return self._initial_banner
         self.bench.close_tunnel()
-        code, banner_text = self.bench.flash(self.hex_path, after=5)
+        # 29.09.2026: the programmer reset first (nothing written, no hex
+        # file needed; agent VERSION 6), the re-flash only if that fails -
+        # an older agent refuses "reset", a wedged PKOB4 fails it.
+        code, banner_text = self.bench.reset(after=5) if hasattr(self.bench, "reset") else (1, "")
+        self.last_recovery = "programmer reset"
+        if code != 0 or "[boot]" not in banner_text:
+            code, banner_text = self.bench.flash(self.hex_path, after=5)
+            self.last_recovery = "re-flash"
         if code != 0:
             # Nothing else in this module raises out of boot_banner() /
             # read_reset_banner() - handle_timeout() would have no block
@@ -1699,9 +1748,28 @@ def selftest():
                 target.close()
         check("--remote timeout recovery: R1 (regs) times out once",
               results_r["R1"]["verdict"] == "timeout")
-        check("--remote timeout recovery: logged closing the tunnel and re-flashing",
-              any("reset: remote re-flash" in l for l in log_r.lines))
+        check("--remote timeout recovery: logged the programmer reset",
+              any("reset: remote programmer reset" in l for l in log_r.lines))
+        check("--remote timeout recovery: the programmer reset was enough (no re-flash)",
+              getattr(target, "last_recovery", None) == "programmer reset")
         check("--remote timeout recovery: later blocks still ran, against the reopened tunnel",
+              results_r["R2"]["verdict"] == "ok" and results_r["R7"]["verdict"] == "ok")
+
+    # ---- the same, against an agent without "reset" (VERSION < 6): re-flash ----
+    with tempfile.TemporaryDirectory() as tmp:
+        board_run_dir, readme_path, a_path, b_path = make_remote_board_run(tmp)
+        env = dict(os.environ, FAKE_BENCH_STATE_DIR=os.path.join(tmp, "state"),
+                   FAKE_BENCH_TIMEOUT_BLOCK="regs", FAKE_BENCH_NO_RESET="1")
+        bench = remote.RemoteBench(bench_client=fake_bench_client, env=env)
+        with bench:
+            target, _ = flash_and_open(bench, a_path, "OLD", StubUI())
+            try:
+                log_r, results_r, _ = run_session(target, StubUI(), "A", remote=True)
+            finally:
+                target.close()
+        check("--remote timeout recovery, older agent: fell back to a re-flash",
+              getattr(target, "last_recovery", None) == "re-flash")
+        check("--remote timeout recovery, older agent: later blocks still ran",
               results_r["R2"]["verdict"] == "ok" and results_r["R7"]["verdict"] == "ok")
 
     print("board_run", "PASS" if ok_all else "FAIL")
