@@ -1833,3 +1833,14 @@ the firmware answered `stream off` and then printed `[FAIL] code: 8 - DMA channe
 itself off (CHEN = 0)` from main()'s idle check and stopped there (LED blink loop) - the
 console no longer answers after that, which is what the runner saw as a timeout. Not yet
 explained; next to look at.
+
+## 2026-09-29, `dac ... force` on the board - master 79f3340, remote
+
+Flashed `build/adc_dma_40msps.hex` (clean `79f3340`) through `bench_client flash` (exit 0),
+banner `git 79f3340 (master)`. Reason: the GUI's DAC2 tile could not set low 32 - the
+firmware refused anything outside 0xCD+SLPDAT..0xF32-SLPDAT (p1422), and its reply blamed
+SLPDAT. Checked over `bench_client console`: `dac 2 on 32 3840 20` refused with
+"low must be >= 0xCD + slpdat = 225"; the same with `force` taken ("forced - OUTSIDE the
+datasheet's limits", period 30464 ns); `dac 2 off` fine. What the DAC actually puts out
+below 0xCD was not looked at (no grab of it yet) - with the lower end already clipping at
+240 (run 20), expect a flat bottom rather than a triangle down to 32.
