@@ -605,8 +605,8 @@ the cause of the next overrun.
 UART2 on the board's MCP2221A USB-UART channel, 115200 8N1, no flow control. The parser
 is [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser), copied unchanged except for
 one line (the command table is 32 entries instead of 16 — `CMD_PARSER_MAX_COMMANDS`,
-`cmd_parser.h`; 27 commands, including `route`, plus the built-in `help` are
-registered — 28 of 32 slots, 4 free, `nano-board`). It
+`cmd_parser.h`; 28 commands, including `route` and `siggen`, plus the built-in `help` are
+registered — 29 of 32 slots, 3 free, `nano-board`). It
 runs in the UART receive interrupt, below the DMA interrupt — which is why a rate that
 overruns makes the console unresponsive, and why the firmware boots idle.
 
@@ -616,6 +616,10 @@ overruns makes the console unresponsive, and why the firmware boots idle.
 | `version` | build id, git revision, board, configuration |
 | `status` | run state, counters, the clock, the receive diagnostics, and — since the board-run preparation (BR.6) — the stack high-water mark and its margin to `SPLIM`, the sample buffer's address/alignment/guard-word check, and the boot stage/trap/`chain all` stage of the current run |
 | `regs` | clock, ADC, DMA, DAC, UREF and UART registers |
+| `siggen` | the signal generator's status: on/off, DAC, table size, play rate (set and actual), the parameters, the table's min/max, DMA 1 and SCCP2 state, the measured transfers per second. A table computed on the target (`lib/wavegen`, the `tab_wave_gen.py` formula) is played by DMA channel 1 into a DAC, paced by SCCP2, with no CPU involvement |
+| `siggen set <f0\|h2..h7\|decay\|amp\|lo\|hi> <value>` | one generator parameter per line (the console line is 64 characters); decimals without an exponent, `lo`/`hi` are DAC codes. Takes effect with the next `siggen on` |
+| `siggen on <dac 1\|2> <n 2..8192> <play_hz 100..1000000> [snap] [force] [oc]` | compute the table and play it on DACOUT1 = RA1 or DACOUT2 = RA8; `snap` moves f0 to a whole number of periods in the table, `force` allows `lo`/`hi` outside the DAC's 205..3890, `oc` paces SCCP2 in 32-bit output compare (dead on silicon; the default is the dual 16-bit timer). Refused while a route uses the same DAC (`stream on` on DAC2) |
+| `siggen off` \| `siggen regs` | stop the generator; dump DMA 1 and SCCP2 registers |
 | `route list` | the active route (source, core, pinsel, DAC, sink) and the resource table — which DMA channel, SCCP, DAC output and UREF are in use, RAM used vs. budget (`docs/DESIGN-MULTICHANNEL.md`'s routing core) |
 | `test [part] [halves]` | run a part of the measurement, or `all` — see below |
 | `pll <p1> <p2>` | **the sample rate**: PLL1 output dividers, 1600 MHz / (p1·p2), p1 ≥ p2, both 1…7 |
@@ -1024,6 +1028,7 @@ as" / "load as" name another file; `--settings <file>` starts with one.
 | `trigger.on`, `.level`, `.slope`, `.hyst` | the time plot's trigger: on/off, level in ADC counts (2048), `rising`/`falling`, hysteresis in LSB (16) |
 | `buffer.size` | total ping-pong buffer (`buf`), even, 16..8192 |
 | `dac.1`, `dac.2` | `on`, `low`, `high`, `slpdat` of each DAC's triangle (DAC tiles). A change goes to the board by itself 0.8 s after the last one. DAC2's `on` can also be `"auto"` (standard): with the test input, `auto` is the firmware's own triangle (slope chosen per rate), `true` the card's triangle on RA8, `false` DAC2 off - a quiet channel; the card's state is resent after every `stream on` |
+| `siggen` | the signal generator card: `on`, `dac`, `n`, `play_hz`, `f0`, `h2`..`h7`, `decay`, `amp`, `lo`, `hi`, `snap`, `force` (also in `tools/adc_gui_defaults.json`) |
 | `fake.source` | what the stand-in plays in `--fake`, on either input: `dac2` (the test input: what RA8 carries; standard), `sine` or `dac1`. Switching the input picks `dac2` (test) or `sine` (custom); it can be changed after |
 | `fake.*` | the sine's parameters: `signal_khz`, `amplitude`, `noise`, `harmonic2`, `harmonic3` |
 | `version` | settings format (3) |
@@ -1061,6 +1066,20 @@ interpolated crossing. A chip reads `trig @ k`, or `no trigger` when the level i
 crossed; the plot then shows the untriggered start (auto mode). Display only: the
 firmware, the stream, the FFT and the triangle verdict are untouched and keep the whole
 half; a change takes effect with the next grab (`tools/trigger.py`).
+
+The **signal generator** card drives `siggen`: on/off, DAC 1 or 2, table size `n`, play
+rate, `f0`, the harmonic factors `h2`..`h7`, `decay`, `amp`, the output range `lo`/`hi`,
+`snap` and `force`, with the table's preview. The defaults are `tab_wave_gen.py`'s, with
+the range **800..3500** rather than the DAC's nominal 205..3890, because on the board the
+DAC did not follow below about code 780. A change goes out 0.8 s after the last one as
+one `siggen set` line per parameter, then `siggen on`. **loop preset** sets the loop
+DAC2 -> RA8 -> ADC core 5 (custom input, core 5 / PINSEL 3): 1 kHz plus h3 = 0.3. In the
+loop the time plot overlays the fitted table (also inside the trigger's window) and a
+**loop chip** reports rms, gain and start entry of the match, and the harmonic factors
+fitted in the time domain against the set ones (an FFT of one period has no bins for
+them). The model is `tools/wavegen_model.py`; `--fake` plays the table on the generator's
+pin. The test input (`stream on <ksps>` with the firmware's triangle) is refused while
+the generator plays on DAC2.
 
 Board limits from the last hardware run are shown as guidance under the rate field, not
 enforced: clean to about 8 MSPS with the CPU processing, occasional DMA overruns from

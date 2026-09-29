@@ -33,6 +33,7 @@
     "dactest.c": {"status": "proven", "offboard": false, "blocks": ["R3"], "open": [], "files": ["src/tests/dactest.c", "src/tests/dactest.h"]},
     "meter.c": {"status": "restructured", "offboard": false, "blocks": ["R3"], "open": [], "files": ["src/meter/meter.c", "src/meter/meter.h"]},
 
+    "siggen.c": {"status": "never", "offboard": false, "blocks": [], "open": ["SG.8 board_run.py block R8", "intermittent fail 8 after stream off with the generator on (HARDWARE-LOG 2026-09-29)"], "files": ["src/siggen/siggen.c", "src/siggen/siggen.h"]},
     "main.c": {"status": "restructured", "offboard": true, "blocks": ["R0"], "open": [], "files": ["src/app/main.c"]},
     "acquisition.c": {"status": "restructured", "offboard": true, "blocks": ["R2", "R3", "R4", "R5"], "open": [], "files": ["src/app/acquisition.c", "src/app/acquisition.h", "src/app/acquisition_priv.h"]},
     "routing.c": {"status": "never", "offboard": true, "blocks": ["R4", "R5", "R6"], "open": [], "files": ["src/app/routing.c", "src/app/routing.h"]},
@@ -54,7 +55,7 @@
 
     "clock.c": {"status": "restructured", "offboard": true, "blocks": ["R0", "R1", "R2", "R3"], "open": [], "files": ["src/drivers/clock.c", "src/drivers/clock.h"]},
     "adc.c": {"status": "restructured", "offboard": true, "blocks": ["R1", "R2", "R3", "R4", "R5"], "open": [], "files": ["src/drivers/adc.c", "src/drivers/adc.h"]},
-    "dma.c": {"status": "restructured", "offboard": true, "blocks": ["R1", "R2", "R3", "R4", "R5"], "open": [], "files": ["src/drivers/dma.c", "src/drivers/dma.h"]},
+    "dma.c": {"status": "restructured", "offboard": true, "blocks": ["R1", "R2", "R3", "R4", "R5"], "open": [], "files": ["src/drivers/dma.c", "src/drivers/dma.h", "src/drivers/dma_tx.h"]},
     "_DMA0Interrupt": {"status": "proven", "offboard": true, "blocks": ["R2", "R4", "R5"], "open": [], "files": []},
     "sccp.c": {"status": "restructured", "offboard": true, "blocks": ["R1", "R2", "R4", "R5"], "open": [], "files": ["src/drivers/sccp.c", "src/drivers/sccp.h"]},
     "dac.c": {"status": "restructured", "offboard": true, "blocks": ["R1", "R2", "R3", "R4"], "open": ["dac 1 (DACOUT1 = RA1) - the GUI has a DAC1 card", "dac ... force (dac_triangle_force()) - checked by hand 29.09.2026, no block sends it"], "files": ["src/drivers/dac.c", "src/drivers/dac.h"]},

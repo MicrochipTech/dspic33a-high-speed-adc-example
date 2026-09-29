@@ -23,7 +23,7 @@ commit message stays the detailed record; this table is the one place to see whe
 work stands. `done` = committed and re-checked by the lead session (builds, `trace.bat`,
 `hosttest.bat`, goldens, no trailer).
 
-As of 29.09.2026 (TRG.1-TRG.6 done on branch `trigger`; DBG, TRG.7 and SG planned, not started). Done: 51 of 52 tasks in the N+1 scope (63 planned plus P0.9 = 64; P8 and P10, 12
+As of 29.09.2026 (TRG.1-TRG.6 done on branch `trigger`; SG.0-SG.7 and SG.9 done on branch `siggen`, SG.8 (board_run block R8) open; DBG and TRG.7 planned, not started). Done: 51 of 52 tasks in the N+1 scope (63 planned plus P0.9 = 64; P8 and P10, 12
 tasks, moved to N+2 on 27.09.2026); P0.5b and P4.6a were added along the way and are
 not counted.
 
@@ -114,7 +114,7 @@ not counted.
 | SG.6 GUI card | done | this commit | Opus | `tools/wavegen_model.py`, loop overlay and match chip |
 | SG.7 GUI tests | done | this commit | Opus | selftest + Playwright |
 | SG.8 Board run | open | | | block R8; fallback TMR2, then timer ISR ("A2 not met") |
-| SG.9 Documentation | open | | | CLAUDE.md, architecture, DESIGN 4.2 corrected |
+| SG.9 Documentation | done | this commit | Sonnet agent | CLAUDE.md, architecture, DESIGN 4.2 corrected |
 
 ### Decisions taken during the work
 

@@ -178,16 +178,29 @@ display, using the same formula.
 
 ```c
 bool siggen_start(dac_t *dac, const uint16_t *table, uint32_t n, uint32_t play_hz);
+/* as built (SG.3): siggen_start(dac, n, play_hz, snap, force, pace) returns a result code;
+ * the table is owned by siggen.c - see src/siggen/siggen.h */
 void siggen_stop(void);
 uint32_t siggen_actual_hz(void);   /* after rounding of the clock divider */
 ```
 
-- DMA channel in Repeated Continuous mode, source = table, target = `DACxDAT`, window
-  = table. This is the same pattern as with the ADC, just in the other direction.
-- Trigger: a dedicated SCCP as the playback clock, derived from `play_hz`. The
-  rounded, actual frequency is reported.
-- `DAC UPDTRG` must be set so that every write takes effect immediately (currently
-  11, see `CLAUDE.md`).
+- DMA channel 1 in **Repeated One-Shot** mode (`TRMODE = 1`, one table entry per
+  trigger), source = table, target = `DACxDAT + 2` (the 16-bit `DACDAT` half),
+  source and count reloaded at the end of the table. *Corrected 29.09.2026 (SG.9):*
+  this section said "Repeated Continuous" (`TRMODE = 3`), which copies a whole block per
+  trigger at DMA speed and was the cause of runs 1-18's false rates.
+- The DMA address window (`DMALOW`/`DMAHIGH`) is **shared by all channels** and also
+  covers SRAM *sources* (DS70005591D 13.4.5, p826), so it is not "= table": it spans
+  table and ADC buffer together. The table sits directly below the buffer, the
+  buffer's end stays the window's end. *Corrected 29.09.2026 (SG.9).*
+- Trigger: a dedicated SCCP (SCCP2) as the playback clock, derived from `play_hz`, on
+  the peripheral clock (100 MHz). It paces in **dual 16-bit timer mode** (the secondary
+  timer's rollover sets CCP2IF; CHSEL 0x19 is the IC/OC event, not the timer period);
+  32-bit output compare moved nothing on the board. The rounded, actual frequency is
+  reported. *Corrected 29.09.2026 (SG.9).*
+- Parameters are set **one per line** (`siggen set <param> <value>`): the console line
+  is 64 characters and does not hold all of them; the design's one-liner above only fits
+  without the six harmonics. *Corrected 29.09.2026 (SG.9).*
 - No interrupt in normal operation. The CPU is not involved.
 
 ### 4.3 Signal processing `lib/goertzel.c`, `lib/iir1.c`, `lib/detect.c`

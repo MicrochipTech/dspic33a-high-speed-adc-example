@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1160 872" width="1160" height="872" role="img" aria-label="Firmware layers and modules">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1160 928" width="1160" height="928" role="img" aria-label="Firmware layers and modules">
 <style>
 svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--accent:#0d7a6b;
 --b-host:#eceef1;--s-host:#8b95a3;--b-cli:#e5edf9;--s-cli:#4f74b3;--b-test:#f0e9f8;--s-test:#8062ad;
@@ -32,7 +32,7 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="mk" d="M0 0 L10 5 L0 10 z"/></marker>
 <marker id="arrs" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="mk" d="M10 0 L0 5 L10 10 z"/></marker>
 </defs>
-<rect class="bg" x="0" y="0" width="1160" height="872"/>
+<rect class="bg" x="0" y="0" width="1160" height="928"/>
 <rect class="b-host" x="10" y="16" width="1140" height="64" rx="6"/>
 <text class="ln" x="24" y="40">Host</text>
 <text class="lf" x="24" y="56">tools/</text>
@@ -62,8 +62,8 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 <rect class="bx s-cli" x="170" y="124" width="400" height="62" rx="4"/>
 <circle class="st-restructured" cx="559" cy="135" r="5"><title>ran on silicon, code changed since - to be tested</title></circle>
 <text class="t" x="180" y="145">cli.c · console.h</text>
-<text class="s" x="180" y="159">27 commands + help in 32 parser slots</text>
-<text class="s" x="180" y="173">stream on|off|grab · route list · status · clk · pll</text>
+<text class="s" x="180" y="159">28 commands + help in 32 parser slots</text>
+<text class="s" x="180" y="173">stream on|off|grab · route list · siggen · status · clk</text>
 <rect class="bx s-cli" x="582" y="124" width="250" height="62" rx="4"/>
 <circle class="st-proven" cx="821" cy="135" r="5"><title>fully tested on silicon</title></circle>
 <text class="t" x="592" y="145">cmd_parser.c</text>
@@ -98,7 +98,7 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 <text class="t" x="915" y="247">meter.c</text>
 <text class="s" x="915" y="261">selftest · oneshot</text>
 <text class="s" x="915" y="275">measure_rate (back-to-back)</text>
-<rect class="b-app" x="10" y="316" width="1140" height="120" rx="6"/>
+<rect class="b-app" x="10" y="316" width="1140" height="176" rx="6"/>
 <text class="ln" x="24" y="340">Application</text>
 <text class="lf" x="24" y="356">src/app/</text>
 <text class="lf" x="24" y="369">src/boards/</text>
@@ -130,141 +130,145 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 <circle class="st-never" cx="1129" cy="395" r="5"><title>never ran on silicon</title></circle>
 <text class="t" x="884" y="403">port_impl.c</text>
 <text class="s" x="884" y="417">port_* → console / fail(), clock_fail_hook()</text>
-<rect class="b-lib" x="10" y="452" width="1140" height="86" rx="6"/>
-<text class="ln" x="24" y="476">Libraries</text>
-<text class="lf" x="24" y="492">src/lib/</text>
-<text class="lf" x="24" y="505">src/diag/</text>
-<rect class="bx s-lib" x="170" y="464" width="380" height="62" rx="4"/>
-<circle class="st-never" cx="539" cy="475" r="5"><title>never ran on silicon</title></circle>
-<text class="t" x="180" y="485">frame · crc16 · fmt · stats · tri_eval</text>
-<text class="s" x="180" y="499">hardware-free, tested on the host</text>
-<text class="s" x="180" y="513">(tests/host, Python cross-checks)</text>
-<rect class="bx s-lib dash" x="562" y="464" width="300" height="62" rx="4"/>
+<rect class="bx s-app" x="170" y="440" width="970" height="44" rx="4"/>
+<circle class="st-never" cx="1129" cy="451" r="5"><title>never ran on silicon; open: SG.8 board_run.py block R8; intermittent fail 8 after stream off with the generator on (HARDWARE-LOG 2026-09-29)</title></circle><circle class="nooff" cx="1114" cy="451" r="4.5"><title>no off-board test</title></circle>
+<text class="t" x="180" y="459">siggen.c</text>
+<text class="s" x="180" y="473">src/siggen/ · wavegen table (8192 x 16 bit, .dma_buffer) → dma.c ch. 1 → dac.c, paced by sccp.c (SCCP2); claim in routing.c; no register</text>
+<rect class="b-lib" x="10" y="508" width="1140" height="86" rx="6"/>
+<text class="ln" x="24" y="532">Libraries</text>
+<text class="lf" x="24" y="548">src/lib/</text>
+<text class="lf" x="24" y="561">src/diag/</text>
+<rect class="bx s-lib" x="170" y="520" width="380" height="62" rx="4"/>
+<circle class="st-never" cx="539" cy="531" r="5"><title>never ran on silicon</title></circle>
+<text class="t" x="180" y="541">frame · crc16 · fmt · stats · tri_eval</text>
+<text class="s" x="180" y="555">hardware-free, tested on the host</text>
+<text class="s" x="180" y="569">(tests/host, Python cross-checks)</text>
+<rect class="bx s-lib" x="562" y="520" width="300" height="62" rx="4"/>
 
-<text class="t" x="572" y="485">iir1 · goertzel_f/i · detect · wavegen</text>
-<text class="s" x="572" y="499">linked, not called yet</text>
-<text class="s" x="572" y="513">(for N+3 / N+4)</text>
-<rect class="bx s-diag" x="874" y="464" width="266" height="62" rx="4"/>
-<circle class="st-restructured" cx="1129" cy="475" r="5"><title>ran on silicon, code changed since - to be tested</title></circle>
-<text class="t" x="884" y="485">diag.c</text>
-<text class="s" x="884" y="499">fail() codes, trap, boot record,</text>
-<text class="s" x="884" y="513">reg_print(), stack high-water mark</text>
-<rect class="b-port" x="10" y="554" width="1140" height="50" rx="6"/>
-<text class="ln" x="24" y="578">Port layer</text>
-<text class="lf" x="24" y="594">src/port/ · headers</text>
-<rect class="bx s-port" x="170" y="562" width="233" height="34" rx="4"/>
-<circle class="st-never" cx="392" cy="573" r="5"><title>never ran on silicon</title></circle>
-<text class="t" x="180" y="583">log.h · port_log/trace</text>
-<rect class="bx s-port" x="415" y="562" width="233" height="34" rx="4"/>
-<circle class="st-never" cx="637" cy="573" r="5"><title>never ran on silicon; open: runs only on a fault</title></circle>
-<text class="t" x="425" y="583">panic.h · port_panic()</text>
-<rect class="bx s-port" x="660" y="562" width="233" height="34" rx="4"/>
-<circle class="st-never" cx="882" cy="573" r="5"><title>never ran on silicon</title></circle>
-<text class="t" x="670" y="583">wait.h · PORT_WAIT_WHILE()</text>
-<rect class="bx s-port" x="905" y="562" width="233" height="34" rx="4"/>
-<circle class="st-never" cx="1127" cy="573" r="5"><title>never ran on silicon</title></circle>
-<text class="t" x="915" y="583">regs.h · reg_visit_t</text>
-<rect class="b-drv" x="10" y="620" width="1140" height="86" rx="6"/>
-<text class="ln" x="24" y="644">Drivers</text>
-<text class="lf" x="24" y="660">src/drivers/</text>
-<text class="lf" x="24" y="673">src/sim/</text>
-<rect class="b-hw" x="10" y="722" width="1140" height="86" rx="6"/>
-<text class="ln" x="24" y="746">Silicon</text>
-<text class="lf" x="24" y="762">dsPIC33AK512</text>
-<text class="lf" x="24" y="775">MPS512</text>
-<rect class="bx s-drv" x="170" y="632" width="110" height="62" rx="4"/>
-<circle class="st-restructured" cx="269" cy="643" r="5"><title>ran on silicon, code changed since - to be tested</title></circle>
-<text class="t" x="180" y="653">clock.c</text>
-<text class="s" x="180" y="667">PLL1, PLL2</text>
-<text class="s" x="180" y="681">CLKGEN6/7/13</text>
-<path class="ln1" d="M225 694 V734"/>
-<rect class="bx s-hw" x="170" y="734" width="110" height="62" rx="4"/>
+<text class="t" x="572" y="541">iir1 · goertzel_f/i · detect · wavegen</text>
+<text class="s" x="572" y="555">wavegen: called by siggen.c</text>
+<text class="s" x="572" y="569">rest linked, not called yet (N+4)</text>
+<rect class="bx s-diag" x="874" y="520" width="266" height="62" rx="4"/>
+<circle class="st-restructured" cx="1129" cy="531" r="5"><title>ran on silicon, code changed since - to be tested</title></circle>
+<text class="t" x="884" y="541">diag.c</text>
+<text class="s" x="884" y="555">fail() codes, trap, boot record,</text>
+<text class="s" x="884" y="569">reg_print(), stack high-water mark</text>
+<rect class="b-port" x="10" y="610" width="1140" height="50" rx="6"/>
+<text class="ln" x="24" y="634">Port layer</text>
+<text class="lf" x="24" y="650">src/port/ · headers</text>
+<rect class="bx s-port" x="170" y="618" width="233" height="34" rx="4"/>
+<circle class="st-never" cx="392" cy="629" r="5"><title>never ran on silicon</title></circle>
+<text class="t" x="180" y="639">log.h · port_log/trace</text>
+<rect class="bx s-port" x="415" y="618" width="233" height="34" rx="4"/>
+<circle class="st-never" cx="637" cy="629" r="5"><title>never ran on silicon; open: runs only on a fault</title></circle>
+<text class="t" x="425" y="639">panic.h · port_panic()</text>
+<rect class="bx s-port" x="660" y="618" width="233" height="34" rx="4"/>
+<circle class="st-never" cx="882" cy="629" r="5"><title>never ran on silicon</title></circle>
+<text class="t" x="670" y="639">wait.h · PORT_WAIT_WHILE()</text>
+<rect class="bx s-port" x="905" y="618" width="233" height="34" rx="4"/>
+<circle class="st-never" cx="1127" cy="629" r="5"><title>never ran on silicon</title></circle>
+<text class="t" x="915" y="639">regs.h · reg_visit_t</text>
+<rect class="b-drv" x="10" y="676" width="1140" height="86" rx="6"/>
+<text class="ln" x="24" y="700">Drivers</text>
+<text class="lf" x="24" y="716">src/drivers/</text>
+<text class="lf" x="24" y="729">src/sim/</text>
+<rect class="b-hw" x="10" y="778" width="1140" height="86" rx="6"/>
+<text class="ln" x="24" y="802">Silicon</text>
+<text class="lf" x="24" y="818">dsPIC33AK512</text>
+<text class="lf" x="24" y="831">MPS512</text>
+<rect class="bx s-drv" x="170" y="688" width="110" height="62" rx="4"/>
+<circle class="st-restructured" cx="269" cy="699" r="5"><title>ran on silicon, code changed since - to be tested</title></circle>
+<text class="t" x="180" y="709">clock.c</text>
+<text class="s" x="180" y="723">PLL1, PLL2</text>
+<text class="s" x="180" y="737">CLKGEN6/7/13</text>
+<path class="ln1" d="M225 750 V790"/>
+<rect class="bx s-hw" x="170" y="790" width="110" height="62" rx="4"/>
 
-<text class="t" x="180" y="755">PLL1 / PLL2</text>
-<text class="s" x="180" y="769">PLL1 → ADC path</text>
-<text class="s" x="180" y="783">PLL2 → CPU</text>
-<rect class="bx s-drv" x="292" y="632" width="110" height="62" rx="4"/>
-<circle class="st-restructured" cx="391" cy="643" r="5"><title>ran on silicon, code changed since - to be tested</title></circle>
-<text class="t" x="302" y="653">adc.c</text>
-<text class="s" x="302" y="667">core 5, burst</text>
-<text class="s" x="302" y="681">trigger, calib.</text>
-<path class="ln1" d="M347 694 V734"/>
-<rect class="bx s-hw" x="292" y="734" width="110" height="62" rx="4"/>
+<text class="t" x="180" y="811">PLL1 / PLL2</text>
+<text class="s" x="180" y="825">PLL1 → ADC path</text>
+<text class="s" x="180" y="839">PLL2 → CPU</text>
+<rect class="bx s-drv" x="292" y="688" width="110" height="62" rx="4"/>
+<circle class="st-restructured" cx="391" cy="699" r="5"><title>ran on silicon, code changed since - to be tested</title></circle>
+<text class="t" x="302" y="709">adc.c</text>
+<text class="s" x="302" y="723">core 5, burst</text>
+<text class="s" x="302" y="737">trigger, calib.</text>
+<path class="ln1" d="M347 750 V790"/>
+<rect class="bx s-hw" x="292" y="790" width="110" height="62" rx="4"/>
 
-<text class="t" x="302" y="755">ADC</text>
-<text class="s" x="302" y="769">core 5, AD5AN3</text>
-<text class="s" x="302" y="783">(pin RA8)</text>
-<rect class="bx s-drv" x="414" y="632" width="110" height="62" rx="4"/>
-<circle class="st-restructured" cx="513" cy="643" r="5"><title>ran on silicon, code changed since - to be tested</title></circle>
-<text class="t" x="424" y="653">dma.c</text>
-<text class="s" x="424" y="667">channel 0 + ISR</text>
-<text class="s" x="424" y="681">sim: sim_dma.c</text>
-<path class="ln1" d="M469 694 V734"/>
-<rect class="bx s-hw" x="414" y="734" width="110" height="62" rx="4"/>
+<text class="t" x="302" y="811">ADC</text>
+<text class="s" x="302" y="825">core 5, AD5AN3</text>
+<text class="s" x="302" y="839">(pin RA8)</text>
+<rect class="bx s-drv" x="414" y="688" width="110" height="62" rx="4"/>
+<circle class="st-restructured" cx="513" cy="699" r="5"><title>ran on silicon, code changed since - to be tested</title></circle>
+<text class="t" x="424" y="709">dma.c</text>
+<text class="s" x="424" y="723">ch. 0 + ISR, ch. 1 tx</text>
+<text class="s" x="424" y="737">sim: sim_dma.c</text>
+<path class="ln1" d="M469 750 V790"/>
+<rect class="bx s-hw" x="414" y="790" width="110" height="62" rx="4"/>
 
-<text class="t" x="424" y="755">DMA0</text>
-<text class="s" x="424" y="769">repeated</text>
-<text class="s" x="424" y="783">one-shot → RAM</text>
-<rect class="bx s-drv" x="536" y="632" width="110" height="62" rx="4"/>
-<circle class="st-restructured" cx="635" cy="643" r="5"><title>ran on silicon, code changed since - to be tested</title></circle>
-<text class="t" x="546" y="653">sccp.c</text>
-<text class="s" x="546" y="667">SCCP1 as</text>
-<text class="s" x="546" y="681">trigger source</text>
-<path class="ln1" d="M591 694 V734"/>
-<rect class="bx s-hw" x="536" y="734" width="110" height="62" rx="4"/>
+<text class="t" x="424" y="811">DMA0 · DMA1</text>
+<text class="s" x="424" y="825">one-shot: ADC → RAM,</text>
+<text class="s" x="424" y="839">RAM → DAC</text>
+<rect class="bx s-drv" x="536" y="688" width="110" height="62" rx="4"/>
+<circle class="st-restructured" cx="635" cy="699" r="5"><title>ran on silicon, code changed since - to be tested</title></circle>
+<text class="t" x="546" y="709">sccp.c</text>
+<text class="s" x="546" y="723">SCCP1 trigger,</text>
+<text class="s" x="546" y="737">SCCP2 play clock</text>
+<path class="ln1" d="M591 750 V790"/>
+<rect class="bx s-hw" x="536" y="790" width="110" height="62" rx="4"/>
 
-<text class="t" x="546" y="755">SCCP1</text>
-<text class="s" x="546" y="769">on CLKGEN13</text>
-<text class="s" x="546" y="783">160 MHz</text>
-<rect class="bx s-drv" x="658" y="632" width="110" height="62" rx="4"/>
-<circle class="st-restructured" cx="757" cy="643" r="5"><title>ran on silicon, code changed since - to be tested; open: dac 1 (DACOUT1 = RA1) - the GUI has a DAC1 card; dac ... force (dac_triangle_force()) - checked by hand 29.09.2026, no block sends it</title></circle>
-<text class="t" x="668" y="653">dac.c</text>
-<text class="s" x="668" y="667">DAC1/2 triangle</text>
-<text class="s" x="668" y="681">UREF route</text>
-<path class="ln1" d="M713 694 V734"/>
-<rect class="bx s-hw" x="658" y="734" width="110" height="62" rx="4"/>
+<text class="t" x="546" y="811">SCCP1 · SCCP2</text>
+<text class="s" x="546" y="825">CLKGEN13 160 MHz,</text>
+<text class="s" x="546" y="839">peripheral 100 MHz</text>
+<rect class="bx s-drv" x="658" y="688" width="110" height="62" rx="4"/>
+<circle class="st-restructured" cx="757" cy="699" r="5"><title>ran on silicon, code changed since - to be tested; open: dac 1 (DACOUT1 = RA1) - the GUI has a DAC1 card; dac ... force (dac_triangle_force()) - checked by hand 29.09.2026, no block sends it</title></circle>
+<text class="t" x="668" y="709">dac.c</text>
+<text class="s" x="668" y="723">DAC1/2 triangle</text>
+<text class="s" x="668" y="737">UREF route</text>
+<path class="ln1" d="M713 750 V790"/>
+<rect class="bx s-hw" x="658" y="790" width="110" height="62" rx="4"/>
 
-<text class="t" x="668" y="755">DAC2</text>
-<text class="s" x="668" y="769">on CLKGEN7</text>
-<text class="s" x="668" y="783">400 MHz → RA8</text>
-<rect class="bx s-drv" x="780" y="632" width="110" height="62" rx="4"/>
-<circle class="st-restructured" cx="879" cy="643" r="5"><title>ran on silicon, code changed since - to be tested</title></circle>
-<text class="t" x="790" y="653">uart.c</text>
-<text class="s" x="790" y="667">UART2, PPS</text>
-<text class="s" x="790" y="681">RX ISR</text>
-<path class="ln1" d="M835 694 V734"/>
-<rect class="bx s-hw" x="780" y="734" width="110" height="62" rx="4"/>
+<text class="t" x="668" y="811">DAC2</text>
+<text class="s" x="668" y="825">on CLKGEN7</text>
+<text class="s" x="668" y="839">400 MHz → RA8</text>
+<rect class="bx s-drv" x="780" y="688" width="110" height="62" rx="4"/>
+<circle class="st-restructured" cx="879" cy="699" r="5"><title>ran on silicon, code changed since - to be tested</title></circle>
+<text class="t" x="790" y="709">uart.c</text>
+<text class="s" x="790" y="723">UART2, PPS</text>
+<text class="s" x="790" y="737">RX ISR</text>
+<path class="ln1" d="M835 750 V790"/>
+<rect class="bx s-hw" x="780" y="790" width="110" height="62" rx="4"/>
 
-<text class="t" x="790" y="755">UART2</text>
-<text class="s" x="790" y="769">console</text>
-<text class="s" x="790" y="783">(COM port)</text>
-<rect class="bx s-drv" x="902" y="632" width="110" height="62" rx="4"/>
-<circle class="st-proven" cx="1001" cy="643" r="5"><title>fully tested on silicon</title></circle>
-<text class="t" x="912" y="653">timebase.c</text>
-<text class="s" x="912" y="667">Timer1</text>
-<text class="s" x="912" y="681">stopwatch</text>
-<path class="ln1" d="M957 694 V734"/>
-<rect class="bx s-hw" x="902" y="734" width="110" height="62" rx="4"/>
+<text class="t" x="790" y="811">UART2</text>
+<text class="s" x="790" y="825">console</text>
+<text class="s" x="790" y="839">(COM port)</text>
+<rect class="bx s-drv" x="902" y="688" width="110" height="62" rx="4"/>
+<circle class="st-proven" cx="1001" cy="699" r="5"><title>fully tested on silicon</title></circle>
+<text class="t" x="912" y="709">timebase.c</text>
+<text class="s" x="912" y="723">Timer1</text>
+<text class="s" x="912" y="737">stopwatch</text>
+<path class="ln1" d="M957 750 V790"/>
+<rect class="bx s-hw" x="902" y="790" width="110" height="62" rx="4"/>
 
-<text class="t" x="912" y="755">Timer1</text>
-<text class="s" x="912" y="769">12.5 MHz</text>
-<text class="s" x="912" y="783">on PLL2</text>
-<rect class="bx s-drv" x="1024" y="632" width="110" height="62" rx="4"/>
-<circle class="st-proven" cx="1123" cy="643" r="5"><title>fully tested on silicon</title></circle>
-<text class="t" x="1034" y="660">led.c</text>
-<text class="s" x="1034" y="674">LED0</text>
-<path class="ln1" d="M1079 694 V734"/>
-<rect class="bx s-hw" x="1024" y="734" width="110" height="62" rx="4"/>
+<text class="t" x="912" y="811">Timer1</text>
+<text class="s" x="912" y="825">12.5 MHz</text>
+<text class="s" x="912" y="839">on PLL2</text>
+<rect class="bx s-drv" x="1024" y="688" width="110" height="62" rx="4"/>
+<circle class="st-proven" cx="1123" cy="699" r="5"><title>fully tested on silicon</title></circle>
+<text class="t" x="1034" y="716">led.c</text>
+<text class="s" x="1034" y="730">LED0</text>
+<path class="ln1" d="M1079 750 V790"/>
+<rect class="bx s-hw" x="1024" y="790" width="110" height="62" rx="4"/>
 
-<text class="t" x="1034" y="762">LED0</text>
-<text class="s" x="1034" y="776">heartbeat</text>
-<text class="s" x="20" y="838">Test status, 29.09.2026, after run 20 - no box changed; three later fixes checked by hand (docs/TEST-COVERAGE.md):</text>
-<circle class="st-proven" cx="26" cy="854" r="5"/>
-<text class="s" x="36" y="858">fully tested on silicon</text>
-<circle class="st-restructured" cx="184" cy="854" r="5"/>
-<text class="s" x="194" y="858">ran on silicon, code changed since - to be tested</text>
-<circle class="st-never" cx="482" cy="854" r="5"/>
-<text class="s" x="492" y="858">never ran on silicon</text>
-<circle class="nooff" cx="624" cy="854" r="4.5"/>
-<text class="s" x="634" y="858">no test without a board</text>
+<text class="t" x="1034" y="818">LED0</text>
+<text class="s" x="1034" y="832">heartbeat</text>
+<text class="s" x="20" y="894">Test status, 29.09.2026, after run 20 - no box changed; three later fixes checked by hand (docs/TEST-COVERAGE.md):</text>
+<circle class="st-proven" cx="26" cy="910" r="5"/>
+<text class="s" x="36" y="914">fully tested on silicon</text>
+<circle class="st-restructured" cx="184" cy="910" r="5"/>
+<text class="s" x="194" y="914">ran on silicon, code changed since - to be tested</text>
+<circle class="st-never" cx="482" cy="910" r="5"/>
+<text class="s" x="492" y="914">never ran on silicon</text>
+<circle class="nooff" cx="624" cy="910" r="4.5"/>
+<text class="s" x="634" y="914">no test without a board</text>
 </svg>

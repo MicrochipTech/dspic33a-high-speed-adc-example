@@ -220,7 +220,7 @@ def layers():
     d.append('<text class="an" x="312" y="100">UART2 · text commands with ACK/NAK, binary frames (blk, GRAB) with CRC-16</text>')
 
     d.append(band(112, 86, "cli", "Console", ["src/cli/", "src/link/"]))
-    d.append(box(170, 124, 400, 62, "cli.c · console.h", ["27 commands + help in 32 parser slots", "stream on|off|grab · route list · status · clk · pll"], "cli"))
+    d.append(box(170, 124, 400, 62, "cli.c · console.h", ["28 commands + help in 32 parser slots", "stream on|off|grab · route list · siggen · status · clk"], "cli"))
     d.append(box(582, 124, 250, 62, "cmd_parser.c", ["upstream zabooh/cmd_parser", "do not edit (MAX_COMMANDS only)"], "cli"))
     d.append(box(844, 124, 296, 62, "gui_link.c", ["snap · rate · blk", "stream grab: halt → send → resume"], "cli"))
 
@@ -232,7 +232,7 @@ def layers():
             ("meter.c", ["selftest · oneshot", "measure_rate (back-to-back)"])]):
         d.append(box(170 + i * 245, 226, 233, 62, t, l, "test"))
 
-    d.append(band(316, 120, "app", "Application", ["src/app/", "src/boards/"]))
+    d.append(band(316, 176, "app", "Application", ["src/app/", "src/boards/"]))
     d.append(box(170, 328, 150, 48, "main.c", ["start-up order, loop"], "app"))
     d.append(box(332, 328, 330, 48, "acquisition.c", ["rate (PLL1), variant matrix, stream on/off, chain setup"], "app"))
     d.append(box(674, 328, 250, 48, "routing.c", ["route_t, resources, routing_apply()"], "app"))
@@ -240,34 +240,35 @@ def layers():
     d.append(box(170, 384, 440, 44, "capture.c", ["DMA buffer + guard words · dma0_event() · counters · chain halt/resume"], "app"))
     d.append(box(622, 384, 240, 44, "pingpong.c", ["completed half, missed, block count"], "app"))
     d.append(box(874, 384, 266, 44, "port_impl.c", ["port_* → console / fail(), clock_fail_hook()"], "app"))
+    d.append(box(170, 440, 970, 44, "siggen.c", ["src/siggen/ · wavegen table (8192 x 16 bit, .dma_buffer) → dma.c ch. 1 → dac.c, paced by sccp.c (SCCP2); claim in routing.c; no register"], "app"))
 
-    d.append(band(452, 86, "lib", "Libraries", ["src/lib/", "src/diag/"]))
-    d.append(box(170, 464, 380, 62, "frame · crc16 · fmt · stats · tri_eval", ["hardware-free, tested on the host", "(tests/host, Python cross-checks)"], "lib"))
-    d.append(box(562, 464, 300, 62, "iir1 · goertzel_f/i · detect · wavegen", ["linked, not called yet", "(for N+3 / N+4)"], "lib", True))
-    d.append(box(874, 464, 266, 62, "diag.c", ["fail() codes, trap, boot record,", "reg_print(), stack high-water mark"], "diag"))
+    d.append(band(508, 86, "lib", "Libraries", ["src/lib/", "src/diag/"]))
+    d.append(box(170, 520, 380, 62, "frame · crc16 · fmt · stats · tri_eval", ["hardware-free, tested on the host", "(tests/host, Python cross-checks)"], "lib"))
+    d.append(box(562, 520, 300, 62, "iir1 · goertzel_f/i · detect · wavegen", ["wavegen: called by siggen.c", "rest linked, not called yet (N+4)"], "lib"))
+    d.append(box(874, 520, 266, 62, "diag.c", ["fail() codes, trap, boot record,", "reg_print(), stack high-water mark"], "diag"))
 
-    d.append(band(554, 50, "port", "Port layer", ["src/port/ · headers"]))
+    d.append(band(610, 50, "port", "Port layer", ["src/port/ · headers"]))
     for i, t in enumerate(["log.h · port_log/trace", "panic.h · port_panic()",
                            "wait.h · PORT_WAIT_WHILE()", "regs.h · reg_visit_t"]):
-        d.append(box(170 + i * 245, 562, 233, 34, t, (), "port"))
+        d.append(box(170 + i * 245, 618, 233, 34, t, (), "port"))
 
-    d.append(band(620, 86, "drv", "Drivers", ["src/drivers/", "src/sim/"]))
+    d.append(band(676, 86, "drv", "Drivers", ["src/drivers/", "src/sim/"]))
     drv = [("clock.c", ["PLL1, PLL2", "CLKGEN6/7/13"]), ("adc.c", ["core 5, burst", "trigger, calib."]),
-           ("dma.c", ["channel 0 + ISR", "sim: sim_dma.c"]), ("sccp.c", ["SCCP1 as", "trigger source"]),
+           ("dma.c", ["ch. 0 + ISR, ch. 1 tx", "sim: sim_dma.c"]), ("sccp.c", ["SCCP1 trigger,", "SCCP2 play clock"]),
            ("dac.c", ["DAC1/2 triangle", "UREF route"]), ("uart.c", ["UART2, PPS", "RX ISR"]),
            ("timebase.c", ["Timer1", "stopwatch"]), ("led.c", ["LED0"])]
     hw = [("PLL1 / PLL2", ["PLL1 → ADC path", "PLL2 → CPU"]), ("ADC", ["core 5, AD5AN3", "(pin RA8)"]),
-          ("DMA0", ["repeated", "one-shot → RAM"]), ("SCCP1", ["on CLKGEN13", "160 MHz"]),
+          ("DMA0 · DMA1", ["one-shot: ADC → RAM,", "RAM → DAC"]), ("SCCP1 · SCCP2", ["CLKGEN13 160 MHz,", "peripheral 100 MHz"]),
           ("DAC2", ["on CLKGEN7", "400 MHz → RA8"]), ("UART2", ["console", "(COM port)"]),
           ("Timer1", ["12.5 MHz", "on PLL2"]), ("LED0", ["heartbeat"])]
-    d.append(band(722, 86, "hw", "Silicon", ["dsPIC33AK512", "MPS512"]))
+    d.append(band(778, 86, "hw", "Silicon", ["dsPIC33AK512", "MPS512"]))
     for i, ((t, l), (ht, hl)) in enumerate(zip(drv, hw)):
         x = 170 + i * 122
-        d.append(box(x, 632, 110, 62, t, l, "drv"))
-        d.append(f'<path class="ln1" d="M{x+55} 694 V734"/>')
-        d.append(box(x, 734, 110, 62, ht, hl, "hw"))
-    d.append(legend(20, 834))
-    return svg(1160, 872, "Firmware layers and modules", "\n".join(d))
+        d.append(box(x, 688, 110, 62, t, l, "drv"))
+        d.append(f'<path class="ln1" d="M{x+55} 750 V790"/>')
+        d.append(box(x, 790, 110, 62, ht, hl, "hw"))
+    d.append(legend(20, 890))
+    return svg(1160, 928, "Firmware layers and modules", "\n".join(d))
 
 
 def datapath():

@@ -1923,8 +1923,17 @@ before their commit) and flashed locally with `ipecmd -TPPKOB4 -P33AK512MPS512 -
 - **Not explained: one fail 8.** Once, in the first measurement series, `stream off` ended
   in `fail_code: 8` (`main.c`: burst mode running while DMA0 is disabled - the message
   itself was cut off by the host's 5 s timeout). Not reproduced in 30 s + 20 cycles
-  afterwards. Open; the next board run watches `status`'s `fail_code` after every
-  `stream off` with the generator on.
+  afterwards. **Seen a second time** after flashing 7b16260 (committed SG.1-SG.5), again
+  at the first `stream off` of a series whose grabs had seconds of host computation
+  between them (n 5000, 500 kHz, decay 1000, 4 MSPS on 5/3). Both times the host used
+  `Target.cmd()`, which waits for the buffer to END with ACK: a fail report printed by
+  `main.c` right after the ACK looks exactly like that timeout, so the likelier source is
+  the main loop's check (`capture_running() && !capture_chain_active() &&
+  !dma0_enabled()`, fail 8) just after the command - not `dma0_init()`'s buffer check.
+  Then 40 random cycles and 36 cycles of that exact pattern with `stream off` sent and
+  read raw: no failure (2 in about 176 `stream off` in all). Open; the next board run
+  watches `status`'s `fail_code` after every `stream off` with the generator on, and
+  keeps the raw text of any that fails.
 
 Not run: DAC1 as the generator's output, `decay` > 0 on the board, the GUI card (SG.6),
 a board_run.py block (SG.8).
