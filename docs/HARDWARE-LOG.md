@@ -1844,3 +1844,15 @@ SLPDAT. Checked over `bench_client console`: `dac 2 on 32 3840 20` refused with
 datasheet's limits", period 30464 ns); `dac 2 off` fine. What the DAC actually puts out
 below 0xCD was not looked at (no grab of it yet) - with the lower end already clipping at
 240 (run 20), expect a flat bottom rather than a triangle down to 32.
+
+## 2026-09-29, buffer size from the GUI - master 955c473, local (COM14, the colleague's EV74H48A at this desk)
+
+The GUI's buffer tile changed nothing. Four faults, the last in the firmware, found by
+replaying the GUI's sequence on the board over COM14 (image 79f3340): `buf 256` while
+streaming is refused ("stop the stream first"); after `stream off` it is accepted
+("samples per half: 256") - but the next `stream on 8000` still grabbed n=1024, because
+`acq_chain_setup()` always set the half length back to 1024. Fixed in `acquisition.c`
+(`stream on` keeps what `buf` chose; the chain test's own stages keep the full length) and
+in `adc_gui.py` (bc00470: stop the stream before `buf`, send samples per half, parse the
+real reply). Flashed locally with `ipecmd -TPPKOB4 -M -OL` (Program Succeeded), banner
+`git 955c473`: `buf 256` + `stream on 8000` -> grab n=256; `buf 1024` -> n=1024.
