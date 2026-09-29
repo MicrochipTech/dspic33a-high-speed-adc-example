@@ -58,4 +58,7 @@ void dma0_event(uint32_t status);
  * visits its three stand-in variables instead. */
 void dma0_regs_visit(reg_visit_t visit);
 
+/* ---- channel 1: the signal generator's transport (SG.1) - dma_tx.h ---- */
+#include "dma_tx.h"
+
 #endif /* DMA_H */

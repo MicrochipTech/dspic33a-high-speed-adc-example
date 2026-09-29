@@ -27,6 +27,7 @@
 #include "cmd_parser.h"
 #include "fmt.h"
 #include "sim.h"
+#include "siggen.h"     /* SG.3: stopped before sweep/test */
 
 /* cli.c - the parser reply helpers and the DAC/UREF routing for the
  * "dactest" command, shared with cmd_dactest_fn() there. */
@@ -269,6 +270,7 @@ static void console_sweep(uint32_t halves, bool choose)
 
 static void cmd_sweep_fn(int argc, char **argv)
 {
+    siggen_stop();                    /* the DMA controller is reset per row (SG.3) */
     uint32_t halves = SWEEP_HALVES_DEFAULT;
     if ((argc > 2) || ((argc == 2) && !arg_u32(argv[1], 10u, 100000u, &halves))) {
         usage("sweep [halves per point 10..100000, default 2000]");
@@ -775,6 +777,7 @@ static void test_list(void)
 
 static void cmd_test_fn(int argc, char **argv)
 {
+    siggen_stop();                    /* "test dac" drives the DACs itself (SG.3) */
     uint32_t halves = 0u;                  /* 0 = the part's own default */
     if (argc == 1) { test_list(); return; }
     chain_stream_off();                    /* the tests need the boot setup */

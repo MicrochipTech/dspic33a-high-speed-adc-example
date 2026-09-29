@@ -43,6 +43,7 @@
         <itemPath>../src/lib/goertzel_i.h</itemPath>
         <itemPath>../src/lib/detect.h</itemPath>
         <itemPath>../src/lib/wavegen.h</itemPath>
+        <itemPath>../src/siggen/siggen.h</itemPath>
         <itemPath>../src/lib/frame.h</itemPath>
       </logicalFolder>
       <logicalFolder name="link" displayName="link" projectFiles="true">
@@ -118,6 +119,7 @@
         <itemPath>../src/lib/goertzel_i.c</itemPath>
         <itemPath>../src/lib/detect.c</itemPath>
         <itemPath>../src/lib/wavegen.c</itemPath>
+        <itemPath>../src/siggen/siggen.c</itemPath>
         <itemPath>../src/lib/frame.c</itemPath>
       </logicalFolder>
       <logicalFolder name="link" displayName="link" projectFiles="true">
@@ -209,7 +211,7 @@
       </item>
       <C30>
         <property key="extra-include-directories"
-                  value="../src/drivers;../src/app;../src/cli;../src/tests;../src/lib;../src/diag;../src/sim;../src/port;../src/link;../src/boards;../src/meter"/>
+                  value="../src/drivers;../src/app;../src/cli;../src/tests;../src/lib;../src/diag;../src/sim;../src/port;../src/link;../src/boards;../src/meter;../src/siggen"/>
       </C30>
       <Tool>
         <property key="ADC1" value="true"/>
@@ -1031,7 +1033,7 @@
       </item>
       <C30>
         <property key="extra-include-directories"
-                  value="../src/drivers;../src/app;../src/cli;../src/tests;../src/lib;../src/diag;../src/sim;../src/port;../src/link;../src/boards;../src/meter"/>
+                  value="../src/drivers;../src/app;../src/cli;../src/tests;../src/lib;../src/diag;../src/sim;../src/port;../src/link;../src/boards;../src/meter;../src/siggen"/>
         <property key="preprocessor-macros" value="BOARD=2"/>
       </C30>
       <Tool>
@@ -1713,7 +1715,7 @@
       </item>
       <C30>
         <property key="extra-include-directories"
-                  value="../src/drivers;../src/app;../src/cli;../src/tests;../src/lib;../src/diag;../src/sim;../src/port;../src/link;../src/boards;../src/meter"/>
+                  value="../src/drivers;../src/app;../src/cli;../src/tests;../src/lib;../src/diag;../src/sim;../src/port;../src/link;../src/boards;../src/meter;../src/siggen"/>
         <property key="preprocessor-macros" value="__MPLAB_DEBUGGER_SIMULATOR=1"/>
       </C30>
       <Simulator>

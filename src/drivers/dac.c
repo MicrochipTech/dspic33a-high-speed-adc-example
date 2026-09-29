@@ -136,6 +136,18 @@ bool dac_level_start(uint8_t unit, uint16_t code)
     return dac_enable(u);
 }
 
+/* The DMA's target for a unit's level (SG.1): DACDAT is bits 31:16 of the
+ * 32-bit DACxDAT, DACLOW 15:0 (pack header; DAC1DAT at 0x1D50, p1412), so
+ * a 16-bit transfer goes to the upper half, DACxDAT + 2 - the same
+ * halfword write dac_set() compiles to ("mov.w w9, [w0+2]", xc-dsc
+ * v3.31), which has run on the board since the chain test's stepped
+ * DAC. SFRs take byte, word and double-word writes (3.3.16, p100). */
+volatile void *dac_dma_target(uint8_t unit)
+{
+    if (!valid(unit)) { return NULL; }
+    return (volatile uint8_t *)units[unit - 1u].DAT + 2;
+}
+
 void dac_set(uint8_t unit, uint16_t code)
 {
     /* From an interrupt at up to 100 kHz: one write, which UPDTRG = 3

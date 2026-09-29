@@ -103,4 +103,29 @@ uint32_t sccp1_nominal_ksps(void);
  * counter mean the module is not running. */
 void     sccp1_regs_visit(reg_visit_t visit);
 
+/* ---- SCCP2: the signal generator's playback clock (SG.2) ---- */
+
+/* How SCCP2 raises its IC/OC event (CCP2IF, the DMA's "SCCP2" trigger)
+ * once per period - see sccp.c for why there are two. */
+typedef enum {
+    SCCP2_PACE_TMR16 = 0u,      /* dual 16-bit timer, secondary rollover */
+    SCCP2_PACE_OC32  = 1u       /* 32-bit output compare, single edge    */
+} sccp2_pace_t;
+
+/* SCCP2 on the standard peripheral clock with a period of `ticks` input
+ * clocks (TMR16 picks the prescaler that fits 16 bits, rounding the
+ * period to it). False for ticks < 2, a period no prescaler fits, or a
+ * setting that did not read back. */
+bool         sccp2_start(uint32_t ticks, sccp2_pace_t pace);
+void         sccp2_stop(void);
+uint32_t     sccp2_hz(void);          /* its input clock, read back      */
+uint32_t     sccp2_period(void);      /* input clocks per event, as set  */
+uint32_t     sccp2_actual_hz(void);   /* sccp2_hz() / sccp2_period()     */
+sccp2_pace_t sccp2_pace(void);
+/* Its two interrupt flags (interrupts stay disabled; the flags are set
+ * regardless): clear, wait, read - bit 0 CCT2IF, bit 1 CCP2IF. */
+void         sccp2_flags_clear(void);
+uint32_t     sccp2_flags_read(void);
+void         sccp2_regs_visit(reg_visit_t visit);
+
 #endif /* SCCP_H */

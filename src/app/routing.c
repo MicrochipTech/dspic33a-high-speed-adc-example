@@ -101,8 +101,19 @@ void routing_clear(void)
     route_count = 0u;
 }
 
+/* ---- the signal generator's claim (SG.5, 29.09.2026) ----
+ * Held apart from route_table: the generator is not a signal path into an
+ * ADC, it outlives "stream on/off" (whose routing_clear() empties the
+ * table), and exactly one can run. While it runs it counts in the
+ * aggregates below like a route playing a table on its own pin - one DMA
+ * channel, one SCCP, one DAC output, its table's RAM - and its DAC is
+ * busy for any route that wants the same DAC (ROUTE_ERR_DAC_BUSY), in
+ * both directions: routing_gen_check() refuses a DAC a route uses. */
+static uint8_t  gen_dac = 0u;        /* 0 = no generator claimed       */
+static uint32_t gen_n   = 0u;
+
 /* ---- aggregates over route_table[0..route_count), the state BEFORE the
- * candidate route is added ---- */
+ * candidate route is added - the generator's claim included ---- */
 
 static bool core_in_use(uint8_t core)
 {
@@ -127,7 +138,7 @@ static uint32_t count_table_dacs(void)
     for (uint32_t i = 0; i < route_count; i++) {
         if (route_table[i].table_samples > 0u) { n++; }
     }
-    return n;
+    return n + ((gen_dac != 0u) ? 1u : 0u);
 }
 
 static uint32_t count_dac_pin(void)
@@ -136,7 +147,7 @@ static uint32_t count_dac_pin(void)
     for (uint32_t i = 0; i < route_count; i++) {
         if (route_table[i].src == ROUTE_SRC_DAC_PIN) { n++; }
     }
-    return n;
+    return n + ((gen_dac != 0u) ? 1u : 0u);
 }
 
 static uint32_t count_dac_int(void)
@@ -156,7 +167,43 @@ static uint32_t ram_used_bytes(void)
         if (x->src != ROUTE_SRC_RAM_TABLE) { bytes += ROUTE_CHANNEL_BYTES; }
         bytes += x->table_samples * ROUTE_SAMPLE_BYTES;
     }
-    return bytes;
+    return bytes + gen_n * ROUTE_SAMPLE_BYTES;
+}
+
+static bool uses_dac(const route_t *r, uint8_t dac)
+{
+    return ((r->src == ROUTE_SRC_DAC_PIN) || (r->src == ROUTE_SRC_DAC_INT)) && (r->dac == dac);
+}
+
+route_err_t routing_gen_check(uint8_t dac, uint32_t n)
+{
+    for (uint32_t i = 0; i < route_count; i++) {
+        if (uses_dac(&route_table[i], dac)) { return ROUTE_ERR_DAC_BUSY; }
+    }
+    const uint32_t adc_n   = count_adc_consuming();
+    const uint32_t table_n = count_table_dacs() + 1u;
+    if ((adc_n > 0u ? 1u : 0u) + table_n > ROUTE_SCCP_COUNT) { return ROUTE_ERR_SCCP_LIMIT; }
+    if (adc_n + table_n > ROUTE_DMA_CHANNELS)                { return ROUTE_ERR_DMA_LIMIT; }
+    if (count_dac_pin() + 1u > ROUTE_DAC_OUTPUTS)            { return ROUTE_ERR_DAC_OUTPUTS; }
+    if (ram_used_bytes() + n * ROUTE_SAMPLE_BYTES > ROUTE_RAM_BUDGET_BYTES) {
+        return ROUTE_ERR_RAM_BUDGET;
+    }
+    return ROUTE_OK;
+}
+
+route_err_t routing_gen_claim(uint8_t dac, uint32_t n)
+{
+    const route_err_t e = routing_gen_check(dac, n);
+    if (e != ROUTE_OK) { return e; }
+    gen_dac = dac;
+    gen_n   = n;
+    return ROUTE_OK;
+}
+
+void routing_gen_release(void)
+{
+    gen_dac = 0u;
+    gen_n   = 0u;
 }
 
 /* routing_add()'s rules without the recording - shared with routing_apply()
@@ -171,6 +218,10 @@ static route_err_t route_check(const route_t *r)
         if (core_in_use(r->core)) {
             return ROUTE_ERR_CORE_IN_USE;
         }
+    }
+
+    if ((gen_dac != 0u) && uses_dac(r, gen_dac)) {
+        return ROUTE_ERR_DAC_BUSY;
     }
 
     const bool     r_is_adc      = (r->src != ROUTE_SRC_RAM_TABLE);
@@ -349,7 +400,12 @@ void routing_visit(route_visit_t visit)
     }
 
     /* the resource table - the same counters route_check() charges a
-     * candidate route against, read back rather than recomputed twice */
+     * candidate route against, read back rather than recomputed twice;
+     * the generator's claim first, when there is one (SG.5) */
+    if (gen_dac != 0u) {
+        visit("generator_dac",     gen_dac,                 NULL, ROUTE_VIS_NUM);
+        visit("generator_n",       gen_n,                   NULL, ROUTE_VIS_NUM);
+    }
     const uint32_t adc_n   = count_adc_consuming();
     const uint32_t table_n = count_table_dacs();
     visit("dma_used",          adc_n + table_n,         NULL, ROUTE_VIS_NUM);

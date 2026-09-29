@@ -105,12 +105,12 @@ not counted.
 | TRG.5 UI test | done | this commit | Opus | `gui_ui_test.py` (Playwright) |
 | TRG.6 Documentation | done | this commit | Opus | README GUI section, `adc_gui.py` row in CLAUDE.md |
 | TRG.7 Firmware-side search (optional) | open | | | only if the frame rate is too low; after BR.9, into a B image |
-| SG.0 Datasheet check | open | | | window check on a RAM source, `DACxDAT` upper-half write, DAC rate limit, SCCP2 event and clock |
-| SG.1 `dma.c` channel 1 | open | | | shared `DMALOW`/`DMAHIGH`, no `DMACON.ON` toggle while channel 1 runs; ISR 42/0 |
-| SG.2 `sccp.c` SCCP2 | open | | | playback clock, trace scenario |
-| SG.3 `src/siggen/` | open | | | no registers; callers that touch a DAC stop it first; host test |
-| SG.4 `siggen` command | open | | | one parser slot; `help` change = BR rule, [SMOKE] |
-| SG.5 Routing claim | open | | | DMA 1, SCCP 2, DAC output, RAM; conflict with `ROUTE_STREAM` on DAC2 |
+| SG.0 Datasheet check | done | this commit | Opus + Sonnet agent | window check on a RAM source, `DACxDAT` upper-half write, DAC rate limit, SCCP2 event and clock |
+| SG.1 `dma.c` channel 1 | done | this commit | Opus | shared `DMALOW`/`DMAHIGH`, no `DMACON.ON` toggle while channel 1 runs; ISR 42/0 |
+| SG.2 `sccp.c` SCCP2 | done | this commit | Opus | playback clock, trace scenario `sccp2`; TMR16 confirmed on the board, OC32 not |
+| SG.3 `src/siggen/` | done | this commit | Opus | no registers; callers that touch a DAC stop it first; host test |
+| SG.4 `siggen` command | done | this commit | Opus | one parser slot; `help` change = BR rule, [SMOKE] |
+| SG.5 Routing claim | done | this commit | Opus | DMA 1, SCCP 2, DAC output, RAM; conflict with `ROUTE_STREAM` on DAC2 |
 | SG.6 GUI card | open | | | `tools/wavegen_model.py`, loop overlay and match chip |
 | SG.7 GUI tests | open | | | selftest + Playwright |
 | SG.8 Board run | open | | | block R8; fallback TMR2, then timer ISR ("A2 not met") |
@@ -1160,6 +1160,41 @@ Every refusal names the violated limit with its number.
     with `UPDTRG = 3` (every write taken at once), as `dac_level_start()` already does.
 - Output: the fixed values for SG.1-SG.3 and the answer to "16 or 32 bit". Effort:
   half a day.
+
+**SG.0 answers (29.09.2026, DS70005591D, pack 1.4.260; the first two confirmed on the
+board the same evening, docs/HARDWARE-LOG.md):**
+
+- **Window:** global - "All DMA channels are restricted to the address range set by
+  DMAHIGH and DMALOW" (13.4.5 "Memory Boundary", p826) - and it covers every SRAM access,
+  source included (Figure 13-3 p828 draws it around both); "the memory-mapped SFR range
+  is always accessible by DMA" (same section, DMALOW/DMAHIGH notes p809/810). So
+  decision 1 was needed, and the `DACxDAT` destination is outside the question. The
+  linker put the table (`.dma_buffer`, siggen.c) directly *below* capture.c's buffer
+  (0x41B8..0x81B7, buffer from 0x81B8): the buffer's end is still the window's end.
+- **16 bit:** SFRs "support byte, word and double-word read or write operations"
+  (3.3.16, p100); DMA SIZE = 01 is one 16-bit word, 16-bit aligned (13.4.2, p825); the
+  only register taking a DAC level is `DACDAT`, bits 31:16 of `DACxDAT` (0x1D50, p1412).
+  xc-dsc already compiles `dac_set()` to a halfword write to `DACxDAT + 2`, which has run
+  on the board since the chain test. Answer: 16-bit transfers to `DACxDAT + 2`, a
+  `uint16_t` table, `SIGGEN_N_MAX` 8192.
+- **DAC rate:** no update-rate limit is given; settling to 1 % is 750 ns typical, 2000 ns
+  maximum (Table 40-42, DA07, p2036). `SIGGEN_PLAY_HZ_MAX` = 1 MHz (the ladder's top),
+  clean by the worst-case figure only below about 500 kHz.
+- **SCCP2 event:** CHSEL 0x19 is "CCP2 IC/OC" (Table 13-2 p797, ATDF agrees): CCP2IF, not
+  the timer's CCT2IF. In the 32-bit timer a period match sets CCTxIF only (Fig. 26-4);
+  in the dual 16-bit timer the secondary timer's rollover sets CCPxIF (p1781, Fig.
+  26-3). Both that mode (TMR16) and 32-bit output compare (OC32) were built;
+  **the board chose TMR16** (100 000 transfers/s at 100 kHz, CCT2IF and CCP2IF both
+  seen), OC32 moved nothing and raised neither flag. TMR16's period is 16 bits, so
+  TMRPS (1:1/4/16/64) stretches it: 100 Hz..1 MHz from 100 MHz.
+- **SCCP2 clock:** CLKSEL 000 = standard peripheral clock (Table 26-2 p1756) = CPU / 2 =
+  100 MHz here (12.2.1, p726), independent of PLL1; within Table 40-24's 200 MHz.
+- **Outputs:** "odd numbered DAC outputs connect to DACOUT1 with the even channels
+  connecting to DACOUT2" (p1417): DAC1 -> RA1, DAC2 -> RA8; DC mode with `UPDTRG = 3`
+  ("any write ... sets the UPDATE bit immediately", p1409), as `dac_level_start()` does.
+- **`DMACON.ON = 0`** "resets all state machines, resulting in immediate termination of
+  all active DMA operation(s)" (p807) - every channel, which is why `dma0_init()`/
+  `dma0_deinit()` leave it on while channel 1 runs.
 
 ### SG.1 `dma.c`: channel 1 as a transmit channel
 

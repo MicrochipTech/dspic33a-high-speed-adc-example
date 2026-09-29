@@ -79,10 +79,60 @@
  * DMAxSTAT flags are "R/C/HS" - clearable by writing 0 (legend p815,
  * Example 13-4 p835: "DMA0STATbits.DONE=0"). Writing 1 does not clear.
  * ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ *
+ * The address window, shared by every channel (SG.1, 29.09.2026)
+ *
+ * DMALOW/DMAHIGH exist once: "All DMA channels are restricted to the
+ * address range set by DMAHIGH and DMALOW" (13.4.5 "Memory Boundary",
+ * p826), and the check covers every SRAM access - Figure 13-3 (p828)
+ * draws the window around both the source and the destination; only
+ * "the memory-mapped SFR range is always accessible by DMA" (same
+ * section; DMALOW/DMAHIGH notes p809/810). So with channel 1 reading a
+ * generator table from RAM, the window must cover channel 0's buffer
+ * AND that table, or channel 1 would stop with ADRERR on its first
+ * read. dma.c keeps both regions and writes the smallest window over
+ * them; siggen.c places its table in the same ".dma_buffer" section as
+ * capture.c's buffer, so the window holds those two objects and nothing
+ * else (dma_window_gap() reports what lies between them).
+ * What is lost against one channel alone: the hardware fence between
+ * the buffer and the table (docs/IMPLEMENTATION-PLAN.md SG decision 1).
+ * The buffer's guard words stay.
+ * ------------------------------------------------------------------ */
+static uint32_t win0_first = 0u, win0_last = 0u;   /* channel 0's buffer */
+static uint32_t win1_first = 0u, win1_last = 0u;   /* channel 1's table  */
+
+static void window_write(void)
+{
+    uint32_t lo = win0_first, hi = win0_last;
+    if (win1_last != 0u) {
+        if ((win0_last == 0u) || (win1_first < lo)) { lo = win1_first; }
+        if ((win0_last == 0u) || (win1_last > hi))  { hi = win1_last; }
+    }
+    DMALOW  = lo;
+    DMAHIGH = hi;
+}
+
+uint32_t dma_window_gap(void)
+{
+    if ((win0_last == 0u) || (win1_last == 0u)) { return 0u; }
+    if (win1_first > win0_last) { return win1_first - win0_last - 1u; }
+    if (win0_first > win1_last) { return win0_first - win1_last - 1u; }
+    return 0u;
+}
+
+/* DMACON.ON = 0 "resets all state machines, resulting in immediate
+ * termination of all active DMA operation(s)" (p807) - every channel,
+ * not one. While channel 1 plays a table, channel 0's set-up and
+ * tear-down leave the module on and work through CHEN alone. */
+static bool ch1_busy(void)
+{
+    return DMA1CHbits.CHEN != 0u;
+}
+
 void dma0_init(uint32_t trigger, const volatile void *src,
                volatile void *dst, uint32_t dst_bytes)
 {
-    DMACONbits.ON = 0;
+    if (!ch1_busy()) { DMACONbits.ON = 0; }
     DMA0CHbits.CHEN = 0;
 
     /* Everything about the destination comes from the buffer object the
@@ -99,8 +149,9 @@ void dma0_init(uint32_t trigger, const volatile void *src,
         port_log_kv("[dma] unusable buffer, last", last, true);
         port_panic(8u);
     }
-    DMALOW  = first;
-    DMAHIGH = last;
+    win0_first = first;
+    win0_last  = last;
+    window_write();
 
     DMA0SEL = trigger;                      /* e.g. ADCn Done CH0       */
     DMA0SRC = (uint32_t)src;                /* peripheral result        */
@@ -152,7 +203,7 @@ void dma0_deinit(void)
     DMA0CHbits.CHEN = 0;
     DMA0STAT = 0u;                          /* all flags cleared (R/C)  */
     IFS2bits.DMA0IF = 0;
-    DMACONbits.ON = 0;
+    if (!ch1_busy()) { DMACONbits.ON = 0; }  /* p807: ON = 0 stops channel 1 too */
 }
 
 /* Interrupt masked, channel disabled. Nothing restarts after this. */
@@ -220,4 +271,87 @@ void dma0_regs_visit(reg_visit_t visit)
     visit("IEC2", IEC2, REG_HEX);           /* DMA0 enable,  bit 13      */
     visit("IFS2", IFS2, REG_HEX);           /* DMA0 flag,    bit 13      */
     visit("IPC9", IPC9, REG_HEX);           /* DMA0 priority             */
+}
+
+/* ------------------------------------------------------------------ *
+ * DMA channel 1: a table in RAM -> one SFR, the signal generator's
+ * transport (SG.1, 29.09.2026; docs/IMPLEMENTATION-PLAN.md section SG)
+ *
+ * One table entry per trigger: TRMODE = 01, Repeated One-Shot, as for
+ * channel 0 and for the same reason (13.4.8.3, p832) - NOT the "Repeated
+ * Continuous" DESIGN-MULTICHANNEL 4.2 first named, which copies a whole
+ * block per trigger (runs 1-18). Source incremented (SAMODE = 01),
+ * destination fixed (DAMODE = 00), and at the end of the block the
+ * source address and the count reload (RELOADS/RELOADC, DMAxCH bits
+ * 24/26, p811-812; CNT reloads in every repeated mode anyway, note 3), so
+ * the table plays cyclically with no CPU involvement at all.
+ * No interrupt (HALFEN = DONEEN = 0, SG decision 3): errors are read back
+ * through dma1_tx_status(), _DMA0Interrupt stays as it is.
+ * SIZE comes from the caller: 01 = one 16-bit word per transfer, 10 = 32
+ * bits (DMAxCH SIZE[1:0], p812). A 16-bit transfer needs a 16-bit
+ * aligned address on both sides (13.4.2, p825: "bit 0 is always 0"); the
+ * SFR window rule above lets the destination be any SFR.
+ * ------------------------------------------------------------------ */
+bool dma1_tx_start(uint32_t trigger, const volatile void *src, uint32_t n,
+                   volatile void *dst_sfr, uint32_t size)
+{
+    const uint32_t bytes = (size == DMA_SIZE_32) ? 4u : 2u;
+    const uint32_t first = (uint32_t)src;
+    const uint32_t last  = first + n * bytes - 1u;
+    if ((n < 2u) || ((size != DMA_SIZE_16) && (size != DMA_SIZE_32)) ||
+        (first < RAM_FIRST) || (last > RAM_LAST) || (last < first) ||
+        (first % bytes != 0u) || ((uint32_t)dst_sfr % bytes != 0u)) {
+        return false;
+    }
+    DMA1CHbits.CHEN = 0;
+    win1_first = first;
+    win1_last  = last;
+    window_write();
+
+    DMA1SEL  = trigger;                     /* e.g. SCCP2, 0x19 (Table 13-2 p797) */
+    DMA1SRC  = first;                       /* the table                */
+    DMA1DST  = (uint32_t)dst_sfr;           /* e.g. &DAC2DAT + 2        */
+    DMA1CNT  = n;                           /* transfers per block      */
+    DMA1STAT = 0u;                          /* stale flags cleared (R/C)*/
+
+    DMA1CH = 0u;
+    DMA1CHbits.SIZE    = size;
+    DMA1CHbits.SAMODE  = 1u;          /* source incremented             */
+    DMA1CHbits.DAMODE  = 0u;          /* destination unchanged          */
+    DMA1CHbits.TRMODE  = 1u;          /* repeated one-shot: 1 per trigger (p832) */
+    DMA1CHbits.RELOADS = 1u;          /* table start again each block   */
+    DMA1CHbits.RELOADC = 1u;          /* count again each block         */
+    DMA1CHbits.RETEN   = 0u;          /* as channel 0 (capture.c note 1) */
+
+    DMACONbits.PRIORITY = 1u;         /* round robin, as dma0_init()    */
+    DMACONbits.ON   = 1;
+    DMA1CHbits.CHEN = 1;
+    return DMA1CHbits.CHEN != 0u;
+}
+
+void dma1_tx_stop(void)
+{
+    DMA1CHbits.CHEN = 0;
+    DMA1STAT = 0u;
+    win1_first = 0u;
+    win1_last  = 0u;
+    if (win0_last != 0u) { window_write(); }
+}
+
+uint32_t dma1_tx_status(void)    { return DMA1STAT; }
+uint32_t dma1_tx_remaining(void) { return DMA1CNT; }
+bool     dma1_tx_enabled(void)   { return DMA1CHbits.CHEN != 0u; }
+
+void dma1_regs_visit(reg_visit_t visit)
+{
+    visit("[regs] dma1\r\n", 0u, REG_TITLE);
+    visit("DMACON", DMACON, REG_HEX);
+    visit("DMALOW", DMALOW, REG_HEX);
+    visit("DMAHIGH", DMAHIGH, REG_HEX);
+    visit("DMA1CH", DMA1CH, REG_HEX);
+    visit("DMA1SEL", DMA1SEL, REG_HEX);
+    visit("DMA1STAT", DMA1STAT, REG_HEX);
+    visit("DMA1SRC", DMA1SRC, REG_HEX);
+    visit("DMA1DST", DMA1DST, REG_HEX);
+    visit("DMA1CNT", DMA1CNT, REG_HEX);
 }

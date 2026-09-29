@@ -48,6 +48,10 @@ bool     dac_triangle_force(uint8_t unit, uint16_t low, uint16_t high, uint16_t 
  * the CPU-stepped signal of the chain test's low-rate stages. */
 bool     dac_level_start(uint8_t unit, uint16_t code);
 void     dac_set(uint8_t unit, uint16_t code);
+/* Where a 16-bit DMA write sets the level dac_set() sets: the DACDAT
+ * half of DACxDAT (its address + 2). NULL for a bad unit. For the
+ * signal generator (SG.1), after dac_level_start(). */
+volatile void *dac_dma_target(uint8_t unit);
 /* One DAC off; the shared clock (CLKGEN7) stays on while the other runs. */
 void     dac_off(uint8_t unit);
 void     dac_all_off(void);

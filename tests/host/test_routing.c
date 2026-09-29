@@ -239,6 +239,52 @@ static const route_t stream_like = {
     .sink = ROUTE_SINK_STREAM, .table_samples = 0u, .samc = 0u,
 };
 
+/* SG.5 (29.09.2026): the signal generator's claim. DAC2 busy in both
+ * directions (the test stream's triangle vs. the generator), its DAC
+ * output/DMA/SCCP/RAM counted against the limits, and routing_clear()
+ * ("stream off") leaving the claim alone. */
+static void test_generator_claim(void)
+{
+    routing_clear();
+    routing_gen_release();
+    stubs_reset(true);
+
+    /* generator on DAC2 first: the test stream (DAC2 triangle) is refused
+     * before any driver call, an external input on RA8 (the loop) is not */
+    CHECK_EQ(routing_gen_claim(2u, 1000u), ROUTE_OK);
+    CHECK_EQ(routing_apply(&stream_like), ROUTE_ERR_DAC_BUSY);
+    CHECK_EQ(stub_setup_calls, 0);
+    route_t loop = { .src = ROUTE_SRC_EXT, .core = 5u, .pinsel = 3u,
+                     .sink = ROUTE_SINK_STREAM };
+    CHECK_EQ(routing_apply(&loop), ROUTE_OK);
+    /* a DAC_PIN route on DAC1 still fits one output ... */
+    route_t d1 = { .src = ROUTE_SRC_DAC_PIN, .core = 1u, .pinsel = 1u,
+                   .dac = 1u, .sink = ROUTE_SINK_STREAM };
+    CHECK_EQ(routing_add(&d1), ROUTE_OK);
+    /* ... and then both outputs are taken (generator + DAC1) */
+    route_t d3 = { .src = ROUTE_SRC_DAC_PIN, .core = 2u, .pinsel = 1u,
+                   .dac = 3u, .sink = ROUTE_SINK_STREAM };
+    CHECK_EQ(routing_add(&d3), ROUTE_ERR_DAC_OUTPUTS);
+    /* "stream off" clears the routes, not the claim */
+    routing_clear();
+    CHECK_EQ(routing_apply(&stream_like), ROUTE_ERR_DAC_BUSY);
+    routing_gen_release();
+    CHECK_EQ(routing_apply(&stream_like), ROUTE_OK);
+
+    /* the reverse: the test stream runs, the generator may not take DAC2
+     * but may take DAC1 */
+    CHECK_EQ(routing_gen_check(2u, 1000u), ROUTE_ERR_DAC_BUSY);
+    CHECK_EQ(routing_gen_claim(2u, 1000u), ROUTE_ERR_DAC_BUSY);
+    CHECK_EQ(routing_gen_claim(1u, 1000u), ROUTE_OK);
+    routing_gen_release();
+
+    /* its table counts against the RAM budget */
+    routing_clear();
+    CHECK_EQ(routing_gen_check(1u, ROUTE_RAM_BUDGET_BYTES / 2u), ROUTE_OK);
+    CHECK_EQ(routing_gen_check(1u, ROUTE_RAM_BUDGET_BYTES / 2u + 1u), ROUTE_ERR_RAM_BUDGET);
+    routing_gen_release();
+}
+
 static void test_apply_stream(void)
 {
     routing_clear();
@@ -514,6 +560,7 @@ int main(void)
 
     test_routing_visit_empty();
     test_routing_visit_active_route();
+    test_generator_claim();
 
     return check_summary();
 }

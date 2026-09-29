@@ -1885,3 +1885,46 @@ Counters of the last grab per series 0/0/0 except at 8 MSPS: overrun 1 / missed 
 and missed 1 (falling), per grab cycle - the grab cycle's own halt/restart at 8 MSPS, not
 the trigger, which never reaches the board. Not run: the page itself against the board
 (the UI test covers it against `--fake`), and a custom input with an external signal.
+
+## 2026-09-29, signal generator (SG.1-SG.5) on silicon - branch `siggen`, dc2b7ac + local changes, local (COM26)
+
+Built from the working tree (banner `git dc2b7ac+local changes (siggen)`: SG.1-SG.5
+before their commit) and flashed locally with `ipecmd -TPPKOB4 -P33AK512MPS512 -M -OL`
+(Program Succeeded). What the first pass answered:
+
+- **SCCP2 triggers DMA channel 1 - in the dual 16-bit timer mode (TMR16), not in 32-bit
+  output compare (OC32).** `siggen on 2 1000 100000 snap`: `transfers_per_s` 100000,
+  `sccp2_flags` 3 (CCT2IF and CCP2IF both rose), `DMA1SRC` walking the table, `DMA1CNT`
+  counting down, `DMA1STAT` 0x30 (HALF/DONE only, no ADRERR). Same with `oc`: 0
+  transfers, neither flag, `CCP2TMR` running past `CCP2PR` - OC32 is dead on this path,
+  TMR16 is the one (SG.8's fallback to TMR2 is not needed). Play rates measured exact:
+  100 k, 250 k, 500 k, 1 M transfers/s (501000 once, a measuring-window edge).
+- **The RAM source inside the shared window is accepted:** DMALOW 0x41B8 (the table,
+  placed by the linker directly below the ADC buffer), DMAHIGH 0x91B7 (the buffer's end).
+- **The value reaches `DACDAT` through a 16-bit write to `DAC2DAT + 2`.** Loop DAC2 -> RA8
+  -> core 5 (`stream on <ksps> 5 3`), table 800..3500: a 1 kHz sine from 1000 entries at
+  100 kHz, sampled at 1 MSPS, fits a sine with amplitude 1352 (table 1350) and offset
+  2123 (table 2150, the ADC/DAC's -27 LSB), and the table as a staircase (zero-order hold,
+  phase and gain fitted) to 11-14 LSB rms, median 8. At 10 kHz (10 entries per period,
+  steps up to ~850 LSB) the median stays 45 LSB, the rms 80 - concentrated at the steps:
+  the DAC's settling (0.75-2 us, Table 40-42) inside a 10 us step, sampled at 4 MSPS.
+  Below table code ~780 the output does not follow (min 607 for a table from 205) - the
+  same floor run 14 showed with the triangle ("fall to 629"); the GUI's default range
+  must stay above it.
+- **The generator survives the ADC chain:** `stream on 1000|4000 5 3` / `stream off`
+  leave it playing (`dma1_on` 1, 100000 transfers/s after `stream off`) - `dma0_init()`/
+  `dma0_deinit()` no longer switch `DMACON` off while channel 1 runs. 30 s at 4 MSPS
+  beside it: overrun/late/missed 0. 20 random cycles (play 100 k-1 M, n 100-8192, 1/4/8
+  MSPS, some with a generator restart mid-stream): no new fault; single overruns (1 per
+  grab) at 8 MSPS as without the generator.
+- **The conflict is refused:** `stream on 1000` (test form, DAC2 triangle) while the
+  generator plays on DAC2 -> NAK "DAC2 plays the signal generator ...". `route list`
+  shows `generator_dac: 2`, `generator_n: 1000`, `dma_used: 1`.
+- **Not explained: one fail 8.** Once, in the first measurement series, `stream off` ended
+  in `fail_code: 8` (`main.c`: burst mode running while DMA0 is disabled - the message
+  itself was cut off by the host's 5 s timeout). Not reproduced in 30 s + 20 cycles
+  afterwards. Open; the next board run watches `status`'s `fail_code` after every
+  `stream off` with the generator on.
+
+Not run: DAC1 as the generator's output, `decay` > 0 on the board, the GUI card (SG.6),
+a board_run.py block (SG.8).

@@ -59,6 +59,38 @@ static void check_hex(uint32_t v, const char *expect)
     CHECK(guard_ok(11u));
 }
 
+/* fmt_parse_dec() accepts `s` as exactly `expect` millionths. int64
+ * compared with CHECK(==): CHECK_EQ goes through unsigned long, which is
+ * 32 bits under MinGW. */
+static void check_dec(const char *s, int64_t expect)
+{
+    int64_t v = 12345;
+    const bool ok = fmt_parse_dec(s, &v);
+    CHECK(ok);
+    CHECK(v == expect);
+    if (!ok || (v != expect)) { fprintf(stderr, "  fmt_parse_dec(\"%s\")\n", s); }
+}
+
+/* ... refuses `s` and leaves the output alone. */
+static void check_bad(const char *s)
+{
+    int64_t v = 12345;
+    const bool ok = fmt_parse_dec(s, &v);
+    CHECK(!ok);
+    CHECK(v == 12345);
+    if (ok) { fprintf(stderr, "  fmt_parse_dec(\"%s\") accepted\n", s); }
+}
+
+/* dec_to_str(): text, returned pointer, nothing written past the '\0'. */
+static void check_dec_str(int64_t v, const char *expect)
+{
+    fill();
+    char *end = dec_to_str(buf, v);
+    CHECK(strcmp(buf, expect) == 0);
+    CHECK_EQ((unsigned long)(end - buf), strlen(expect));
+    CHECK(guard_ok(strlen(expect) + 1u));
+}
+
 int main(void)
 {
     /* ---- u32_to_str: no padding, no sign, the two limits ---- */
@@ -135,6 +167,41 @@ int main(void)
         CHECK_EQ((unsigned long)(p - buf), 12u);   /* 10 + 2 < 16 */
         CHECK(strcmp(buf, "4294967295\r\n") == 0);
     }
+
+    /* ---- fmt_parse_dec: "[-]digits[.digits]" in millionths (SG.4) ---- */
+    check_dec("0", 0);
+    check_dec("0.3", 300000);
+    check_dec("1.5", 1500000);
+    check_dec("-1.5", -1500000);
+    check_dec("10000", 10000000000LL);
+    check_dec(".5", 500000);
+    check_dec("5.", 5000000);
+    check_dec("0.000001", 1);                    /* six decimals, the finest */
+    check_dec("123456789012.999999", 123456789012999999LL);   /* both limits */
+    check_dec("007.250", 7250000);               /* leading/trailing zeros */
+    check_bad("");
+    check_bad("-");
+    check_bad(".");
+    check_bad("-.");
+    check_bad("0.0000001");                      /* seventh decimal */
+    check_bad("1234567890123");                  /* 13 integer digits */
+    check_bad("1.2.3");
+    check_bad("--1");
+    check_bad("1e3");                            /* no exponent */
+    check_bad("0,3");                            /* no locale */
+    check_bad(" 1");
+    check_bad("1 ");
+    check_bad("+1");
+
+    /* ---- dec_to_str: the reverse, trailing zeros dropped ---- */
+    check_dec_str(0, "0");
+    check_dec_str(300000, "0.3");
+    check_dec_str(-1500000, "-1.5");
+    check_dec_str(10000000000LL, "10000");
+    check_dec_str(1, "0.000001");
+    check_dec_str(-1, "-0.000001");
+    check_dec_str(123456789012999999LL, "123456789012.999999");
+    check_dec_str(INT64_MIN, "-9223372036854.775808");   /* the longest: 21 + '\0' < 28 */
 
     return check_summary();
 }

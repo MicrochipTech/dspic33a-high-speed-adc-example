@@ -150,6 +150,38 @@ void dma0_regs_visit(reg_visit_t visit)
     visit("sim_half_len", sim_half_len, REG_DEC);
 }
 
+/* Channel 1 (SG.1): the simulator has no DMA and no trigger, so the
+ * generator's transport only remembers what it was told - enough for
+ * siggen.c's bookkeeping and its status reply to run unchanged. */
+static const volatile void *sim1_src = NULL;
+static uint32_t            sim1_n    = 0u;
+static bool                sim1_on   = false;
+
+bool dma1_tx_start(uint32_t trigger, const volatile void *src, uint32_t n,
+                   volatile void *dst_sfr, uint32_t size)
+{
+    (void)trigger; (void)dst_sfr; (void)size;
+    if (n < 2u) { return false; }
+    sim1_src = src;
+    sim1_n   = n;
+    sim1_on  = true;
+    return true;
+}
+
+void     dma1_tx_stop(void)        { sim1_on = false; }
+uint32_t dma1_tx_status(void)      { return 0u; }
+uint32_t dma1_tx_remaining(void)   { return sim1_n; }
+bool     dma1_tx_enabled(void)     { return sim1_on; }
+uint32_t dma_window_gap(void)      { return 0u; }
+
+void dma1_regs_visit(reg_visit_t visit)
+{
+    visit("[regs] dma1 (simulator stand-in, no registers)\r\n", 0u, REG_TITLE);
+    visit("sim1_on", sim1_on ? 1u : 0u, REG_DEC);
+    visit("sim1_src", (uint32_t)sim1_src, REG_HEX);
+    visit("sim1_n", sim1_n, REG_DEC);
+}
+
 /* ------------------------------------------------------------------ *
  * The producer: one half per call
  * ------------------------------------------------------------------ */

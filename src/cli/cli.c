@@ -83,6 +83,9 @@
 #include "uart.h"
 #include "gui_link.h"
 #include "routing.h"
+#include "siggen.h"     /* SG.4: the "siggen" command */
+#include "dma_tx.h"     /* SG.4: dma1_regs_visit() for "siggen regs" */
+#include "sccp.h"       /* SG.4: sccp2_regs_visit() for "siggen regs" */
 
 /* ------------------------------------------------------------------ *
  * UART transport - uart.c owns every register; this file only decides
@@ -498,6 +501,81 @@ static void cmd_route_fn(int argc, char **argv)
 }
 CMD_DEFINE(route, "route", cmd_route_fn, "route list - the active route(s) and the resource table");
 
+/* ------------------------------------------------------------------ *
+ * "siggen" - the signal generator (SG.4, 29.09.2026): siggen.c plays a
+ * wavegen table through DMA channel 1 into DAC1/DAC2, paced by SCCP2.
+ *   siggen set <param> <value>    f0 h2..h7 decay amp lo hi, one per line
+ *                                 (the 64-character line holds no more)
+ *   siggen on <dac> <n> <play_hz> [snap] [force] [oc]
+ *   siggen off | siggen regs | siggen   (status)
+ * One parser slot; everything else is a sub-command, as for "stream".
+ * Longest reply line: "transfers_per_s: " + 10 digits + CRLF = 29, and a
+ * DEC value is at most 21 characters (fmt.h) - put_kv()'s own 16-byte
+ * buffer is not used for those, dec_str[28] is.
+ * ------------------------------------------------------------------ */
+static void siggen_print(const char *name, int64_t v, siggen_vis_fmt_t fmt)
+{
+    char num[28];
+    switch (fmt) {
+    case SIGGEN_VIS_NUM: put_kv(name, (uint32_t)v); break;
+    case SIGGEN_VIS_HEX: (void)u32_to_hex(num, (uint32_t)v); put_kv_str(name, num); break;
+    case SIGGEN_VIS_DEC: (void)dec_to_str(num, v); put_kv_str(name, num); break;
+    }
+}
+
+static void siggen_refused(siggen_result_t r)
+{
+    cmd_parser_write("siggen: ");
+    put_line(siggen_result_name(r));
+    if (r == SIGGEN_E_WAVEGEN) { put_kv("wavegen_err", siggen_wavegen_err()); }
+    if (r == SIGGEN_E_ROUTE)   { put_kv("route_err", siggen_route_err()); }
+    cmd_parser_fail();
+}
+
+static void cmd_siggen_fn(int argc, char **argv)
+{
+    static const char use[] =
+        "siggen set <f0|h2..h7|decay|amp|lo|hi> <value> | siggen on <dac 1|2> <n 2..8192> "
+        "<play_hz 100..1000000> [snap] [force] [oc] | siggen off | siggen regs | siggen";
+    if (argc == 1) { siggen_visit(siggen_print); return; }
+    if ((argc == 4) && (strcmp(argv[1], "set") == 0)) {
+        int64_t v = 0;
+        if (!fmt_parse_dec(argv[3], &v)) { usage(use); return; }
+        const siggen_result_t r = siggen_set(argv[2], v);
+        if (r != SIGGEN_OK) { siggen_refused(r); return; }
+        put_kv_str(argv[2], argv[3]);
+        return;
+    }
+    if ((argc == 2) && (strcmp(argv[1], "off") == 0)) {
+        siggen_stop();
+        put_line("siggen: off");
+        return;
+    }
+    if ((argc == 2) && (strcmp(argv[1], "regs") == 0)) {
+        dma1_regs_visit(reg_print);
+        sccp2_regs_visit(reg_print);
+        return;
+    }
+    uint32_t dac = 0u, n = 0u, hz = 0u;
+    if ((argc >= 5) && (argc <= 8) && (strcmp(argv[1], "on") == 0) &&
+        arg_u32(argv[2], 1u, 2u, &dac) && arg_u32(argv[3], 2u, SIGGEN_N_MAX, &n) &&
+        arg_u32(argv[4], SIGGEN_PLAY_HZ_MIN, SIGGEN_PLAY_HZ_MAX, &hz)) {
+        bool snap = false, force = false, oc = false;
+        for (int i = 5; i < argc; i++) {
+            if (strcmp(argv[i], "snap") == 0)       { snap = true; }
+            else if (strcmp(argv[i], "force") == 0) { force = true; }
+            else if (strcmp(argv[i], "oc") == 0)    { oc = true; }
+            else { usage(use); return; }
+        }
+        const siggen_result_t r = siggen_start((uint8_t)dac, n, hz, snap, force, oc ? 1u : 0u);
+        if (r != SIGGEN_OK) { siggen_refused(r); return; }
+        siggen_visit(siggen_print);
+        return;
+    }
+    usage(use);
+}
+CMD_DEFINE(siggen, "siggen", cmd_siggen_fn, "siggen [set <p> <v> | on <dac> <n> <hz> [snap] [force] [oc] | off | regs]");
+
 static void cmd_start_fn(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -588,6 +666,7 @@ static void cmd_dac_fn(int argc, char **argv)
         usage("dac <1|2> <on|off> [low] [high] [slpdat]  (triangle on DACOUT1 = RA1 or DACOUT2 = RA8)");
         return;
     }
+    siggen_release_dac((uint8_t)unit);     /* the generator yields its DAC (SG.3) */
     if ((argv[2][0] == 'o') && (argv[2][1] == 'f')) {
         dac_off((uint8_t)unit);
         put_kv("dac", unit);
@@ -871,6 +950,13 @@ static void cmd_stream_fn(int argc, char **argv)
         arg_u32(argv[2], 1u, 40000u, &k) &&
         ((argc == 3) || (arg_u32(argv[3], 1u, 5u, &core) && arg_u32(argv[4], 0u, 15u, &pin) &&
                          ((argc == 5) || arg_u32(argv[5], 0u, 31u, &samc))))) {
+        if ((argc == 3) && (siggen_dac() == 2u)) {
+            /* the test form puts its triangle on DAC2 (routing refuses it
+             * with ROUTE_ERR_DAC_BUSY) - say why instead of "set-up failed" */
+            put_line("stream: DAC2 plays the signal generator - 'siggen off', or 'stream on <ksps> 5 3' to read it");
+            cmd_parser_fail();
+            return;
+        }
         const bool ok = (argc == 3) ? chain_stream_on(k)
                                     : chain_stream_on_input(k, (uint8_t)core, (uint8_t)pin, (uint8_t)samc, false);
         if (!ok) { put_line("stream: set-up failed (clock, core or trigger) - run 'chain 0'"); cmd_parser_fail(); return; }
@@ -973,6 +1059,7 @@ void cli_init(void)
     (void)cmd_register(&cmd_status);
     (void)cmd_register(&cmd_regs);
     (void)cmd_register(&cmd_route);
+    (void)cmd_register(&cmd_siggen);
     (void)cmd_register(&cmd_start);
     (void)cmd_register(&cmd_stop);
     (void)cmd_register(&cmd_samc);

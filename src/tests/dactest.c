@@ -61,6 +61,7 @@
 #include "diag.h"
 #include "sim.h"
 #include "clock.h"
+#include "siggen.h"     /* SG.3: stopped before the DAC test */
 
 /* A frozen result register gives a peak-to-peak of zero; noise on a real
  * input gives a few counts. Anything below this means nothing is moving. */
@@ -90,6 +91,7 @@ static uint16_t store[SAMPLES_PER_BUF_MAX];
 
 uint32_t dactest_run(uint32_t bursts)
 {
+    siggen_stop();                    /* the DAC under test is its own (SG.3) */
     /* `bursts` is how many bursts run back to back before the ISR stops
      * the stream. The buffer then holds the LAST of them, so with a
      * count above one the window is a burst out of a running stream, not

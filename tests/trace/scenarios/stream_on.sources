@@ -15,3 +15,5 @@ src/lib/tri_eval.c
 src/app/port_impl.c
 src/boards/ev74h48a.c
 src/app/routing.c
+src/siggen/siggen.c
+src/lib/wavegen.c

@@ -1,0 +1,20 @@
+# scenario sccp2
+# layout check: 0 fields differ from the pack's masks
+W CCP2CON1     0x00000000 -> 0x00008000
+W CCP2CON2     0x01000000 -> 0x00100000
+W CCP2PR       0xFFFFFFFF -> 0x03E7FFFF
+# sccp2_start(1000, TMR16) -> 1, period 1000, prescaled
+# TMR16 100 kHz: dual 16-bit timer, PRH = 999, 1:1
+W CCP2CON1     0x00008000 -> 0x00008040
+W CCP2PR       0x03E7FFFF -> 0x61A7FFFF
+# sccp2_start(100000, TMR16) -> 1, period 100000
+# TMR16 1 kHz: TMRPS 1:4, PRH = 24999
+W CCP2CON1     0x00008040 -> 0x00008021
+W CCP2PR       0x61A7FFFF -> 0x000003E7
+W CCP2RB       0x00000000 -> 0x000001F4
+# sccp2_start(1000, OC32) -> 1
+# OC32 100 kHz: 32-bit output compare, CCP2RB = 500
+W CCP2CON1     0x00008021 -> 0x00000021
+# sccp2_stop()
+# sccp2_start(1, TMR16) -> 0 (refused, nothing written)
+# refused

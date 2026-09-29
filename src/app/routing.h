@@ -134,10 +134,12 @@ typedef enum {
                                 * or, in routing_apply(), this route shape -
                                 * is not wired up yet in N+1                */
     ROUTE_ERR_TABLE_FULL,      /* routing.c's own route_t storage is full   */
-    ROUTE_ERR_SETUP            /* routing_apply() only: the checks passed but
+    ROUTE_ERR_SETUP,           /* routing_apply() only: the checks passed but
                                 * the clock tree, trigger clock or DAC
                                 * refused (acq_chain_setup_input() returned
                                 * false); the boot configuration is back    */
+    ROUTE_ERR_DAC_BUSY         /* SG.5: the DAC this route (or the signal
+                                * generator) wants is already the other's   */
 } route_err_t;
 
 /* One signal path. `core`/`pinsel` are meaningful (and checked) for every
@@ -271,5 +273,20 @@ typedef void (*route_visit_t)(const char *name, uint32_t v, const char *s, route
  * charges a candidate route against, read back rather than recomputed
  * twice. Never writes a register, never prints anything itself. */
 void routing_visit(route_visit_t visit);
+
+/* The signal generator's claim (SG.5, 29.09.2026): one DMA channel, one
+ * SCCP, the DAC's output pin and n x 2 bytes of table, held apart from
+ * the route table so that routing_clear() ("stream off") leaves it alone.
+ * routing_gen_check() says whether it fits - ROUTE_ERR_DAC_BUSY when a
+ * recorded route already uses that DAC (ROUTE_STREAM's DAC2 triangle),
+ * the resource errors otherwise - without claiming; routing_gen_claim()
+ * checks and claims; routing_gen_release() gives it back. While claimed,
+ * routing_add()/routing_apply() refuse a route on the same DAC with
+ * ROUTE_ERR_DAC_BUSY and count the claim against every other limit, and
+ * routing_visit() reports it ("generator_dac"/"generator_n" before the
+ * resource table; nothing extra when no generator runs). */
+route_err_t routing_gen_check(uint8_t dac, uint32_t n);
+route_err_t routing_gen_claim(uint8_t dac, uint32_t n);
+void        routing_gen_release(void);
 
 #endif /* ROUTING_H */

@@ -72,6 +72,7 @@
 #include "timebase.h"
 #include "console.h"
 #include "diag.h"
+#include "siggen.h"     /* SG.3: stream off leaves a generator on DAC2 playing */
 
 /* ------------------------------------------------------------------ *
  * The ADC clock - the rate setters (capture.c until P9.4, 27.09.2026)
@@ -384,7 +385,12 @@ void acq_chain_restore(void)
     sccp1_count(false);
     adc_ch0_irq(false, false);
     acq_step_on = false;
-    dac2_off();
+    /* DAC2 off - unless the signal generator plays on it (SG.3): then
+     * "stream off" after the loop ("stream on <ksps> 5 3" reading RA8)
+     * must leave it playing. While it plays there, no route put a
+     * triangle on DAC2 (routing: ROUTE_ERR_DAC_BUSY), so there is none to
+     * take down. */
+    if (siggen_dac() != 2u) { dac2_off(); }
     clock_dac_select(CLOCK_DAC_PLL1_VCO);
     (void)capture_select_core(ADC_INSTANCE, ADC_PINSEL, ADC_SAMC);  /* burst mode again */
     (void)capture_set_pll(board_cfg.adc_pll_postdiv1, board_cfg.adc_pll_postdiv2);

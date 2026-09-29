@@ -75,6 +75,7 @@
  * the same narrow-header pattern the old chaintest_priv.h (P9.4, deleted by
  * P9.4b) used in the other direction. */
 #include "acquisition_priv.h"
+#include "siggen.h"     /* SG.3: stopped before the stages drive DAC2 */
 
 /* ------------------------------------------------------------------ *
  * Configuration
@@ -1081,6 +1082,7 @@ static void summary(void)
 
 void chain_all(uint32_t first, uint32_t last)
 {
+    siggen_stop();                    /* the stages drive DAC2 themselves (SG.3) */
     chain_stream_off();                       /* a running stream goes first */
     if (CHAIN_ON_SIMULATOR) {
         say("@S0.0 note=simulator_build_has_no_SCCP_ADC_DMA -> SKIP\r\n@END\r\n");
@@ -1133,6 +1135,7 @@ void chain_all(uint32_t first, uint32_t last)
 
 void chain_run(uint32_t ksps, uint32_t seconds)
 {
+    siggen_stop();                    /* DAC2's triangle is the signal (SG.3) */
     chain_stream_off();
     if (CHAIN_ON_SIMULATOR) {
         say("@S9.0 note=simulator_build -> SKIP\r\n");
