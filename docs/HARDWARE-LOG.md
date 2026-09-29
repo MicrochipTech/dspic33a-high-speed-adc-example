@@ -1868,3 +1868,20 @@ S6 measured the same loop at 3.0 cycles per sample (load 12.3 % at 8 MSPS), so t
 timing (Timer1, 80 ns ticks, around `process_buffer()`) does not run on the stream path, or
 it measures nothing. The GUI shows the budget only (200 MHz / actual rate = 1.25 x N) until
 this is found.
+
+## 2026-09-29, the GUI's trigger mode on real grabs - firmware 955c473, host branch `trigger` (e3f01ae), local (COM26)
+
+TRG.1-TRG.6 are host only (`tools/trigger.py`, `adc_gui.py`); no flash, the board ran the
+banner's `git 955c473`. Checked over COM26 (COM25, the board's second port, gives no
+console), without the page: `stream on 1000/4000/8000` (test input, DAC2 triangle on RA8),
+per rate and edge 10 `stream grab`s of N = 1024, level = the grab's (min + max) / 2,
+hysteresis 16, `trigger_window()` with L = 512 as `one_cycle()` calls it. Every one of the
+60 grabs found a crossing (k between 8 and 257, spread as expected for free-running grabs).
+Every window was resampled on the interpolated crossing and compared with the first grab
+of its series: rms 3.0-6.1 counts on average, at most 8.6, against 800-1210 untriggered -
+the triangle stands still at every rate and on both edges. `tri_eval()`/`grid_ok()` on the
+same halves: PASS 60/60, identical before and after the search (the half is not touched).
+Counters of the last grab per series 0/0/0 except at 8 MSPS: overrun 1 / missed 1 (rising)
+and missed 1 (falling), per grab cycle - the grab cycle's own halt/restart at 8 MSPS, not
+the trigger, which never reaches the board. Not run: the page itself against the board
+(the UI test covers it against `--fake`), and a custom input with an external signal.
