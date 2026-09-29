@@ -1021,6 +1021,7 @@ as" / "load as" name another file; `--settings <file>` starts with one.
 | `acquisition.ksps` | sample rate in kSPS; the board uses the nearest 160 MHz / N |
 | `acquisition.core`, `.pinsel`, `.samc` | the custom input: ADC core 1..5, PINSEL 0..15, sample time 0..31 |
 | `acquisition.interval_ms` | pause between two grabs in LIVE |
+| `trigger.on`, `.level`, `.slope`, `.hyst` | the time plot's trigger: on/off, level in ADC counts (2048), `rising`/`falling`, hysteresis in LSB (16) |
 | `buffer.size` | total ping-pong buffer (`buf`), even, 16..8192 |
 | `dac.1`, `dac.2` | `on`, `low`, `high`, `slpdat` of each DAC's triangle (DAC tiles). A change goes to the board by itself 0.8 s after the last one. DAC2's `on` can also be `"auto"` (standard): with the test input, `auto` is the firmware's own triangle (slope chosen per rate), `true` the card's triangle on RA8, `false` DAC2 off - a quiet channel; the card's state is resent after every `stream on` |
 | `fake.source` | what the stand-in plays in `--fake`, on either input: `dac2` (the test input: what RA8 carries; standard), `sine` or `dac1`. Switching the input picks `dac2` (test) or `sine` (custom); it can be changed after |
@@ -1048,6 +1049,18 @@ is not already streaming it starts it, grabs once, and stops it again; it is dis
 while live is running. With the test signal, an additional card shows the triangle
 verdict (see below); with any other input that card is hidden, since there is nothing to
 judge against a model.
+
+**trigger** (in the same card) makes the time plot stand still, like an oscilloscope:
+with it ticked, each grab is shown from the first point where the signal crosses the
+**level** (ADC counts, a dashed line in the plot) on the chosen **edge**; the
+**hysteresis** (LSB) must first be exceeded on the other side, so noise on a slow slope
+does not fire early. The plot then shows a fixed window of half the grabbed samples,
+x[k..k+N/2), with the crossing searched only in the first half - always a contiguous
+piece of the signal, never the end joined to the start. The x axis starts at the
+interpolated crossing. A chip reads `trig @ k`, or `no trigger` when the level is not
+crossed; the plot then shows the untriggered start (auto mode). Display only: the
+firmware, the stream, the FFT and the triangle verdict are untouched and keep the whole
+half; a change takes effect with the next grab (`tools/trigger.py`).
 
 Board limits from the last hardware run are shown as guidance under the rate field, not
 enforced: clean to about 8 MSPS with the CPU processing, occasional DMA overruns from
@@ -1089,8 +1102,10 @@ deliberately induced FAIL, can be seen without hardware. `python tools\adc_gui.p
 clean triangle grab that passes the grid check with the actual rate used as the FFT's
 fs, the second grab landing in the other buffer half (`from > 0`), a lost-sample grab
 that correctly fails, a custom-input grab with `slp=0` and a real FFT peak, a corrupted
-frame caught by its CRC, a truncated frame caught by the frame parser, and a target that
-never answers at all timing out rather than hanging. `tools/gui_ui_test.py` drives the
+frame caught by its CRC, a truncated frame caught by the frame parser, a target that
+never answers at all timing out rather than hanging, and the trigger (a sine of known
+phase, two stand-in grabs at different phases lining up, the hysteresis on a noisy
+slope, a level outside the signal, the triangle verdict unchanged). `tools/gui_ui_test.py` drives the
 page itself with a headless browser against `--fake` (see the header comment there for
 how to run it).
 

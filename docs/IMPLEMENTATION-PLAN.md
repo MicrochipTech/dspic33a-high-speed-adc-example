@@ -23,7 +23,7 @@ commit message stays the detailed record; this table is the one place to see whe
 work stands. `done` = committed and re-checked by the lead session (builds, `trace.bat`,
 `hosttest.bat`, goldens, no trailer).
 
-As of 29.09.2026 (DBG, TRG and SG planned, not started). Done: 51 of 52 tasks in the N+1 scope (63 planned plus P0.9 = 64; P8 and P10, 12
+As of 29.09.2026 (TRG.1-TRG.6 done on branch `trigger`; DBG, TRG.7 and SG planned, not started). Done: 51 of 52 tasks in the N+1 scope (63 planned plus P0.9 = 64; P8 and P10, 12
 tasks, moved to N+2 on 27.09.2026); P0.5b and P4.6a were added along the way and are
 not counted.
 
@@ -98,12 +98,12 @@ not counted.
 | DBG.1 `mem` command | open | | | after BR.9 (a firmware change invalidates B); one parser slot, address check before any access |
 | DBG.2 `tools/sym.py` | open | | | name -> address from the ELF/map and the pack; refuses a map that does not match the banner's revision |
 | DBG.3 Documentation, board-run integration | open | | | the `help` change is a reply-format change (BR rule) |
-| TRG.1 Search function | open | | | `find_trigger()` pure, hysteresis, search only in x[0..N-L] |
-| TRG.2 Controls | open | | | checkbox + level (+ edge) in the acquisition card, takes effect with the next grab |
-| TRG.3 Display | open | | | fixed window x[k..k+L), level line, "auto" when nothing is found; FFT/triangle keep the full half |
-| TRG.4 Self-test | open | | | `adc_gui.py --selftest` |
-| TRG.5 UI test | open | | | `gui_ui_test.py` (Playwright) |
-| TRG.6 Documentation | open | | | README GUI section, `adc_gui.py` row in CLAUDE.md |
+| TRG.1 Search function | done | this commit | Opus | `find_trigger()` pure, hysteresis, search only in x[0..N-L] |
+| TRG.2 Controls | done | this commit | Opus | checkbox + level (+ edge) in the acquisition card, takes effect with the next grab |
+| TRG.3 Display | done | this commit | Opus | fixed window x[k..k+L), level line, "auto" when nothing is found; FFT/triangle keep the full half |
+| TRG.4 Self-test | done | this commit | Opus | `adc_gui.py --selftest` |
+| TRG.5 UI test | done | this commit | Opus | `gui_ui_test.py` (Playwright) |
+| TRG.6 Documentation | done | this commit | Opus | README GUI section, `adc_gui.py` row in CLAUDE.md |
 | TRG.7 Firmware-side search (optional) | open | | | only if the frame rate is too low; after BR.9, into a B image |
 | SG.0 Datasheet check | open | | | window check on a RAM source, `DACxDAT` upper-half write, DAC rate limit, SCCP2 event and clock |
 | SG.1 `dma.c` channel 1 | open | | | shared `DMALOW`/`DMAHIGH`, no `DMACON.ON` toggle while channel 1 runs; ISR 42/0 |

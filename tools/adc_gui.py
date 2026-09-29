@@ -87,6 +87,9 @@ from protocol import ACK, NAK, crc16_ccitt_false, format_rtt, parse_grab_frame, 
 # fixed contract this codes against. No flashing here: that stays in
 # board_run.py / bench_client itself (the connection panel says so).
 import remote  # noqa: E402
+# Trigger mode of the time plot (TRG, docs/IMPLEMENTATION-PLAN.md): a pure
+# search over the grabbed half, no firmware or wire-protocol change.
+from trigger import RISING, FALLING, find_trigger, find_triggers, trigger_window  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +156,8 @@ SETTINGS_DEFAULTS = {
         "core": 3, "pinsel": 5, "samc": 0,
         "interval_ms": 500,
     },
+    # TRG: the time plot's trigger (display only, tools/trigger.py)
+    "trigger": {"on": False, "level": 2048, "slope": "rising", "hyst": 16},
     "buffer": {"size": 2048},
     "dac": {
         "1": {"on": False, "low": 0x100, "high": 0xF00, "slpdat": 8},
@@ -1466,6 +1471,75 @@ def selftest() -> int:
         print("remote: disconnect (close_tunnel) ends the tunnel subprocess:",
               "PASS" if ok_closed else "FAIL")
 
+    # ---- TRG.4: trigger mode of the time plot (tools/trigger.py) ----
+    # A sine of known phase: the crossing found is the expected one to
+    # within one sample (the interpolated one much closer).
+    period, phase = 37.3, 1.0
+    sine = [int(round(2048 + 1500 * math.sin(2 * math.pi * i / period + phase))) for i in range(1024)]
+    want = (2 * math.pi - phase) / (2 * math.pi) * period      # first rising zero after the trough
+    hit = find_trigger(sine, 2048, RISING, 16)
+    ok_trg_sine = hit is not None and abs(hit[0] - want) <= 1.0 and abs(hit[0] - 1 + hit[1] - want) < 0.1
+    fhit = find_trigger(sine, 2048, FALLING, 16)
+    want_f = want - period / 2 if want - period / 2 > 0 else want + period / 2
+    ok_trg_sine &= fhit is not None and abs(fhit[0] - 1 + fhit[1] - want_f) < 0.1
+    ok_all &= ok_trg_sine
+    print(f"trigger: sine of known phase, crossing expected at {want:.2f}, found "
+          f"{hit and hit[0] - 1 + hit[1]:.2f} (falling {want_f:.2f} / {fhit and fhit[0] - 1 + fhit[1]:.2f}) ->",
+          "PASS" if ok_trg_sine else "FAIL")
+
+    # Two FakeTarget grabs at different phases (its sine follows wall-clock
+    # time): the triggered windows agree around the crossing to within the
+    # noise, the untriggered ones do not.
+    tf = FakeTarget(signal_khz=25.0, amplitude=1500.0)
+    tf.cmd("stream on 8000 3 5 0")
+    wins, raws = [], []
+    for _ in range(2):
+        okg, sg, _m = tf.grab()
+        sg = [int(v) for v in sg]
+        L = len(sg) // 2
+        k, fr, found = trigger_window(sg, 2048, RISING, 16, L)
+        x0 = k - 1 + fr
+        xs = np.arange(k, k + L) - x0
+        wins.append((found, np.interp(np.arange(1, L - 1), xs, sg[k:k + L])))
+        raws.append(np.asarray(sg[:L], float))
+        time.sleep(0.013)
+    rms_trg = float(np.sqrt(np.mean((wins[0][1] - wins[1][1]) ** 2)))
+    rms_raw = float(np.sqrt(np.mean((raws[0] - raws[1]) ** 2)))
+    ok_trg_fake = wins[0][0] and wins[1][0] and rms_trg < 4 * tf.noise_std and rms_raw > 10 * rms_trg
+    ok_all &= ok_trg_fake
+    print(f"trigger: two fake grabs at different phases, rms difference triggered {rms_trg:.1f} "
+          f"vs untriggered {rms_raw:.1f} counts (noise {tf.noise_std}) ->", "PASS" if ok_trg_fake else "FAIL")
+
+    # A noisy slow slope: the hysteresis makes it exactly one crossing,
+    # without it the noise fires several times.
+    rng = np.random.default_rng(1)
+    ramp = [int(v) for v in np.round(1000 + np.arange(2000) + rng.normal(0, 4, 2000))]
+    n_hyst = len(list(find_triggers(ramp, 2048, RISING, 16)))
+    n_bare = len(list(find_triggers(ramp, 2048, RISING, 0)))
+    ok_trg_hyst = n_hyst == 1 and n_bare > 1
+    ok_all &= ok_trg_hyst
+    print(f"trigger: noisy slow slope, {n_hyst} crossing with hysteresis 16, {n_bare} without ->",
+          "PASS" if ok_trg_hyst else "FAIL")
+
+    # A level outside the signal: "no trigger", the untriggered start shown.
+    ok_trg_none = trigger_window(sine, 4000, RISING, 16) == (0, 0.0, False)
+    ok_all &= ok_trg_none
+    print("trigger: level outside the signal -> 'no trigger', window from 0:", "PASS" if ok_trg_none else "FAIL")
+
+    # The triangle verdict is the same with the trigger on and off: the
+    # evaluation keeps the full, unrotated half.
+    tt = FakeTarget()
+    tt.cmd("stream on 8000")
+    _ok, st, _m = tt.grab()
+    st = [int(v) for v in st]
+    before = chain_tri_eval(list(st))
+    copy = list(st)
+    trigger_window(st, 2048, RISING, 16)
+    after = chain_tri_eval(st)
+    ok_trg_tri = st == copy and before == after and chain_grid_ok(before) == chain_grid_ok(after)
+    ok_all &= ok_trg_tri
+    print("trigger: triangle verdict identical with the trigger on and off:", "PASS" if ok_trg_tri else "FAIL")
+
     # "documentation": the real docs/ARCHITECTURE.md, both diagrams linked
     # through the static route, each image file present next to it
     doc_md, doc_imgs = architecture_markdown()
@@ -1733,6 +1807,17 @@ def main_gui(args):
                 channel_info_lbl = ui.label().classes("text-xs text-slate-400")
                 samc_in = ui.number("SAMC · sample time (0..31)", value=0, min=0, max=31, step=1, format="%d").props("dense outlined")
                 interval_in = ui.number("grab interval, ms", value=500, min=50, max=5000, step=50, format="%d").props("dense outlined")
+                # TRG: display-only trigger - a change takes effect with the
+                # next grab, the stream itself is not touched
+                with ui.row().classes("w-full gap-2 items-center"):
+                    trig_cb = ui.checkbox("trigger", value=False)
+                    trig_level_in = ui.number("level (0..4095)", value=2048, min=0, max=4095, step=16,
+                                              format="%d").props("dense outlined").classes("flex-grow")
+                with ui.row().classes("w-full gap-2"):
+                    trig_slope_sel = ui.select({RISING: "rising edge", FALLING: "falling edge"},
+                                               value=RISING, label="edge").props("dense outlined")                         .classes("flex-grow")
+                    trig_hyst_in = ui.number("hysteresis, LSB", value=16, min=0, max=2048, step=1,
+                                             format="%d").props("dense outlined").classes("flex-grow")
                 with ui.row().classes("w-full gap-2"):
                     single_btn = ui.button("single", icon="camera").props("unelevated").classes("flex-grow")
                     live_btn = ui.button("live", icon="play_arrow").props("unelevated").classes("flex-grow")
@@ -1841,6 +1926,13 @@ def main_gui(args):
                         ui.tooltip(COUNTER_TIPS[_k]).style("font-size: 14px; max-width: 24rem;")
                 rate_chip = ui.chip("actual rate –", color="grey-8").props("dense outline")
                 halves_chip = ui.chip("halves/xfer –", color="grey-8").props("dense outline")
+                trig_chip = ui.chip("trigger off", color="grey-8").props("dense outline")
+                with trig_chip:
+                    ui.tooltip("Trigger mode of the time plot: 'trig @ k' = the level was crossed "
+                               "at sample k of the grabbed half and the plot starts there; 'no "
+                               "trigger' = not crossed in the searchable part, the plot shows the "
+                               "untriggered start (like an oscilloscope's auto mode)."
+                               ).style("font-size: 14px; max-width: 24rem;")
                 with rate_chip:
                     ui.tooltip("The frame's own 'ksps' - the nearest 160 MHz / N (CLKGEN13) the "
                                "chain actually runs at, not the number typed on the left. Used as "
@@ -2059,6 +2151,18 @@ def main_gui(args):
                   "test triangle."),
         (interval_in, "How often this page halts the chain for one grab, in milliseconds (plus "
                       "however long the transfer itself takes at the current baud rate)."),
+        (trig_cb, "Trigger the time plot: show every grab from the point where the signal "
+                  "first crosses the level, so a periodic signal stands still. Display only - "
+                  "the stream, the FFT and the triangle verdict keep the whole half. The plot "
+                  "then shows half the grabbed window, and the crossing is searched only in the "
+                  "first half, so the window shown is always contiguous."),
+        (trig_level_in, "Trigger level in ADC counts (0..4095), drawn as a dashed line in the "
+                        "time plot."),
+        (trig_slope_sel, "Which edge fires: rising (from below the level to at/above it) or "
+                         "falling."),
+        (trig_hyst_in, "Hysteresis in LSB: the signal must first go this far beyond the level "
+                       "on the other side before a crossing counts - keeps ADC noise on a slow "
+                       "slope from firing early."),
         (single_btn, "One grab: if the chain is not already streaming, start it first ('stream "
                      "on'), take one 'stream grab', then stop it again ('stream off'). Disabled "
                      "while LIVE is running - stop LIVE first."),
@@ -2140,6 +2244,9 @@ def main_gui(args):
                 "samc": custom_input()[2],
                 "interval_ms": int(interval_in.value or 500),
             },
+            "trigger": {"on": bool(trig_cb.value), "level": int(trig_level_in.value or 0),
+                        "slope": trig_slope_sel.value or RISING,
+                        "hyst": int(trig_hyst_in.value or 0)},
             "buffer": {"size": int(buf_in.value or 2048)},
             "dac": {str(u): {"on": dac_mode(u) if dac_mode(u) == "auto" else dac_mode(u) == "on",
                              "low": int(c["low"].value or 0),
@@ -2179,6 +2286,11 @@ def main_gui(args):
         rate_in.value = int(acq.get("ksps", 8000))
         core_sel.value, input_in.value, samc_in.value = ui_state["custom"]
         interval_in.value = int(acq.get("interval_ms", 500))
+        trg = cfg.get("trigger", {})
+        trig_cb.value = bool(trg.get("on", False))
+        trig_level_in.value = int(trg.get("level", 2048))
+        trig_slope_sel.value = trg.get("slope") if trg.get("slope") in (RISING, FALLING) else RISING
+        trig_hyst_in.value = int(trg.get("hyst", 16))
         buf_in.value = int(cfg.get("buffer", {}).get("size", 2048))
         for unit, c in dac_ui.items():
             d = cfg.get("dac", {}).get(str(unit), {})
@@ -2405,7 +2517,7 @@ def main_gui(args):
             f" return (s * {per!r}).toFixed(3) + ' {unit}<br/>'"
             " + '<b>' + c + '</b>&nbsp; ' + p[0].marker + ' '"
             f" + (c * {vref!r} / 4096).toFixed(3) + ' V<br/>'"
-            " + '<span style=\"color:#94a3b8\">sample ' + s + '</span>'; }")
+            " + '<span style=\"color:#94a3b8\">sample ' + (+s.toFixed(2)) + '</span>'; }")
         time_chart.update()
     vref_in.on_value_change(lambda e: update_time_tooltip())
     update_time_tooltip()
@@ -2748,11 +2860,36 @@ def main_gui(args):
             fs = meta["ksps"] * 1e3
             f, db = spectrum(samples, fs)
 
-            n_samp = max(len(samples) - 1, 1)
+            # TRG.3: with the trigger on, only the time plot changes - a
+            # fixed window of L = N/2 samples from the crossing, x = 0 at
+            # the (interpolated) crossing itself; FFT and triangle below
+            # keep the full half.
+            if trig_cb.value:
+                trig_level = int(trig_level_in.value or 0)
+                L = max(len(samples) // 2, 1)
+                k, frac, found = trigger_window(samples, trig_level, trig_slope_sel.value or RISING,
+                                                int(trig_hyst_in.value or 0), L)
+                x0 = (k - 1 + frac) if found else 0.0
+                plot = [[round(j - x0, 3), int(samples[j])] for j in range(k, k + L)]
+                n_samp = L
+                trig_chip.text = f"trig @ {k}" if found else "no trigger"
+                trig_chip.props(f'color={"positive" if found else "warning"}')
+                time_chart.options["series"][0]["markLine"] = {
+                    "silent": True, "symbol": "none", "label": {"show": False},
+                    "lineStyle": {"type": "dashed", "color": "#f59e0b", "width": 1},
+                    "data": [{"yAxis": trig_level}]}
+            else:
+                plot = [[i, int(v)] for i, v in enumerate(samples)]
+                n_samp = max(len(samples) - 1, 1)
+                trig_chip.text = "trigger off"
+                trig_chip.props("color=grey-8")
+                # emptied, not removed: the chart merges options, a removed
+                # key would leave the last line standing
+                time_chart.options["series"][0]["markLine"] = {"data": []}
             duration_s = n_samp / fs if fs > 0 else 1.0
             t_scale, t_name = ((1e6, "time (µs)") if duration_s < 1e-3 else
                                (1e3, "time (ms)") if duration_s < 1.0 else (1.0, "time (s)"))
-            time_chart.options["series"][0]["data"] = [[i, int(v)] for i, v in enumerate(samples)]
+            time_chart.options["series"][0]["data"] = plot
             time_chart.options["xAxis"][0]["max"] = n_samp
             time_chart.options["xAxis"][1]["max"] = duration_s * t_scale
             time_chart.options["xAxis"][1]["name"] = t_name

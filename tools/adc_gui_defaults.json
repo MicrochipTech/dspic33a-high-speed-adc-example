@@ -18,6 +18,12 @@
     "samc": 0,
     "interval_ms": 500
   },
+  "trigger": {
+    "on": false,
+    "level": 2048,
+    "slope": "rising",
+    "hyst": 16
+  },
   "buffer": {
     "size": 2048
   },

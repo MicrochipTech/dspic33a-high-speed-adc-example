@@ -167,6 +167,25 @@ try:
         triangle_card_visible = page.get_by_text("triangle verdict · test input only").is_visible()
         check("LIVE (custom input) hides the triangle verdict card", not triangle_card_visible)
 
+        # ---- TRG.5: trigger on while LIVE (chip "trig @", level line drawn), off again ----
+        trig_chip = page.locator(".q-chip").filter(has_text=re.compile(r"^(trigger off|trig @ \d+|no trigger)$")).first
+        tchart_trg = page.locator(".tile", has=page.locator(".card-title", has_text="time signal"))                          .locator(".nicegui-echart").first
+
+        def mark_line():
+            """The time series' markLine level as ECharts has it, or None."""
+            return page.evaluate(
+                "id => { const o = getElement(id).chart.getOption();"
+                " const m = o.series[0].markLine; return m && m.data && m.data.length"
+                " ? m.data[0].yAxis : null; }", int(tchart_trg.get_attribute("id")[1:]))
+        page.get_by_role("checkbox", name=re.compile(r"^trigger$", re.I)).click()
+        ok, txt = wait_text(page, trig_chip, r"^trig @ \d+$")
+        check("trigger on while LIVE: chip 'trig @ k' appears", ok, txt[:40])
+        lvl = mark_line()
+        check("trigger on: the level line is drawn at 2048", lvl == 2048, repr(lvl))
+        page.get_by_role("checkbox", name=re.compile(r"^trigger$", re.I)).click()
+        ok, txt = wait_text(page, trig_chip, r"^trigger off$")
+        check("trigger off again: chip 'trigger off', level line gone", ok and mark_line() is None, txt[:40])
+
         stop_btn.first.click()
         time.sleep(1.0)
 
