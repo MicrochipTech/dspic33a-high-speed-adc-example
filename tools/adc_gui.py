@@ -3100,6 +3100,18 @@ def main_gui(args):
         if not t:
             c["msg"].text = "not connected"
             return False
+        # The signal generator plays on this DAC: any "dac" command would
+        # stop it (cli.c: siggen_release_dac()). 'off'/'auto' leave it alone;
+        # only switching the card to 'on' replaces it with the triangle, and
+        # the generator card then says so.
+        sg = state.get("siggen")
+        if sg and sg["dac"] == unit:
+            if dac_mode(unit) != "on":
+                c["msg"].text = f"dac{unit}: the signal generator plays on it - not touched"
+                return True
+            state["siggen"] = None
+            sg_msg.text = f"off - dac{unit}'s triangle replaced it"
+            sg_on_sel.set_value(False)
         if dac_mode(unit) != "on":            # 'auto' outside the test input = off
             cmd = f"dac {unit} off"
         else:
@@ -3166,7 +3178,8 @@ def main_gui(args):
         custom (non-test) input needs, since 'stream on <ksps> <core>
         <pinsel> <samc>' leaves the DAC alone on purpose (chaintest.c)."""
         for u in sorted(dac_ui):
-            if dac_mode(u) == "on":
+            sg = state.get("siggen")
+            if dac_mode(u) == "on" and not (sg and sg["dac"] == u):   # the generator keeps its DAC
                 await send_dac(u)
 
     # ---- the signal generator card (SG.6) ----
@@ -3215,6 +3228,16 @@ def main_gui(args):
             ui.notify(sg_msg.text, type="negative")
             return
         reply, ok = [], True
+        # The test input runs its own triangle on DAC2, and the board refuses
+        # the generator on DAC2 while it does (routing: ROUTE_ERR_DAC_BUSY) -
+        # stop that stream first; the next cycle starts the chain again with
+        # whatever input the acquisition card says.
+        if p["on"] and p["dac"] == 2 and (state["acq_active"] or {}).get("mode") == "test":
+            while state["busy"]:
+                await asyncio.sleep(0.05)
+            async with port_lock:
+                await run.io_bound(t.cmd, "stream off")
+            state["acq_active"] = None
         async with port_lock:
             for x in lines:
                 ok, reply = await run.io_bound(t.cmd, x)
@@ -3272,6 +3295,9 @@ def main_gui(args):
             sg_h_in[k].value = 0.3 if k == 3 else 0.0
         sg_decay_in.value, sg_amp_in.value, sg_lo_in.value, sg_hi_in.value = 0, 1.0, 800, 3500
         sg_snap_cb.value = True
+        # DAC2's own card off ('auto'): an 'on' there would be sent after the
+        # next 'stream on' and replace the generator with its triangle
+        dac_ui[2]["on"].value = "auto"
         input_mode_sel.value = "custom"
         core_sel.value = 5
         input_in.value = 3

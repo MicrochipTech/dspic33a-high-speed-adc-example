@@ -385,6 +385,12 @@ try:
         # ---- SG.7: the signal generator card - loop preset, LIVE, the loop
         # chip and the overlay, generator off again ----
         loop_chip = page.locator(".q-chip").filter(has_text=re.compile(r"^loop ")).first
+        # the case that hid the generator on 29.09.2026: DAC2's own card left
+        # 'on' from an earlier session - its triangle must not replace the
+        # generator after the loop preset's 'stream on'
+        page.get_by_label(re.compile(r"^dac2$", re.I)).click()
+        page.get_by_role("option", name="on", exact=True).click()
+        time.sleep(1.5)
         page.get_by_role("button", name=re.compile(r"^\W*loop preset$", re.I)).click()
         time.sleep(1.5)
         live.click()
