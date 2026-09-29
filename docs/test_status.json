@@ -15,10 +15,10 @@
     "          amber again (the code changed after it was tested).",
     "rev/run:  written by --apply-run: the B image's git revision and the session zip."
   ],
-  "as_of": "28.09.2026, before the first board run after N+1",
+  "as_of": "29.09.2026, after run 20 - no box changed; three later fixes checked by hand",
   "boxes": {
-    "adc_gui.py": {"status": "never", "offboard": true, "blocks": [], "open": ["the GUI itself on a board (LIVE loop, cards)"], "files": ["tools/adc_gui.py"]},
-    "adc_gui.py (host)": {"status": "never", "offboard": true, "blocks": [], "open": ["the GUI itself on a board (LIVE loop, cards)"], "files": ["tools/adc_gui.py"]},
+    "adc_gui.py": {"status": "never", "offboard": true, "blocks": [], "open": ["the GUI itself in a board-run block - checked by hand 29.09.2026 (DAC cards with force, buffer tile, DISCONNECT during LIVE), not by a block"], "files": ["tools/adc_gui.py"]},
+    "adc_gui.py (host)": {"status": "never", "offboard": true, "blocks": [], "open": ["the GUI itself in a board-run block - checked by hand 29.09.2026 (DAC cards with force, buffer tile, DISCONNECT during LIVE), not by a block"], "files": ["tools/adc_gui.py"]},
     "board_run.py · eval_board.py": {"status": "never", "offboard": true, "blocks": ["R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7"], "open": [], "files": ["tools/board_run.py", "tools/eval_board.py"]},
     "remote.py → bench_client": {"status": "never", "offboard": true, "blocks": [], "open": ["a --remote run against the real relay"], "files": ["tools/remote.py"]},
 
@@ -57,7 +57,7 @@
     "dma.c": {"status": "restructured", "offboard": true, "blocks": ["R1", "R2", "R3", "R4", "R5"], "open": [], "files": ["src/drivers/dma.c", "src/drivers/dma.h"]},
     "_DMA0Interrupt": {"status": "proven", "offboard": true, "blocks": ["R2", "R4", "R5"], "open": [], "files": []},
     "sccp.c": {"status": "restructured", "offboard": true, "blocks": ["R1", "R2", "R4", "R5"], "open": [], "files": ["src/drivers/sccp.c", "src/drivers/sccp.h"]},
-    "dac.c": {"status": "restructured", "offboard": true, "blocks": ["R1", "R2", "R3", "R4"], "open": ["dac 1 (DACOUT1 = RA1) - the GUI has a DAC1 card"], "files": ["src/drivers/dac.c", "src/drivers/dac.h"]},
+    "dac.c": {"status": "restructured", "offboard": true, "blocks": ["R1", "R2", "R3", "R4"], "open": ["dac 1 (DACOUT1 = RA1) - the GUI has a DAC1 card", "dac ... force (dac_triangle_force()) - checked by hand 29.09.2026, no block sends it"], "files": ["src/drivers/dac.c", "src/drivers/dac.h"]},
     "uart.c": {"status": "restructured", "offboard": true, "blocks": ["R0", "R4", "R5"], "open": [], "files": ["src/drivers/uart.c", "src/drivers/uart.h"]},
     "uart.c · UART2": {"status": "restructured", "offboard": true, "blocks": ["R4", "R5"], "open": [], "files": ["src/drivers/uart.c"]},
     "timebase.c": {"status": "proven", "offboard": true, "blocks": ["R2", "R3"], "open": [], "files": ["src/drivers/timebase.c", "src/drivers/timebase.h"]},

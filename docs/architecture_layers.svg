@@ -38,7 +38,7 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 <text class="lf" x="24" y="56">tools/</text>
 <text class="lf" x="24" y="69">off-target</text>
 <rect class="bx s-host dash" x="170" y="26" width="233" height="44" rx="4"/>
-<circle class="st-never" cx="392" cy="37" r="5"><title>never ran on silicon; open: the GUI itself on a board (LIVE loop, cards)</title></circle>
+<circle class="st-never" cx="392" cy="37" r="5"><title>never ran on silicon; open: the GUI itself in a board-run block - checked by hand 29.09.2026 (DAC cards with force, buffer tile, DISCONNECT during LIVE), not by a block</title></circle>
 <text class="t" x="180" y="45">adc_gui.py</text>
 <text class="s" x="180" y="59">NiceGUI: stream on / grab, time + FFT</text>
 <rect class="bx s-host dash" x="415" y="26" width="233" height="44" rx="4"/>
@@ -217,7 +217,7 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 <text class="s" x="546" y="769">on CLKGEN13</text>
 <text class="s" x="546" y="783">160 MHz</text>
 <rect class="bx s-drv" x="658" y="632" width="110" height="62" rx="4"/>
-<circle class="st-restructured" cx="757" cy="643" r="5"><title>ran on silicon, code changed since - to be tested; open: dac 1 (DACOUT1 = RA1) - the GUI has a DAC1 card</title></circle>
+<circle class="st-restructured" cx="757" cy="643" r="5"><title>ran on silicon, code changed since - to be tested; open: dac 1 (DACOUT1 = RA1) - the GUI has a DAC1 card; dac ... force (dac_triangle_force()) - checked by hand 29.09.2026, no block sends it</title></circle>
 <text class="t" x="668" y="653">dac.c</text>
 <text class="s" x="668" y="667">DAC1/2 triangle</text>
 <text class="s" x="668" y="681">UREF route</text>
@@ -258,7 +258,7 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 
 <text class="t" x="1034" y="762">LED0</text>
 <text class="s" x="1034" y="776">heartbeat</text>
-<text class="s" x="20" y="838">Test status, 28.09.2026, before the first board run after N+1 (docs/TEST-COVERAGE.md):</text>
+<text class="s" x="20" y="838">Test status, 29.09.2026, after run 20 - no box changed; three later fixes checked by hand (docs/TEST-COVERAGE.md):</text>
 <circle class="st-proven" cx="26" cy="854" r="5"/>
 <text class="s" x="36" y="858">fully tested on silicon</text>
 <circle class="st-restructured" cx="184" cy="854" r="5"/>

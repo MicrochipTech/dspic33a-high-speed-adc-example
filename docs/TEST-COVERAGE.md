@@ -1,7 +1,8 @@
 # Test Coverage: which module the board run tests, and what it leaves out
 
-As of 28.09.2026, before the first board run after N+1 (phase BR,
-`docs/IMPLEMENTATION-PLAN.md`). One row per module of `CLAUDE.md`'s module table:
+As of 29.09.2026, after run 20 - the first board run after N+1 (phase BR,
+`docs/IMPLEMENTATION-PLAN.md`; `docs/HARDWARE-LOG.md` 29.09.2026) - and three changes
+checked by hand on the board the same day (below, "Since run 20"). One row per module of `CLAUDE.md`'s module table:
 where it stood on silicon before N+1, what N+1 did to it, which board-run block
 (`tools/board_run.py`, R0..R7) exercises it, what no block reaches, and which test
 without a board covers it (**Off-board**: `tools\hosttest.bat`'s host tests, `tools\trace.bat`'s
@@ -20,7 +21,8 @@ scenario that only links a module without calling it does not count.
 **The blocks** (A and B identical unless noted): R0 `sync`/`version`/`help`/`status` -
 R1 `regs` - R2 `chain all` (S0..S9) - R3 `test all` (self, clock, clkoff, bursts, sweep,
 matrix, dac) - R4 `stream on` at 1/4/8 MSPS, >= 50 `stream grab` each, then R4.gui (`buf 512`,
-`stream on 4000`, `dac 2 on 256 3000 39`, 10 grabs, everything restored) - R5 `stream on
+`stream on 4000`, `dac 2 on 256 3000 39`, 10 grabs that must each carry 512 samples,
+everything restored) - R5 `stream on
 1000 3 5 0` (core 3, PINSEL 5), 10 grabs - R6 `route list` (B only) - R7 `status`.
 
 Every block needs boot and console, so `main.c`, `config_bits.c`, `clock.c`'s
@@ -35,6 +37,25 @@ and `open`), and draws a green box amber again as soon as its files change after
 revision it was tested at. When a gap in the "Not reached" column is closed, remove it
 from that box's `open` list too.
 
+## Since run 20 (29.09.2026)
+
+**Run 20 turned no box green**: `gen_architecture.py --apply-run
+docs/logs/run20-BR-remote-20260929.zip` finds B deviating or timing out in R0-R4 for every
+box that was not already green, so the status column below is unchanged by it. Three
+changes since, each checked by hand on the board (EV74H48A, `docs/HARDWARE-LOG.md`) but
+by no board-run block yet:
+
+| Change | Modules | Checked on the board | In a block |
+|---|---|---|---|
+| `dac ... force` - any DAC value, past the p1422 limits; the refusal names the broken limit | `dac.c` (`dac_triangle_force()`, `dac_triangle_limits_ok()`), `cli.c` | 79f3340, remote: refused without, taken with `force` | no - R4.gui sends `dac 2 on` without `force` |
+| `stream on` keeps the length `buf` chose (it went back to 1024) | `acquisition.c` (`acq_chain_setup_input()`) | 955c473, local: `buf 256` -> grab n=256, `buf 1024` -> n=1024 | R4.gui checks the grab length since 29.09.2026 - A (b41af3b) has the fault and will FAIL it |
+| the GUI's DAC cards, buffer tile, DISCONNECT during LIVE | `adc_gui.py` | by hand, both | no block runs the GUI itself |
+
+R4.gui missed the `buf` fault in run 20: it judged `buf` by its reply ("samples per
+half: 512"), not by the grabs that followed. It now requires every grab to carry the
+length `buf` set; `board_run.py --selftest` checks both a board that honours it and one
+that accepts `buf` and ignores it.
+
 ## Drivers (`src/drivers/`, `src/sim/`)
 
 | Module | Before N+1 | N+1 change | Tested by | Off-board | Not reached |
@@ -43,7 +64,7 @@ from that box's `open` list too.
 | `adc.c` | proven (runs 14-19) | restructured - P4.5: port layer, `adc_init()` takes the buffer length as a parameter | R1, R2, R3, R4, R5 (core 3) | trace `boot`, `b2b`, `variants`, `stream_on*`, `regs`, `nano` | cores 1, 2, 4 in triggered mode |
 | `dma.c` | proven (run 19: 8 MSPS, 0 overrun) | restructured - P4.6: buffer check, trace and dump through the port layer; `_DMA0Interrupt` unchanged, 42 instructions | R1, R2 S3/S4/S6/S9, R3, R4, R5 | trace `boot`, `b2b`, `stream_on*`, `regs`; ISR by `fncmp` (42/0) | the address-error and bus-error branches (fault only) |
 | `sccp.c` | proven (run 18 S2, run 19) | restructured - P4.3: register dump through the port layer | R1, R2 S1/S2/S4, R4, R5 | trace `sccp`, `variants`, `stream_on*` | output-compare mode (a known instrument fault, not used) |
-| `dac.c` | proven (DAC triangle, runs 14/19) | restructured - P4.4: register dump through the port layer | R1, R2 S2/S5, R3 dac, R4 (`slp > 0`), R4.gui (`dac 2 on ...`) | trace `dac` (the only golden with a DAC slope) | DAC1 on RA1 |
+| `dac.c` | proven (DAC triangle, runs 14/19) | restructured - P4.4: register dump through the port layer; 29.09.2026 `dac_triangle_force()`/`_limits_ok()` | R1, R2 S2/S5, R3 dac, R4 (`slp > 0`), R4.gui (`dac 2 on ...`) | trace `dac` (the only golden with a DAC slope) | DAC1 on RA1; the `force` path (by hand only) |
 | `uart.c` | proven as part of `cli.c` | restructured - P5.1: out of `cli.c`, receive ISR 65 -> 55 instructions | every block; R4/R5: binary frames while the DMA interrupt runs | [SMOKE] transmit; receive ISR none (the simulator takes no injected bytes), `fncmp` 55/0 | `console_force_up()`'s PPS/TRIS path (clock-fail only; no golden trace covers it either) |
 | `timebase.c` | proven | none (P4.2: already compliant) | R2 S0/S1, R3 rate/sweep | trace `timebase` | - |
 | `led.c` | proven | none | toggled by `capture_service()` in R2/R4 | trace (linked in the capture scenarios) | nothing reads it back; visual only |
@@ -67,7 +88,7 @@ from that box's `open` list too.
 | `capture.c` | proven (run 19) | restructured - P9.1/P9.3/P9.4: ping-pong, meters and rate setters moved out; the processing loop rewritten after run 19 (32-bit reads, unrolled) | R2 S6/S9, R3, R4, R5 | trace `boot`, `b2b`, `stream_on*`; [SIM] ping-pong | - |
 | `capture_chain_halt()`/`_resume()` | never | - | R4, R5 (every grab) | none | - |
 | `pingpong.c` | proven as part of `capture.c` | restructured - P9.1: own file, `static inline` in the ISR | R2 S6/S9, R4, R5 | host `test_pingpong`; [SIM] | - |
-| `acquisition.c` | proven as parts of `capture.c`/`chaintest.c` | restructured - P9.4/P9.4b: rate setters, variant matrix, standing stream and chain setup moved in; P11.3/P11.4: `stream on` through `routing_apply()` | R2 (`acq_chain_setup()`), R3 (rate setters, matrix), R4, R5 | trace `b2b`, `clk`, `variants`, `stream_on`, `stream_on_input`, `route_stream` | - |
+| `acquisition.c` | proven as parts of `capture.c`/`chaintest.c` | restructured - P9.4/P9.4b: rate setters, variant matrix, standing stream and chain setup moved in; P11.3/P11.4: `stream on` through `routing_apply()`; 29.09.2026 `stream on` keeps `buf`'s length | R2 (`acq_chain_setup()`), R3 (rate setters, matrix), R4, R4.gui (grab length after `buf`), R5 | trace `b2b`, `clk`, `variants`, `stream_on`, `stream_on_input`, `route_stream` | - |
 | `routing.c` | never (new, P11) | P11.1-P11.5 | R4 (`ROUTE_STREAM`), R5 (custom route, pin reachability), R6 (`route list`) | host `test_routing` (every rule, pass and trigger); trace `route_stream` | every conflict refusal (host test only); `ROUTE_B2B` is data only |
 | `port_impl.c` | never (new, P4) | P4.1/P4.7 | indirectly by every block | trace, every scenario; `fail` proves the hook order | `clock_fail_hook()` (clock-fail only) |
 
@@ -75,7 +96,7 @@ from that box's `open` list too.
 
 | Module | Before N+1 | N+1 change | Tested by | Off-board | Not reached |
 |---|---|---|---|---|---|
-| `cli.c` | proven | restructured - P5/P6: UART, bench, link split out; P11.5 `route`; BR.6 eleven new `status` fields | R0, R6, R7 | [SMOKE] `help`, `version`, `status` | most single commands (see "Commands" below) |
+| `cli.c` | proven | restructured - P5/P6: UART, bench, link split out; P11.5 `route`; BR.6 eleven new `status` fields; 29.09.2026 `dac ... force` and a precise refusal | R0, R6, R7 | [SMOKE] `help`, `version`, `status` | most single commands (see "Commands" below) |
 | `cmd_parser.c` | proven | none (32 slots as before) | every block | [SMOKE] | - |
 | `gui_link.c` | never as a file; `blk` never on silicon either | new - P6.4 | R4, R5 (`stream grab`) | none (the GUI's grab only against its Python stand-in) | `snap`, `rate`, `blk`: no block sends them |
 
@@ -106,7 +127,7 @@ from that box's `open` list too.
 |---|---|---|---|---|
 | `protocol.py` (`Target`, `parse_grab_frame()`) | never against a board | R4, R5 - the GUI's own grab code | `test_protocol.py` (incl. a real socket loopback) | - |
 | `board_run.py`, `eval_board.py` | never against a board (self-tests only) | the run itself | `--selftest` each (local and `--remote` against `fake_bench_client.py`) | `--remote` against the real relay |
-| `adc_gui.py` | never against a board | - | `--selftest`, `gui_ui_test.py` (Playwright against `--fake`) | the GUI itself: its `dac` and `buf` commands and the LIVE loop (R4 only runs its protocol code) |
+| `adc_gui.py` | never against a board | by hand on the board 29.09.2026 (DAC cards with `force`, buffer tile, DISCONNECT during LIVE, remote and local) - no block | `--selftest` (incl. `dac force`, `buf` refused while streaming then taken), `gui_ui_test.py` (Playwright against `--fake`, incl. DISCONNECT during LIVE) | the GUI itself in a board-run block (R4 only runs its protocol code) |
 
 ## Commands no block sends
 
@@ -115,7 +136,8 @@ all`, `test all`, `stream on|off|grab` and `route list`. Not sent, although the 
 behind some of them runs inside another block:
 
 - **used by the GUI:** `dac 2 on|off ...` and `buf [n]` - covered by R4.gui since
-  28.09.2026 (DAC1, `dac 1 ...`, still not).
+  28.09.2026, `buf`'s effect on the grab length since 29.09.2026 (DAC1, `dac 1 ...`, and
+  `dac ... force` still not).
 - **back-to-back transfer:** `snap`, `rate`, `blk`, `dump` - the only callers of
   `gui_link.c`'s back-to-back half and of `frame_send()`'s `blk` framing.
 - **single settings:** `start`, `stop`, `samc`, `input`, `core`, `clk`, `pll`, `led`,

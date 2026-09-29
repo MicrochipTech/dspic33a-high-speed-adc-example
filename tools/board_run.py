@@ -495,7 +495,7 @@ def _stream_grabs(target, log, block, label, n_grabs, check_triangle, fail_frame
             log.ev(block, f"grab {i}: no triangle check (slp=0)")
         elif not ok:
             log.ev(block, f"grab {i}: {meta.get('error')}")
-        grabs.append(dict(ok=ok, verdict=verdict, meta=meta))
+        grabs.append(dict(ok=ok, verdict=verdict, meta=meta, n=len(samples)))
         if (not ok) or verdict == "FAIL":
             ok_all = False
             name = f"{label}-grab-{len(fail_frames) + 1}.bin"
@@ -515,7 +515,11 @@ def _r4_gui(target, log, sub, label, fail_frames):
     first>"). No triangle verdict on these grabs: the frame's slp still
     reports the firmware's triangle, not the one "dac" replaced it with -
     the GUI's own triangle card has the same caveat (state["test_dac2"]).
-    CRC and the ov/late/missed deltas are judged as in every grab."""
+    CRC and the ov/late/missed deltas are judged as in every grab - and,
+    since 29.09.2026, every grab's length: "buf <n>" sets samples per half,
+    so each grab must carry exactly n samples. Until 955c473 the firmware
+    accepted "buf" and the next "stream on" undid it (grabs stayed 1024);
+    the reply to "buf" alone never showed that."""
     ok_q, q_lines = send(target, log, sub, "buf", timeout=TIMEOUT_CMD)
     m = next((_BUF_HALF_RE.search(l) for l in q_lines if _BUF_HALF_RE.search(l)), None)
     orig = int(m.group(1)) if m else None
@@ -530,9 +534,13 @@ def _r4_gui(target, log, sub, label, fail_frames):
     ok_r = True
     if orig is not None:
         ok_r, _ = send(target, log, sub, f"buf {orig}", timeout=TIMEOUT_CMD)
-    ok = all((ok_q, orig is not None, ok_b, ok_on, ok_d, ok_g, ok_doff, ok_off, ok_r))
+    ok_n = bool(grabs) and all(g["n"] == R4_GUI_BUF for g in grabs if g["ok"])
+    if grabs and not ok_n:
+        log.ev(sub, f"buf {R4_GUI_BUF} not in effect: grab lengths "
+                    f"{sorted({g['n'] for g in grabs if g['ok']})}")
+    ok = all((ok_q, orig is not None, ok_b, ok_on, ok_d, ok_g, ok_n, ok_doff, ok_off, ok_r))
     return ok, dict(ksps=R4_GUI_KSPS, gui=True, buf=R4_GUI_BUF, buf_restored=orig,
-                    on_ok=ok_on, dac_ok=ok_d, grabs=grabs, off_ok=ok_off)
+                    on_ok=ok_on, dac_ok=ok_d, grabs=grabs, off_ok=ok_off, buf_in_effect=ok_n)
 
 
 def run_r4(target, log, caps, ui, label, fail_frames, remote=False):
@@ -1314,6 +1322,9 @@ class ReplayTarget:
         ]
 
     half_len = 1024     # "buf" state, as cli.c's capture_half_len() reports it
+    # True: grabs carry half_len samples, as 955c473's firmware does. False: a
+    # fixed 512, whatever "buf" said - the pre-955c473 fault R4.gui must catch.
+    buf_follows = True
     dac_log = None
 
     def cmd(self, line, timeout=5.0):
@@ -1410,7 +1421,7 @@ class ReplayTarget:
             return header, b"", tail
         i = self._grab_i.get(self.chain_ksps, 0)
         self._grab_i[self.chain_ksps] = i + 1
-        n = 512
+        n = self.half_len if self.buf_follows else getattr(self, "_fixed_n", 512)
         if self.chain_test:
             slp = 20
             samples = chain_synth(n, 30.0, phase=float((i * 7) % 60 or 1), seed=i + 1)
@@ -1483,6 +1494,20 @@ def selftest():
           and target_b.dac_log == [R4_GUI_DAC, "dac 2 off"])
     check("B: R4.gui's buf was sent while stopped (no refusal in the log)",
           not any("stop the stream first" in l for l in log_b.lines))
+    check("B: R4.gui's grabs carry the buf length (n = 512)",
+          len(gui_b) == 1 and gui_b[0]["buf_in_effect"]
+          and all(g["n"] == R4_GUI_BUF for g in gui_b[0]["grabs"]))
+    # The pre-955c473 fault: "buf" accepted, the next "stream on" back to
+    # the full length. R4.gui must fail on it, not pass on the reply alone.
+    t_bad = ReplayTarget("B", has_route=True)
+    t_bad.buf_follows = False
+    t_bad.half_len = 1024
+    t_bad._fixed_n = 1024
+    log_bad = RunLog()
+    ok_bad, gui_bad = _r4_gui(t_bad, log_bad, "R4.gui", "X", [])
+    check("R4.gui FAILS when buf is accepted but grabs keep another length",
+          not ok_bad and not gui_bad["buf_in_effect"]
+          and any("not in effect" in l for l in log_bad.lines))
     check("BR.6: B's status carries the new fields, A's does not",
           any("stack_free_pct: 90" in l for l in log_b.lines)
           and not any("stack_free_pct" in l for l in log_a.lines))

@@ -113,7 +113,7 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 <text class="s" x="990" y="322">capture.c</text>
 <text class="s" x="990" y="336">→ pingpong_on_half()</text>
 <rect class="bx s-host dash" x="200" y="390" width="200" height="56" rx="4"/>
-<circle class="st-never" cx="389" cy="401" r="5"><title>never ran on silicon; open: the GUI itself on a board (LIVE loop, cards)</title></circle>
+<circle class="st-never" cx="389" cy="401" r="5"><title>never ran on silicon; open: the GUI itself in a board-run block - checked by hand 29.09.2026 (DAC cards with force, buffer tile, DISCONNECT during LIVE), not by a block</title></circle>
 <text class="t" x="210" y="415">adc_gui.py (host)</text>
 <text class="s" x="210" y="429">time signal, FFT, tri_eval</text>
 <rect class="bx s-drv" x="450" y="390" width="200" height="56" rx="4"/>
@@ -144,7 +144,7 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 <text class="an" x="862" y="244">HALF / DONE</text>
 <text class="an" x="1072" y="372">ready_half</text>
 <text class="an" x="308" y="372">command</text>
-<text class="s" x="20" y="494">Test status, 28.09.2026, before the first board run after N+1 (docs/TEST-COVERAGE.md):</text>
+<text class="s" x="20" y="494">Test status, 29.09.2026, after run 20 - no box changed; three later fixes checked by hand (docs/TEST-COVERAGE.md):</text>
 <circle class="st-proven" cx="26" cy="510" r="5"/>
 <text class="s" x="36" y="514">fully tested on silicon</text>
 <circle class="st-restructured" cx="184" cy="510" r="5"/>
