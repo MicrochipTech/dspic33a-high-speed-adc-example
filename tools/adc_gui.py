@@ -2425,12 +2425,28 @@ def main_gui(args):
         # connect stalled NiceGUI's event loop long enough for the browser
         # to show "Connection lost. Trying to reconnect..." (28.09.2026).
         if state["target"]:
-            push_log(f"--- disconnected: {state['target'].port} ---")
+            t = state["target"]
+            push_log(f"--- disconnected: {t.port} ---")
             state["live"] = False
             live_btn.text, live_btn.icon = "live", "play_arrow"
             single_btn.enable()
-            state["target"].close()
-            state["target"] = None
+            # Closing the port under a grab still reading it in its io_bound
+            # thread gave "cycle failed: ClearCommError failed (OSError 9,
+            # handle is invalid)" (29.09.2026). So: wait for that cycle to
+            # finish, take the port lock, stop the board's stream (it would
+            # keep running otherwise), and only then close.
+            for _ in range(100):                   # up to 10 s; a grab takes < 2 s
+                if not state["busy"]:
+                    break
+                await asyncio.sleep(0.1)
+            async with port_lock:
+                if state["acq_active"] is not None:
+                    try:
+                        await run.io_bound(t.cmd, "stream off")
+                    except Exception as ex:
+                        push_log(f"--- stream off on disconnect failed: {ex} ---")
+                state["target"] = None
+                await run.io_bound(t.close)
             if state["remote_bench"]:
                 push_log("--- closing the remote tunnel ---")
                 state["remote_bench"].close_tunnel()

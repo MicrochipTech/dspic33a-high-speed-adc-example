@@ -362,6 +362,17 @@ try:
               shown and len(widths) >= 2 and all(w > 0 for w in widths), f"shown={shown} widths={widths}")
         page.screenshot(path=SCREENSHOT.replace(".png", "_docs.png"))
         page.keyboard.press("Escape")
+
+        # ---- DISCONNECT while LIVE: waits for the running grab, no
+        # "cycle failed" (29.09.2026: the port was closed under a grab) ----
+        time.sleep(0.5)
+        live.click()
+        wait_text(page, cyc, r"^grab \d")
+        page.get_by_role("button", name=re.compile(r"^\W*disconnect$", re.I)).click()
+        time.sleep(3.0)
+        chip_txt = page.get_by_text("not connected").count()
+        check("DISCONNECT while LIVE: no 'cycle failed', not connected",
+              chip_txt >= 1 and not cyc.inner_text().startswith("cycle failed"), cyc.inner_text()[:100])
         b.close()
 finally:
     gui.terminate()
