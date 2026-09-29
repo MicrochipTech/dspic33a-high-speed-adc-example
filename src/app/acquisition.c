@@ -384,10 +384,10 @@ void acq_chain_restore(void)
 }
 
 /* Pick SLPDAT so that one slope lasts about SLOPE_TARGET samples at this
- * rate, with the widest range the limits allow: DACLOW >= 0xCD + SLPDAT
- * and DACDAT <= 0xF32 - SLPDAT (note 1 of Example 18-3, p1422), 32 codes
- * of margin inside that. The slope in samples is
- *   span * 32 * rate / (SLPDAT * F_DAC),   span = 0xE65 - 2 * SLPDAT - 64,
+ * rate: DACLOW is TRI_LOW (below), DACDAT <= 0xF32 - SLPDAT (note 1 of
+ * Example 18-3, p1422) with 32 codes of margin; TRI_LOW is far above the
+ * other limit, DACLOW >= 0xCD + SLPDAT. The slope in samples is
+ *   span * 32 * rate / (SLPDAT * F_DAC),   span = 0xF32 - 32 - TRI_LOW - SLPDAT,
  * which falls as SLPDAT rises, so the first SLPDAT at or below the target
  * is taken. 128 samples: short enough for about 16 turning points per
  * window, so that a fault almost anywhere in it is enclosed by four of
@@ -398,19 +398,30 @@ void acq_chain_restore(void)
  * 100 kSPS the slowest triangle the DAC makes lasts only about 29
  * samples per slope; that is what it gets there. */
 #define SLOPE_TARGET  128u
+/* The triangle's lower end, fixed (29.09.2026, run 20): with DACLOW at
+ * 0xCD + SLPDAT + 32 (240 at 1 MSPS) the signal on RA8 lost its lower end
+ * a few hundred ms after the start - flat at about 630-670 counts for up
+ * to 98 samples per trough, the turning points shifted, and about half of
+ * all "stream grab" windows failed the grid check (A and B alike; S5 never
+ * saw it, it measures 1 ms after starting the triangle). Measured on the
+ * board, 3 s after the start: DACLOW 600 still flat for 21 samples, 900
+ * and 1200 clean (5 samples at the minimum, like the peak). 0x400 leaves
+ * margin above 900. The upper end is unchanged: it was never clipped. */
+#define TRI_LOW  0x400u
+
 bool acq_triangle_for(uint32_t rate, uint16_t *slp_out)
 {
     const uint32_t f = clock_dac_hz();
     if (f == 0u) { return false; }
-    const uint32_t full = DAC_CODE_MAX - DAC_CODE_MIN - 64u;       /* 3621 */
+    const uint32_t full = DAC_CODE_MAX - 32u - TRI_LOW;            /* 2834 */
     uint32_t s = 1u;
-    for (; (2u * s + 64u) < full; s++) {
-        const uint64_t span = full - 2u * s;
+    for (; (s + 64u) < full; s++) {
+        const uint64_t span = full - s;
         const uint64_t samples = span * 32u * rate / ((uint64_t)s * f);
         if (samples <= SLOPE_TARGET) { break; }
     }
     *slp_out = (uint16_t)s;
-    return dac2_triangle_start((uint16_t)(DAC_CODE_MIN + s + 32u),
+    return dac2_triangle_start((uint16_t)TRI_LOW,
                                (uint16_t)(DAC_CODE_MAX - s - 32u), (uint16_t)s);
 }
 

@@ -775,10 +775,11 @@ def dac_period_ns_of(low: int, high: int, slp: int) -> float:
 # ---------------------------------------------------------------------------
 CHAIN_DAC_CODE_MIN = 0x0CD
 CHAIN_DAC_CODE_MAX = 0xF32
+CHAIN_TRI_LOW = 0x400    # acquisition.c's TRI_LOW (29.09.2026, run 20: the lower end clipped)
 
 
 def chain_triangle_range(slp: int):
-    return CHAIN_DAC_CODE_MIN + slp + 32, CHAIN_DAC_CODE_MAX - slp - 32
+    return CHAIN_TRI_LOW, CHAIN_DAC_CODE_MAX - slp - 32
 
 
 def chain_model_slope_samples(slp: int, dac_hz: float, ksps: float) -> float:
@@ -894,10 +895,10 @@ class FakeTarget:
         chain_model_slope_samples(), solved the other way around."""
         rate = self.chain_ksps * 1000
         f = DAC_CLK_HZ
-        full = (CHAIN_DAC_CODE_MAX - CHAIN_DAC_CODE_MIN) - 64
+        full = CHAIN_DAC_CODE_MAX - 32 - CHAIN_TRI_LOW
         s = 1
-        while (2 * s + 64) < full:
-            span = full - 2 * s
+        while (s + 64) < full:
+            span = full - s
             samples = span * 32 * rate / (s * f) if (s * f) else 0.0
             if samples <= 128:
                 break

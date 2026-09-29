@@ -1805,3 +1805,31 @@ this board:** `bench_client reset` (new, agent VERSION 6: `ipecmd -TPPKOB4
 cannot leave a half-programmed part behind. The firmware's own `reset` command over the
 tunnel, also with the stream running: banner back after 0.22 s, counters 0. Both are now
 the first two recovery steps of `board_run.py --remote`, the re-flash the third.
+
+**Afterwards, same day - why half the `stream grab` triangles failed (R4), and the fix.**
+Not the grab cycle and not lost samples: a period-shift test over every failed window of
+the run (A 28, B 38 at 1 MSPS) finds no lost or repeated sample anywhere. **The DAC2
+triangle on RA8 loses its lower end a few hundred milliseconds after it is started**:
+the first grab right after `stream on` has a sharp minimum at 248 counts (DACLOW 240),
+every later one a flat floor at about 630-670 counts, 20-98 samples long per trough, which
+moves the turning points and fails the grid check (slip up to 1.8 samples). The DAC2
+registers read back identically before and after a grab. `chain all`'s S5 never saw it:
+it starts the triangle and measures about 1 ms later. Measured on the board, 3 s after the
+start, 1 MSPS (`dac 2 on <low> 3859 3`): low 240 flat for 55-98 samples, 600 for 21,
+900 and 1200 clean (5 samples at the minimum, like the peak). **Fix (firmware):**
+`acq_triangle_for()` now starts the triangle at `TRI_LOW = 0x400`, the upper end unchanged
+(`src/app/acquisition.c`; `tools/adc_gui.py`'s `chain_triangle_range()` follows) - the
+peak-to-peak amplitude drops from about 3600 to about 2800 codes. After the fix, 3 s after
+`stream on`, 10 grabs each: **1, 4 and 8 MSPS all 10/10 PASS**, slip 0.01-0.06. `chain all`
+on the same image (`docs/logs/run20b-chain-all-tri400.txt`): S5 PASS to 8 MSPS with slope/
+model 0.999-1.000, S9 15 s at 8 MSPS with overrun/late/missed 0, S5 from 10 MSPS failing as
+before. **Open:** what clips the lower end - the DAC output, the load on RA8 (the board's
+touch network, ANALYSIS.md C.11) or the ADC input - is not known; this is very likely
+open question 4's "DACLOW is not reproduced" (run 13).
+
+**Also seen:** the `stream off` "timeout" at the end of R4's 8 MSPS series is not a hang.
+In a separate sequence (1 MSPS, `dac 2 on 1200 ...` while streaming, grabs, `stream off`)
+the firmware answered `stream off` and then printed `[FAIL] code: 8 - DMA channel switched
+itself off (CHEN = 0)` from main()'s idle check and stopped there (LED blink loop) - the
+console no longer answers after that, which is what the runner saw as a timeout. Not yet
+explained; next to look at.
