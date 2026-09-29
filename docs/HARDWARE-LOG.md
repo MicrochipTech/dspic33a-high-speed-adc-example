@@ -1734,3 +1734,65 @@ figures tagged `source: prediction`):
   slope, which no golden covers (`slp=0` in the harness, see the plan's open points).
   A deviation here that shows in A as well is the grab cycle, not the restructuring.
 
+
+## 2026-09-29, run 20 - first board run of N+1, A (`b41af3b`) vs. B (`dead53c`), remote
+
+The first board run since run 19, and the first driven entirely through the relay
+(`tools\board_run.bat --remote --yes --skip R3`, from the lead's PC; the colleague's
+`bench_agent` 4 on DEH-LT-M90716A, EV74H48A on COM28, round trip about 100 ms). Archive:
+`docs/logs/run20-BR-remote-20260929.zip`; `A`'s hanging `test all`:
+`docs/logs/run20-A-test-all-hang.txt`.
+
+**Result: B behaves like A.** Every deviation of B from A is either measurement scatter
+between two runs, a field A does not have, or present in A too - with one exception
+(S4.15/16, below). N+1 has therefore run on silicon for R0, R1, R2, R5, R6, R7; it has
+NOT passed BR.9, because R3 was skipped and R4 timed out in both A and B.
+
+| Block | A | B |
+|---|---|---|
+| R0 version/status | ok | ok - stack 276 of 50 200 bytes used (99 % free), buffer at 0x4154, `% 4` = 0, guard ok, no trap |
+| R1 regs | ok | ok - differs only in the buffer addresses (relinked) |
+| R2 chain all | ok | ok - reproduces run 19 |
+| R3 test all | skipped | skipped - hangs A, see below |
+| R4 stream grab | timeout | timeout - see below |
+| R5 non-DAC input | ok | ok |
+| R6 route list | n/a (A has none) | ok - "route: none", resources all free |
+| R7 status | ok | ok |
+
+**R2 (`chain all`), in A and B alike:** S6 at 1/4/8 MSPS overrun/late/missed 0; S5 triangle
+clean to 8 MSPS; S9 chose 8 MSPS, 1 s clean. The processing loop rewritten after run 19
+(32-bit reads, unrolled) runs at 3.0 cycles per sample (`S6.0`) - **load at 8 MSPS 12.3 %
+(`load_max_x10=123`), run 19 measured 92 %.** Prediction "well below half" holds.
+
+**Predictions that turned out wrong:**
+
+- **R2, S5.5 (10 MSPS triangle clean) - FAIL in A and B** (slip 3.00/2.03 samples). Run 19
+  had it clean up to 10 MSPS. Present in A, so not the restructuring; 10 MSPS is the first
+  rate with DMA overruns, and this run shows that boundary as not reproducible.
+- **R4 (`stream grab`, 1/4/8 MSPS, 50 grabs each) - both A and B:** the frame arrives with
+  a clean CRC on every grab (300 grabs in total), but **the triangle verdict fails on about
+  half of them, already at 1 MSPS** (A 70 PASS/80 FAIL, B 57/93), usually with `missed=1`
+  per cycle; and **`stream off` after the 8 MSPS series is never answered** - the board
+  had to be re-flashed. At 1 and 4 MSPS `stream off` answers normally. The HARDWARE-LOG
+  N+1 entry called this "the least-founded prediction of the run": the halt/grab/restart
+  cycle had never run on any board. It does not work reliably yet, in either firmware.
+- **R3 (`test all`) hangs A's firmware**: the sweep's rows run cleanly from 4.08 to
+  8.33 MSPS, stop (`STOPPED`, the overrun brake) from 10 MSPS on, and after the 13.3 MSPS
+  row (`postdiv 5/3`) nothing more comes; the board no longer answers `version`. Not run
+  on B (skipped, `--skip R3`), because a hang there would cost the rest of the run.
+
+**One A/B difference not explained yet:** at 26.7 MSPS (S4.15/S4.16) the overrun brake
+trips in B (`brake=1`, overrun 500 000) and not in A (`brake=0`, overrun 1759/1714); at
+S4.20 it is the other way round. Far above the rates that work at all, but recorded as open.
+
+**The remote path, and what went wrong on the way:** the first attempt timed out in R3
+(the hang above) and R4, then B's flash hung in `ipecmd` for 180 s and the agent killed it
+mid-programming; afterwards `ipecmd` read Device ID 0 and the console was silent. MPLAB X
+on the colleague's PC found the device and programmed it without error, and remote flashing
+worked again from then on. **Most likely cause: two `bench_agent` instances were running
+at the same time** on the colleague's PC (found later), both registered at the relay with
+the same token and both able to start `ipecmd` on the same PKOB4. Once only one was
+running, the full A/B run - two flashes plus two recovery re-flashes - went through with
+MPLAB X open on the colleague's PC (no project loaded), so a running MPLAB X without a
+project did not disturb the remote path. Rules from this: one agent only; never kill
+`ipecmd` mid-programming (a half-programmed part needs MPLAB X on site to recover).

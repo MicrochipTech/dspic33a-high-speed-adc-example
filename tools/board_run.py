@@ -385,10 +385,17 @@ def run_r0(target, log, ui, remote=False):
     return dict(verdict=verdict, caps=caps, version=version_lines, status=status_lines, rtt=rtt)
 
 
-def run_simple_block(target, log, caps, ui, block, cap_name, command, timeout, remote=False):
+def run_simple_block(target, log, caps, ui, block, cap_name, command, timeout, remote=False, skip=()):
     """R1 (regs), R3 (test all), R6 (route list), R7 (status): one command,
-    gated on the capability the firmware's own help advertised."""
+    gated on the capability the firmware's own help advertised. A block
+    named in skip (--skip) is logged as not_available without sending
+    anything - 29.09.2026: 'test all' hangs A's firmware in the sweep after
+    the 13.3 MSPS row (docs/HARDWARE-LOG.md), so R3 can be left out."""
     log.ev(block, "block start")
+    if block in skip:
+        log.ev(block, f"not_available skipped by --skip")
+        log.ev(block, "block end not_available")
+        return dict(verdict="not_available")
     if cap_name not in caps:
         log.ev(block, f"not_available {cap_name}")
         log.ev(block, "block end not_available")
@@ -561,7 +568,7 @@ def run_r5(target, log, caps, ui, label, ksps, core, pinsel, samc, fail_frames, 
 
 
 def run_session(target, ui, label, r5_ksps=R5_DEFAULT_KSPS, r5_core=R5_DEFAULT_CORE,
-                 r5_pinsel=R5_DEFAULT_PINSEL, r5_samc=R5_DEFAULT_SAMC, remote=False):
+                 r5_pinsel=R5_DEFAULT_PINSEL, r5_samc=R5_DEFAULT_SAMC, remote=False, skip=()):
     """R0..R7 against one already-open target, in order. Returns
     (log, results, fail_frames) - results[block]['verdict'] is one of
     ok/fail/timeout/not_available.
@@ -583,7 +590,8 @@ def run_session(target, ui, label, r5_ksps=R5_DEFAULT_KSPS, r5_core=R5_DEFAULT_C
     caps = results["R0"].get("caps", set())
     results["R1"] = run_simple_block(target, log, caps, ui, "R1", "regs", "regs", TIMEOUT_R1, remote=remote)
     results["R2"] = run_r2(target, log, caps, ui, remote=remote)
-    results["R3"] = run_simple_block(target, log, caps, ui, "R3", "test", "test all", TIMEOUT_R3, remote=remote)
+    results["R3"] = run_simple_block(target, log, caps, ui, "R3", "test", "test all", TIMEOUT_R3, remote=remote,
+                                     skip=skip)
     results["R4"] = run_r4(target, log, caps, ui, label, fail_frames, remote=remote)
     results["R5"] = run_r5(target, log, caps, ui, label, r5_ksps, r5_core, r5_pinsel, r5_samc, fail_frames,
                             remote=remote)
@@ -944,7 +952,7 @@ def perform_full_run_remote(bench_client, ui, out_dir, hex_a=None, hex_b=None,
                              r5_pinsel=R5_DEFAULT_PINSEL, r5_samc=R5_DEFAULT_SAMC,
                              board_run_dir=BOARD_RUN_DIR, readme_path=README_PATH,
                              repo_root=REPO_ROOT, git_run=subprocess.run, yes=False,
-                             remote_bench_cls=remote.RemoteBench, bench_env=None):
+                             remote_bench_cls=remote.RemoteBench, bench_env=None, skip=()):
     """perform_full_run()'s remote twin: no COM port, no "program the
     firmware, then press ENTER" prompts - RemoteBench.flash() does the
     programming, its banner is checked against the hex file's own name
@@ -998,7 +1006,7 @@ def perform_full_run_remote(bench_client, ui, out_dir, hex_a=None, hex_b=None,
         session["hex"].append(info_a)
         try:
             log_a, results_a, frames_a = run_session(target_a, ui, "A", r5_ksps, r5_core, r5_pinsel,
-                                                       r5_samc, remote=True)
+                                                       r5_samc, remote=True, skip=skip)
         finally:
             target_a.close()
 
@@ -1006,12 +1014,22 @@ def perform_full_run_remote(bench_client, ui, out_dir, hex_a=None, hex_b=None,
         frames_b = []
         if hex_b is not None:
             info_b = prepare_hex(hex_b, "NEW", ui)
-            target_b, flash_info_b = flash_and_open(bench, hex_b, "NEW", ui)
+            try:
+                target_b, flash_info_b = flash_and_open(bench, hex_b, "NEW", ui)
+            except RuntimeError:
+                # 29.09.2026: B's flash failed and A's whole log was lost with
+                # the traceback - keep it on disk before giving up.
+                os.makedirs(out_dir, exist_ok=True)
+                keep = os.path.join(out_dir, time.strftime("A-%Y%m%d-%H%M%S.log"))
+                with open(keep, "w", encoding="utf-8") as f:
+                    f.write(log_a.text())
+                ui.say(f"A's log kept in {keep}")
+                raise
             info_b.update(flash_info_b)
             session["hex"].append(info_b)
             try:
                 log_b, results_b, frames_b = run_session(target_b, ui, "B", r5_ksps, r5_core, r5_pinsel,
-                                                           r5_samc, remote=True)
+                                                           r5_samc, remote=True, skip=skip)
             finally:
                 target_b.close()
         else:
@@ -1715,6 +1733,8 @@ def main(argv=None):
     ap.add_argument("--bench-client",
                      help="path to bench_client.py (default: $BENCH_CLIENT, else "
                           "C:\\work\\Claas\\Relay\\bench_client.py) - only with --remote")
+    ap.add_argument("--skip", default="", help="comma-separated blocks to leave out, e.g. R3 "
+                                                "(logged as not_available)")
     ap.add_argument("--yes", action="store_true",
                      help="answer the hardware set-up checklist prompt without asking "
                           "(--remote only; the R5 signal-generator question still asks)")
@@ -1727,10 +1747,12 @@ def main(argv=None):
         return 0
 
     ui = ConsoleUI()
+    skip = tuple(b.strip().upper() for b in a.skip.split(",") if b.strip())
     if a.remote:
         bench_client = a.bench_client or os.environ.get("BENCH_CLIENT", remote.DEFAULT_BENCH_CLIENT)
         return perform_full_run_remote(bench_client, ui, a.out_dir, a.hex_a, a.hex_b,
-                                        a.r5_ksps, a.r5_core, a.r5_pinsel, a.r5_samc, yes=a.yes)
+                                        a.r5_ksps, a.r5_core, a.r5_pinsel, a.r5_samc, yes=a.yes,
+                                        skip=skip)
 
     port = pick_port(a.port)
     return perform_full_run(port, ui, a.out_dir, a.hex_a, a.hex_b,

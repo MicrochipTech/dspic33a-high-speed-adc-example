@@ -346,6 +346,10 @@ def _result_matches(r, stages, match):
         return False
     for k, v in (match or {}).items():
         got = r.f.get(k)
+        if v == "*":                  # the field only has to be present
+            if got is None:
+                return False
+            continue
         if isinstance(v, list):
             if got not in v:
                 return False

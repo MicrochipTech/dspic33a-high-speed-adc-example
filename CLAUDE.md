@@ -316,7 +316,12 @@ The EV74H48A at the colleague's desk can be flashed and its console driven from 
 machine, through a relay server (`C:\work\Claas\Relay`, its `README.md` has the full
 account: relay, certificates, the agent's five requests, what was tested). It works only
 while the colleague's `bench_agent` is running; the agent owns the console COM port and
-needs the PKOB4 free (no MPLAB X debug session on it).
+needs the PKOB4 free (no MPLAB X debug session on it). **Exactly one `bench_agent` may run
+on that PC** (run 20, 29.09.2026: two instances registered with the same token, one flash
+hung, the agent killed `ipecmd` mid-programming and the part stayed unreachable until
+MPLAB X reprogrammed it on site) - check `info`'s `uptime_s` after a restart. MPLAB X open
+without a project did not disturb a full remote run. `board_run.py --skip R3` leaves out a
+block (`test all` hangs A's firmware in the sweep, run 20).
 
 ```
 python C:\work\Claas\Relay\bench_client.py info                        agent online? UART port, ipecmd

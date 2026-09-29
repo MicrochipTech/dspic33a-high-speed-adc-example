@@ -1,0 +1,94 @@
+test all
+
+[test] ALL - self, clock, sweep, dac
+[test] self: ADC -> DMA -> RAM on the internal 15/16 VDD reference
+[selftest] mean on internal 15/16 VDD (expect ~3840): 3820
+[test]   mean (expect 3648..4032): 3820
+[test] self: PASS
+[test] clock: switch every divide ratio and read it back - no measurement
+[test]   order per ratio: DMA down, ADC core off, CLKGEN6 off, divider
+[test]   written and read back, generator on, DIVSWEN, CLKRDY, core on
+[test]   ratio 1000 -> read back 1000, adc clock Hz 3265306, the configuration arrived
+[test]   ratio 900 -> read back 900, adc clock Hz 3628117, the configuration arrived
+[test]   ratio 800 -> read back 800, adc clock Hz 4081632, the configuration arrived
+[test]   ratio 700 -> read back 700, adc clock Hz 4664723, the configuration arrived
+[test]   ratio 600 -> read back 600, adc clock Hz 5442176, the configuration arrived
+[test]   ratio 500 -> read back 500, adc clock Hz 6530612, the configuration arrived
+[test]   ratio 450 -> read back 450, adc clock Hz 7256235, the configuration arrived
+[test]   ratio 400 -> read back 400, adc clock Hz 8163265, the configuration arrived
+[test]   ratio 350 -> read back 350, adc clock Hz 9329446, the configuration arrived
+[test]   ratio 300 -> read back 300, adc clock Hz 10884353, the configuration arrived
+[test]   ratio 250 -> read back 250, adc clock Hz 13061224, the configuration arrived
+[test]   ratio 200 -> read back 200, adc clock Hz 16326530, the configuration arrived
+[test]   ratio 100 -> read back 100, adc clock Hz 32653061, the configuration arrived
+[test]   ratios that did not arrive: 0
+[test]   NOTE: this only proves the register holds the value. Runs 8 and 9
+[test]   passed here and the rate did not follow at any ratio - the rate
+[test]   is set with the PLL now (test sweep, pll command).
+[test] clock: PASS
+[test] clkoff: switch CLKGEN6 off and try to convert anyway
+[test]   Table 16-1 names CLKGEN6 as the ADC clock, but its divider
+[test]   changes nothing. If halves still arrive with the generator
+[test]   off, the ADC is not running off it and that explains it all.
+[clkoff]   ADC core reported ready with the generator off: 1
+[clkoff]   halves after the generator was switched off: 28
+[test] clkoff: THE ADC KEPT CONVERTING WITH CLKGEN6 OFF
+[test]   -> CLKGEN6 is not (only) the ADC clock; the rate must come
+[test]      from somewhere else. This is the finding, not a failure.
+[test] bursts: the same setting, measured over 1, 10 and 100 bursts
+[test]   each burst is restarted from the DMA interrupt, as streaming does
+[test]   a rate that climbs with the count is the bridge between run 16's
+[test]   single burst (the setting) and its thousand (40 MSPS regardless)
+[test]   nominal ksps: 4081
+[test]     bursts 1: ksps 4057  overrun 0
+[test]     bursts 10: ksps 4071  overrun 0
+[test]     bursts 100: ksps 4073  overrun 0
+[test]   nominal ksps: 8000
+[test]     bursts 1: ksps 7911  overrun 0
+[test]     bursts 10: ksps 7966  overrun 0
+[test]     bursts 100: ksps 7972  overrun 0
+[test]   nominal ksps: 20000
+[test]     bursts 1: no data
+[test]     bursts 10: no data
+[test]     bursts 100: no data
+[test] bursts: done - equal rates mean a burst in a stream is an ordinary
+[test]   burst; a rising rate means it is not, and the single-burst figures
+[test]   measured so far describe a start-up rather than the stream
+[test] sweep: the ladder from the slowest rate up
+[sweep] halves per point: 2000
+[sweep] samples per half: 1024
+[sweep] samples per point: 2048000
+[sweep] back-to-back conversions; the rate is the ADC clock, PLL1 output dividers
+[sweep] slowest rate first: the first row is the one the DMA should manage,
+[sweep] so a failure there is the chain, not the rate
+[sweep] idle = CPU polls RAM only, process = main-loop processing, sfr = CPU polls an SFR
+[sweep] overrun must be 0 for a usable rate; late/missed are from the process run
+[sweep] postdiv = PLL1 POSTDIV1/POSTDIV2; the adc clock is read back from the registers
+[sweep] clean1/clean10 = rate over one burst and over ten, nothing else running;
+[sweep] loaded = rate while the three runs below are going
+[sweep] the three runs below are going. Trust clean: the loaded figure is
+[sweep] measured by a CPU drowning in overrun interrupts
+[sweep] timer check, ticks per 100 ms (expect 1250000): 1250001
+[sweep] postdiv 7/7  adc clock Hz 32653061  ksps nom 4081 clean1 4057 clean10 4071 loaded 4073  overrun idle/process/sfr 0/0/0  late 0  missed 0
+[sweep]   isr 2002  half 1001  done 1001  bursts 1001  half+done 2002 (must be 2x bursts)
+[sweep] postdiv 7/6  adc clock Hz 38095238  ksps nom 4761 clean1 4727 clean10 4748 loaded 4750  overrun idle/process/sfr 0/0/0  late 0  missed 0
+[sweep]   isr 2002  half 1001  done 1001  bursts 1001  half+done 2002 (must be 2x bursts)
+[sweep] postdiv 6/6  adc clock Hz 44444444  ksps nom 5555 clean1 5511 clean10 5538 loaded 5541  overrun idle/process/sfr 0/0/0  late 0  missed 0
+[sweep]   isr 2002  half 1001  done 1001  bursts 1001  half+done 2002 (must be 2x bursts)
+[sweep] postdiv 7/5  adc clock Hz 45714285  ksps nom 5714 clean1 5666 clean10 5696 loaded 5697  overrun idle/process/sfr 0/0/0  late 0  missed 0
+[sweep]   isr 2002  half 1001  done 1001  bursts 1001  half+done 2002 (must be 2x bursts)
+[sweep] postdiv 6/5  adc clock Hz 53333333  ksps nom 6666 clean1 6601 clean10 6642 loaded 6647  overrun idle/process/sfr 0/0/0  late 0  missed 0
+[sweep]   isr 2002  half 1001  done 1001  bursts 1001  half+done 2002 (must be 2x bursts)
+[sweep] postdiv 7/4  adc clock Hz 57142857  ksps nom 7142 clean1 7069 clean10 7116 loaded 7121  overrun idle/process/sfr 0/0/0  late 0  missed 0
+[sweep]   isr 2002  half 1001  done 1001  bursts 1001  half+done 2002 (must be 2x bursts)
+[sweep] postdiv 5/5  adc clock Hz 64000000  ksps nom 8000 clean1 7908 clean10 7966 loaded 7972  overrun idle/process/sfr 0/0/0  late 0  missed 0
+[sweep]   isr 2002  half 1001  done 1001  bursts 1001  half+done 2002 (must be 2x bursts)
+[sweep] postdiv 6/4  adc clock Hz 66666666  ksps nom 8333 clean1 8234 clean10 8297 loaded 8304  overrun idle/process/sfr 0/0/0  late 0  missed 0
+[sweep]   isr 2002  half 1001  done 1001  bursts 1001  half+done 2002 (must be 2x bursts)
+[sweep] postdiv 5/4  adc clock Hz 80000000  ksps nom 10000 clean1 0 clean10 0 loaded 0  overrun idle/process/sfr STOPPED/STOPPED/STOPPED  late 0  missed 0
+[sweep]   isr 1  half 1  done 0  bursts 1  half+done 1 (must be 2x bursts)
+[sweep] postdiv 6/3  adc clock Hz 88888888  ksps nom 11111 clean1 10944 clean10 0 loaded 0  overrun idle/process/sfr STOPPED/STOPPED/STOPPED  late 0  missed 0
+[sweep]   isr 1  half 1  done 0  bursts 1  half+done 1 (must be 2x bursts)
+[sweep] postdiv 5/3  adc clock Hz 106666666  ksps nom 13333 clean1 0 clean10 0 loaded 0  overrun idle/process/sfr STOPPED/STOPPED/STOPPED  late 0  missed 0
+[sweep]   isr 3  half 2  done 1  bursts 2  half+done 3 (must be 2x bursts)
+[sweep] 
