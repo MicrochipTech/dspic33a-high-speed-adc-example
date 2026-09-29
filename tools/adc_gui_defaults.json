@@ -18,6 +18,27 @@
     "samc": 0,
     "interval_ms": 500
   },
+  "siggen": {
+    "on": false,
+    "dac": 2,
+    "n": 5000,
+    "play_hz": 500000,
+    "f0": 10000.0,
+    "h": [
+      0.2,
+      0.4,
+      0.1,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "decay": 1000.0,
+    "amp": 1.0,
+    "lo": 800,
+    "hi": 3500,
+    "snap": true,
+    "force": true
+  },
   "trigger": {
     "on": false,
     "level": 2048,

@@ -54,24 +54,12 @@ import os
 import sys
 
 
-def wavegen(n, play_hz, f0_hz, harm, decay, amplitude, out_min, out_max):
-    """The table as a list of n ints in out_min..out_max (script lines 35-63)."""
-    if len(harm) != 6:
-        raise ValueError("harm needs the 6 factors of the 2nd..7th harmonic")
-    amplitudes = [amplitude * 1.0] + [amplitude * h for h in harm]
-    y = []
-    for i in range(n):
-        t = i / play_hz
-        env = math.exp(-decay * t)
-        s = 0.0
-        for k, a in enumerate(amplitudes):
-            s += a * math.sin(2.0 * math.pi * (k + 1) * f0_hz * t)
-        y.append(env * s)
-    lo = min(y)
-    shifted = [v - lo for v in y]
-    hi = max(shifted)
-    span = (out_max - out_min) * amplitude
-    return [int(round(v / hi * span)) + out_min for v in shifted]
+# The formula itself lives in tools/wavegen_model.py since SG.6 (29.09.2026):
+# one model for this reference, the GUI's preview/loop overlay and its
+# FakeTarget - moved there verbatim, imported back here.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "..", "tools"))
+from wavegen_model import wavegen  # noqa: E402
 
 
 def write_csv(path, cmdline, columns, rows):

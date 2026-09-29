@@ -90,6 +90,10 @@ import remote  # noqa: E402
 # Trigger mode of the time plot (TRG, docs/IMPLEMENTATION-PLAN.md): a pure
 # search over the grabbed half, no firmware or wire-protocol change.
 from trigger import RISING, FALLING, find_trigger, find_triggers, trigger_window  # noqa: E402
+# The signal generator (SG.6): the table formula, SCCP2's real rate, the
+# zero-order-hold playback and the loop alignment - one model shared with
+# tests/ref/wavegen_ref.py and this file's FakeTarget.
+import wavegen_model  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +162,12 @@ SETTINGS_DEFAULTS = {
     },
     # TRG: the time plot's trigger (display only, tools/trigger.py)
     "trigger": {"on": False, "level": 2048, "slope": "rising", "hyst": 16},
+    # SG.6: the signal generator card - tab_wave_gen.py's defaults (500 kHz,
+    # 0.01 s = 5000 entries, 10 kHz, 0.2/0.4/0.1, decay 1000), the range
+    # 800..3500 where the board's DAC follows (HARDWARE-LOG 29.09.2026)
+    "siggen": {"on": False, "dac": 2, "n": 5000, "play_hz": 500000, "f0": 10000.0,
+               "h": [0.2, 0.4, 0.1, 0.0, 0.0, 0.0], "decay": 1000.0, "amp": 1.0,
+               "lo": 800, "hi": 3500, "snap": True, "force": True},
     "buffer": {"size": 2048},
     "dac": {
         "1": {"on": False, "low": 0x100, "high": 0xF00, "slpdat": 8},
@@ -898,6 +908,25 @@ class FakeTarget:
         self.chain_ready_half = 0                  # alternates like ready_half in capture.c
         self.chain_grabs = 0
         self.grab_fault = None                     # None, "drop", "dup", "overrun", "missed"
+        # The signal generator ("siggen", siggen.c): parameters as the
+        # firmware's defaults (tab_wave_gen.py's, DAC range 205..3890), and
+        # the table it plays - computed by wavegen_model, as the firmware
+        # computes it with lib/wavegen.
+        self.sg = dict(f0=10000.0, h=[0.2, 0.4, 0.1, 0.0, 0.0, 0.0], decay=1000.0, amp=1.0,
+                       lo=205, hi=3890)
+        self.sg_text = dict(f0="10000", h2="0.2", h3="0.4", h4="0.1", h5="0", h6="0", h7="0",
+                            decay="1000", amp="1")
+        self.sg_on = False
+        self.sg_dac = 0
+        self.sg_n = 0
+        self.sg_play = 0
+        self.sg_play_actual = 0
+        self.sg_snap = False
+        self.sg_force = False
+        self.sg_pace = 0
+        self.sg_f0_used = 0.0
+        self.sg_table = []
+        self.sg_t0 = None
 
     def _chain_slpdat(self) -> int:
         """triangle_for()'s SLOPE_TARGET=128-samples-per-slope search, for
@@ -991,6 +1020,111 @@ class FakeTarget:
         v = v + self.rng.normal(0, self.noise_std, n)
         return np.clip(np.round(v), 0, 4095).astype(int)
 
+    # ---- the signal generator (siggen.c / cli.c's cmd_siggen_fn()) ----
+    SG_PARAMS = ("f0", "h2", "h3", "h4", "h5", "h6", "h7", "decay", "amp", "lo", "hi")
+    SG_USAGE = ("usage: siggen set <f0|h2..h7|decay|amp|lo|hi> <value> | siggen on <dac 1|2> "
+                "<n 2..8192> <play_hz 100..1000000> [snap] [force] [oc] | siggen off | siggen regs | siggen")
+    # the pin each DAC's output buffer drives, as core 5 reads it (dac.h:
+    # DACOUT1 = RA1 = AD5AN1, DACOUT2 = RA8 = AD5AN3, on both boards)
+    SG_PIN = {1: (5, 1), 2: (5, 3)}
+
+    def _siggen_on_input(self) -> bool:
+        return self.sg_on and (self.chain_core, self.chain_pinsel) == self.SG_PIN[self.sg_dac]
+
+    def _siggen_samples(self, n: int) -> np.ndarray:
+        """The table as the ADC reads it back: held per entry at the real
+        play rate (zero-order hold), through the DAC's settling (a first-
+        order low-pass, 300 ns - Table 40-42's 750 ns typical to 1 %), with
+        the table's position following wall-clock time like the sine's."""
+        fs = self.chain_ksps * 1e3
+        if self.sg_t0 is None:
+            self.sg_t0 = time.time()
+        start = ((time.time() - self.sg_t0) * self.sg_play_actual) % max(1, self.sg_n)
+        v = wavegen_model.playback(self.sg_table, self.sg_play_actual, fs, n,
+                                   start_entry=start, tau_s=300e-9)
+        v = v + self.rng.normal(0, self.noise_std, n)
+        return np.clip(np.round(v), 0, 4095).astype(int)
+
+    def _siggen_status(self):
+        def dec(key):
+            return self.sg_text[key]
+        f0u = self.sg_f0_used if self.sg_on else 0.0
+        return [f"on: {int(self.sg_on)}", f"dac: {self.sg_dac if self.sg_on else 0}",
+                f"n: {self.sg_n}", f"play_hz: {self.sg_play}",
+                f"play_hz_actual: {self.sg_play_actual if self.sg_on else 0}",
+                f"pace: {self.sg_pace}", f"f0: {dec('f0')}", f"f0_used: {f0u:.3f}".rstrip("0").rstrip("."),
+                *[f"h{k}: {dec('h' + str(k))}" for k in range(2, 8)],
+                f"decay: {dec('decay')}", f"amp: {dec('amp')}",
+                f"lo: {self.sg['lo']}", f"hi: {self.sg['hi']}",
+                f"snap: {int(self.sg_snap)}", f"force: {int(self.sg_force)}",
+                f"table_min: {min(self.sg_table) if self.sg_on else 0}",
+                f"table_max: {max(self.sg_table) if self.sg_on else 0}",
+                f"dma1_stat: 0x{0x30 if self.sg_on else 0:08X}", f"dma1_on: {int(self.sg_on)}",
+                f"transfers_per_s: {self.sg_play_actual if self.sg_on else 0}",
+                f"sccp2_flags: {3 if self.sg_on else 0}", "window_gap: 0"]
+
+    def _siggen(self, args):
+        if not args:
+            return True, self._siggen_status()
+        if args[0] == "set" and len(args) == 3:
+            name, text = args[1], args[2]
+            if not re.fullmatch(r"-?(\d+\.?\d{0,6}|\.\d{1,6})", text) or len(text.split(".")[0].lstrip("-")) > 12:
+                return False, [self.SG_USAGE]
+            v = float(text)
+            if name not in self.SG_PARAMS:
+                return False, ["siggen: no such parameter (f0 h2..h7 decay amp lo hi)"]
+            ok = {"f0": 0 < v <= 1e6, "decay": 0 <= v <= 1e9, "amp": 0 < v <= 1,
+                  "lo": v == int(v) and 0 <= v <= 4095, "hi": v == int(v) and 0 <= v <= 4095}.get(
+                name, -100 <= v <= 100)
+            if not ok:
+                return False, ["siggen: value out of range"]
+            if name in ("lo", "hi"):
+                self.sg[name] = int(v)
+            elif name in ("f0", "decay", "amp"):
+                self.sg[name] = v
+            else:
+                self.sg["h"][int(name[1]) - 2] = v
+            if name not in ("lo", "hi"):
+                self.sg_text[name] = text
+            return True, [f"{name}: {text}"]
+        if args[0] == "off" and len(args) == 1:
+            self.sg_on = False
+            self.sg_dac = 0
+            return True, ["siggen: off"]
+        if args[0] == "regs" and len(args) == 1:
+            return True, ["[regs] dma1 (fake target)", "[regs] sccp2 (fake target)"]
+        if args[0] == "on" and 4 <= len(args) <= 7:
+            try:
+                dac, n, hz = int(args[1]), int(args[2]), int(args[3])
+            except ValueError:
+                return False, [self.SG_USAGE]
+            flags = set(args[4:])
+            if not flags <= {"snap", "force", "oc"} or dac not in (1, 2) or not (2 <= n <= 8192) \
+                    or not (100 <= hz <= 1_000_000):
+                return False, [self.SG_USAGE]
+            self.sg_on = False
+            if self.chain_on and self.chain_test and dac == 2:
+                return False, ["siggen: routing refused: resource or DAC in use", "route_err: 11"]
+            lo, hi = self.sg["lo"], self.sg["hi"]
+            if hi > 4095 or ("force" not in flags and (lo < 205 or hi > 3890)):
+                return False, ["siggen: lo/hi outside 205..3890 (p1417) - add force"]
+            real = wavegen_model.sccp2_rate(hz)
+            f0 = self.sg["f0"]
+            f0u = wavegen_model.snap_hz(f0, n, real) if "snap" in flags else f0
+            if not (0 < f0 < real / 2) or lo >= hi or not (0 < self.sg["amp"] <= 1):
+                return False, ["siggen: wavegen refused the parameters", "wavegen_err: 3"]
+            try:
+                table = wavegen_model.wavegen(n, real, f0u, self.sg["h"], self.sg["decay"],
+                                              self.sg["amp"], lo, hi)
+            except ZeroDivisionError:
+                return False, ["siggen: wavegen refused the parameters", "wavegen_err: 7"]
+            self.dac[dac]["on"] = False                  # the DAC is the generator's now
+            self.sg_on, self.sg_dac, self.sg_n, self.sg_play = True, dac, n, hz
+            self.sg_play_actual, self.sg_f0_used, self.sg_table = real, f0u, table
+            self.sg_snap, self.sg_force, self.sg_pace = "snap" in flags, "force" in flags, int("oc" in flags)
+            return True, self._siggen_status()
+        return False, [self.SG_USAGE]
+
     def _board_limit_counters(self):
         """A simplified model of the board's own limits (the last hardware
         run, HARDWARE-LOG.md): mild overruns from about 10 MSPS, missed
@@ -1025,6 +1159,9 @@ class FakeTarget:
                     return False, usage
                 unit = int(args[0])
                 d = self.dac[unit]
+                if self.sg_on and self.sg_dac == unit:   # siggen_release_dac() (cli.c)
+                    self.sg_on = False
+                    self.sg_dac = 0
                 if args[1].startswith("off"):
                     d["on"] = False
                     if unit == 2 and self.chain_on and self.chain_test:
@@ -1066,12 +1203,14 @@ class FakeTarget:
                         return False, ["buf: stop the stream first, and give an even number"]
                     self.buf_size = 2 * h
                 return True, [f"samples per half: {self.buf_size // 2}", "maximum: 1024"]
+            if c == "siggen":
+                return self._siggen(args)
             if c == "version":
                 return True, ["[build] adc_dma_40msps (fake target, synthetic signal)",
                               "[build] board: " + self.FAKE_BOARD_NAMES[self.board]]
             if c == "help":
                 return True, [
-                    "commands: dac buf version stream",
+                    "commands: dac buf version stream siggen",
                     "stream on <ksps> [core pinsel [samc]] | off | grab - the chain streaming",
                 ]
             if c == "stream":
@@ -1083,6 +1222,9 @@ class FakeTarget:
                     if not (1 <= ksps <= 40000):
                         return False, usage_stream
                     if len(rest) == 1:
+                        if self.sg_on and self.sg_dac == 2:
+                            return False, ["stream: DAC2 plays the signal generator - 'siggen off', "
+                                           "or 'stream on <ksps> 5 3' to read it"]
                         core, pinsel, samc, test = 5, 3, 0, True
                     else:
                         if not (rest[1].isdigit() and rest[2].isdigit()):
@@ -1172,7 +1314,8 @@ class FakeTarget:
                                 drop=drop, dup=dup, seed=self.chain_grabs)
         else:
             slp = 0
-            v = self._custom_input_samples(n)
+            v = (self._siggen_samples(n) if self._siggen_on_input()
+                 else self._custom_input_samples(n))
         if self.grab_fault == "overrun":
             ov = max(ov, 3)
         if self.grab_fault == "missed":
@@ -1540,6 +1683,90 @@ def selftest() -> int:
     ok_all &= ok_trg_tri
     print("trigger: triangle verdict identical with the trigger on and off:", "PASS" if ok_trg_tri else "FAIL")
 
+    # ---- SG.7: the signal generator ----
+    # wavegen_model.py against the committed reference vectors (each file's
+    # first line is the command that made it)
+    import csv
+    import shlex
+    import glob as _glob
+    vec_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tests", "ref", "vectors")
+    n_vec, ok_vec = 0, True
+    for fpath in sorted(_glob.glob(os.path.join(vec_dir, "wavegen_*.csv"))):
+        with open(fpath, encoding="utf-8") as fh:
+            argv = shlex.split(fh.readline()[2:].split(" # ")[0])
+            rows = [int(r["value"]) for r in csv.DictReader(fh)]
+        a = dict(zip(argv[::1], argv[1::1]))
+        harm = [float(x) for x in argv[argv.index("--harm") + 1:argv.index("--harm") + 7]]
+        tab = wavegen_model.wavegen(int(a["--n"]), float(a["--play-hz"]), float(a["--f0"]), harm,
+                                    float(a["--decay"]), float(a["--amplitude"]),
+                                    int(a["--out-min"]), int(a["--out-max"]))
+        ok_vec &= tab == rows
+        n_vec += 1
+    ok_vec &= n_vec >= 3
+    ok_all &= ok_vec
+    print(f"siggen: wavegen_model.py reproduces {n_vec} tests/ref vectors exactly:",
+          "PASS" if ok_vec else "FAIL")
+
+    # the console lines the card sends, and the stand-in's replies
+    sgp = dict(on=True, dac=2, n=1000, play=100000, f0=1000.0, h={2: 0.0, 3: 0.3, 4: 0.0, 5: 0.0, 6: 0.0, 7: 0.0},
+               decay=0.0, amp=1.0, lo=800, hi=3500, snap=True, force=True)
+    lines, bad = siggen_plan(sgp)
+    ts = FakeTarget(noise_std=3.0)
+    ok_sg = bad is None and lines[-1] == "siggen on 2 1000 100000 snap force"
+    reply = []
+    for x in lines:
+        ok_x, reply = ts.cmd(x)
+        ok_sg &= ok_x
+    st = parse_kv(reply)
+    ok_sg &= (st.get("on") == "1" and st.get("play_hz_actual") == "100000" and st.get("f0_used") == "1000"
+              and st.get("h3") == "0.3" and st.get("table_min") == "800" and st.get("table_max") == "3500")
+    ok_off, off_reply = ts.cmd("siggen off")
+    ok_sg &= ok_off and off_reply == ["siggen: off"] and parse_kv(ts.cmd("siggen")[1]).get("on") == "0"
+    ok_all &= ok_sg
+    print("siggen: set/on/off against the stand-in, status parsed:", "PASS" if ok_sg else "FAIL",
+          f"- {lines[-1]!r}, play {st.get('play_hz_actual')}, f0_used {st.get('f0_used')}")
+
+    # a line the console cannot hold is refused by the sender, not cut
+    long_p = dict(sgp, h={**sgp["h"], 2: 1e60})
+    _, bad_long = siggen_plan(long_p)
+    ok_long = bad_long is not None and len(bad_long) > CMD_LINE_MAX
+    ok_all &= ok_long
+    print(f"siggen: a {len(bad_long or '')}-character line is refused by the sender (limit {CMD_LINE_MAX}):",
+          "PASS" if ok_long else "FAIL")
+
+    # the loop: generator on DAC2, the chain reading RA8 as a custom input
+    for x in lines:
+        ts.cmd(x)
+    ts.cmd("stream on 1000 5 3")
+    _okg, sgs, sgm = ts.grab()
+    tab = ts.sg_table
+    lp = wavegen_model.align(sgs, tab, ts.sg_play_actual, sgm["ksps"] * 1e3)
+    wrong = wavegen_model.wavegen(1000, ts.sg_play_actual, ts.sg_f0_used, [0, 0.1, 0, 0, 0, 0], 0.0, 1.0, 800, 3500)
+    lw = wavegen_model.align(sgs, wrong, ts.sg_play_actual, sgm["ksps"] * 1e3)
+    hf = harmonic_factors(sgs, sgm["ksps"] * 1e3, ts.sg_f0_used)
+    ok_loop = (lp["rms"] < 3 * ts.noise_std and abs(lp["gain"] - 1) < 0.02 and lw["rms"] > 10 * lp["rms"]
+               and abs(hf[3] - 0.3) < 0.02 and hf[2] < 0.02)
+    ok_all &= ok_loop
+    print(f"siggen: loop through the stand-in matches the table (rms {lp['rms']:.1f} LSB, gain "
+          f"{lp['gain']:.3f}, h3 measured {hf[3]:.3f} for 0.3, h2 {hf[2]:.3f}); h3 0.1 instead of 0.3 "
+          f"fails visibly (rms {lw['rms']:.1f}):",
+          "PASS" if ok_loop else "FAIL")
+    # ... and the alignment finds a known start entry (the delay) - modulo
+    # one signal period, 100 entries here: a table of whole periods (snap)
+    # looks the same from any of them
+    known = wavegen_model.playback(tab, 100000, 1e6, 1024, start_entry=417.3)
+    la = wavegen_model.align(known, tab, 100000, 1e6)
+    d = (la["entry"] - 417.3) % 100.0
+    ok_delay = min(d, 100.0 - d) < 0.15 and la["rms"] < 1.0
+    ok_all &= ok_delay
+    print(f"siggen: alignment recovers a start at entry 417.3 -> {la['entry']:.2f}, the same modulo "
+          f"the 100-entry period (rms {la['rms']:.2f}):", "PASS" if ok_delay else "FAIL")
+    # the test form is refused while the generator plays on DAC2
+    ok_conf = not ts.cmd("stream on 1000")[0]
+    ok_all &= ok_conf
+    print("siggen: 'stream on <ksps>' (DAC2 triangle) refused while the generator is on DAC2:",
+          "PASS" if ok_conf else "FAIL")
+
     # "documentation": the real docs/ARCHITECTURE.md, both diagrams linked
     # through the static route, each image file present next to it
     doc_md, doc_imgs = architecture_markdown()
@@ -1562,6 +1789,70 @@ def selftest() -> int:
 # ADC core 5 / PINSEL 3 reads the DAC with no wire. The test input
 # ("stream on <ksps>") is exactly this route with the firmware's triangle.
 LOOPBACK = {"core": 5, "pinsel": 3, "samc": 0, "dac": 2}
+
+
+# cmd_parser.c: a byte is taken while lineLen + 1 < CMD_PARSER_LINE_MAX_LEN
+# (64), so a line holds at most 63 characters - the sender refuses a longer
+# one rather than let the parser cut it (SG.7).
+CMD_LINE_MAX = 63
+
+
+def siggen_commands(p):
+    """The console lines that set the generator up as the card says (SG.4:
+    one parameter per line), then 'siggen on ...' or 'siggen off'. `p` is a
+    dict: on, dac, n, play, f0, h (dict 2..7), decay, amp, lo, hi, snap,
+    force. Values go out as plain decimals with at most six places - what
+    fmt_parse_dec() takes."""
+    def dec(v):
+        s = f"{float(v):.6f}".rstrip("0").rstrip(".")
+        return "0" if s in ("", "-0") else s
+    lines = [f"siggen set f0 {dec(p['f0'])}"]
+    lines += [f"siggen set h{k} {dec(p['h'][k])}" for k in range(2, 8)]
+    lines += [f"siggen set decay {dec(p['decay'])}", f"siggen set amp {dec(p['amp'])}",
+              f"siggen set lo {int(p['lo'])}", f"siggen set hi {int(p['hi'])}"]
+    if p["on"]:
+        lines.append(f"siggen on {int(p['dac'])} {int(p['n'])} {int(p['play'])}"
+                     + (" snap" if p["snap"] else "") + (" force" if p["force"] else ""))
+    else:
+        lines.append("siggen off")
+    return lines
+
+
+def harmonic_factors(samples, fs_hz, f0_hz, k_max=7):
+    """Amplitude of the k-th harmonic over the fundamental, k = 2..k_max,
+    by one least-squares fit of sin/cos at every k x f0 plus an offset over
+    the window - robust down to a single period of f0 in the window, where
+    an FFT has no bins to separate them. {k: factor}; 0.0 when f0 is not
+    in the window at all."""
+    s = np.asarray(samples, float)
+    t = np.arange(len(s)) / fs_hz
+    cols = [np.ones_like(t)]
+    for k in range(1, k_max + 1):
+        w = 2 * np.pi * k * f0_hz * t
+        cols += [np.sin(w), np.cos(w)]
+    A = np.vstack(cols).T
+    c, *_ = np.linalg.lstsq(A, s, rcond=None)
+    amp = {k: float(np.hypot(c[2 * k - 1], c[2 * k])) for k in range(1, k_max + 1)}
+    return {k: (amp[k] / amp[1] if amp[1] > 0 else 0.0) for k in range(2, k_max + 1)}
+
+
+def siggen_plan(p):
+    """siggen_commands(p) and the first line the console could not take
+    whole (None when every line fits): the sender refuses the set rather
+    than let the parser cut a line and act on its first 63 characters."""
+    lines = siggen_commands(p)
+    too_long = [x for x in lines if len(x) > CMD_LINE_MAX]
+    return lines, (too_long[0] if too_long else None)
+
+
+def parse_kv(lines):
+    """'key: value' reply lines as a dict of strings."""
+    out = {}
+    for x in lines:
+        if ": " in x:
+            k, v = x.split(": ", 1)
+            out[k.strip()] = v.strip()
+    return out
 
 
 def detect_board(lines):
@@ -1894,6 +2185,57 @@ def main_gui(args):
                 v = dac_ui[unit]["on"].value
                 return "auto" if v == "auto" else ("on" if v is True else "off")
 
+            # ---- the signal generator (SG.6): siggen.c plays a wavegen
+            # table through DMA channel 1 into a DAC, paced by SCCP2 ----
+            with ui.card().classes("tile w-full rounded-xl p-4 gap-2"):
+                ui.label("signal generator · table -> DMA1 -> DAC").classes("card-title")
+                with ui.row().classes("w-full gap-2"):
+                    sg_on_sel = ui.select({True: "on", False: "off"}, value=False,
+                                          label="generator").props("dense outlined").classes("flex-grow")
+                    sg_dac_sel = ui.select({1: "DAC1 (RA1)", 2: "DAC2 (RA8)"}, value=2,
+                                           label="output").props("dense outlined").classes("flex-grow")
+                with ui.row().classes("w-full gap-2"):
+                    sg_n_in = ui.number("n, table entries (2..8192)", value=5000, min=2, max=8192,
+                                        step=100, format="%d").props("dense outlined").classes("flex-grow")
+                    sg_play_in = ui.number("play rate, Hz (100..1000000)", value=500000, min=100,
+                                           max=1000000, step=1000, format="%d").props("dense outlined") \
+                        .classes("flex-grow")
+                sg_f0_in = ui.number("f0, Hz (< play rate / 2)", value=10000, min=0.001, max=500000,
+                                     step=100).props("dense outlined")
+                sg_h_in = {}
+                for _row in ((2, 3, 4), (5, 6, 7)):
+                    with ui.row().classes("w-full gap-2"):
+                        for _k in _row:
+                            sg_h_in[_k] = ui.number(f"h{_k} (x f0)", value={2: 0.2, 3: 0.4, 4: 0.1}.get(_k, 0.0),
+                                                    min=-100, max=100, step=0.05).props("dense outlined") \
+                                .classes("flex-grow").style("width: 5rem")
+                with ui.row().classes("w-full gap-2"):
+                    sg_decay_in = ui.number("decay, 1/s (0 = none)", value=1000, min=0, max=1e9,
+                                            step=100).props("dense outlined").classes("flex-grow")
+                    sg_amp_in = ui.number("amp (0..1]", value=1.0, min=0.000001, max=1.0,
+                                          step=0.05).props("dense outlined").classes("flex-grow")
+                with ui.row().classes("w-full gap-2"):
+                    sg_lo_in = ui.number("lo, DAC code", value=800, min=0, max=4095, step=16,
+                                         format="%d").props("dense outlined").classes("flex-grow")
+                    sg_hi_in = ui.number("hi, DAC code", value=3500, min=0, max=4095, step=16,
+                                         format="%d").props("dense outlined").classes("flex-grow")
+                with ui.row().classes("w-full gap-4"):
+                    sg_snap_cb = ui.checkbox("snap f0 to the table", value=True)
+                    sg_force_cb = ui.checkbox("force - any lo/hi", value=True).classes("text-amber-400")
+                with ui.row().classes("w-full gap-2"):
+                    sg_loop_btn = ui.button("loop preset", icon="loop").props("unelevated").classes("flex-grow")
+                    sg_apply_btn = ui.button("apply", icon="send").props("unelevated").classes("flex-grow")
+                sg_msg = ui.label("off").classes("text-xs text-slate-400 mono")
+                sg_preview = ui.echart({
+                    "backgroundColor": "transparent", "animation": False,
+                    "grid": {"left": 44, "right": 8, "top": 8, "bottom": 24},
+                    "xAxis": {"type": "value", "min": 0, "axisLabel": {"color": DIM, "fontSize": 10}},
+                    "yAxis": {"type": "value", "min": 0, "max": 4096, "axisLabel": {"color": DIM, "fontSize": 10},
+                              "splitLine": {"lineStyle": {"color": "#1f2937"}}},
+                    "series": [{"type": "line", "showSymbol": False, "data": [], "step": "start",
+                                "lineStyle": {"width": 1, "color": "#f472b6"}}],
+                }, theme="dark").classes("w-full h-32")
+
             with ui.card().classes("tile w-full rounded-xl p-4 gap-2"):
                 ui.label("buffer").classes("card-title")
                 with ui.row().classes("w-full gap-2 items-end"):
@@ -1927,6 +2269,17 @@ def main_gui(args):
                 rate_chip = ui.chip("actual rate –", color="grey-8").props("dense outline")
                 halves_chip = ui.chip("halves/xfer –", color="grey-8").props("dense outline")
                 trig_chip = ui.chip("trigger off", color="grey-8").props("dense outline")
+                loop_chip = ui.chip("loop –", color="grey-8").props("dense outline")
+                with loop_chip:
+                    ui.tooltip("The signal generator's loop (SG.6): when the chain reads the pin "
+                               "the generator drives (DAC2 = RA8 = core 5 / PINSEL 3, DAC1 = RA1 = "
+                               "core 5 / PINSEL 1), the table - played at the generator's actual rate, "
+                               "held per entry - is aligned to the grab by cross-correlation and fitted "
+                               "(gain, offset): the residual in LSB rms, the gain, and the table entry "
+                               "the window starts at. The fitted expectation is drawn over the time "
+                               "signal (pink). On the board the DAC's settling (0.75-2 us per step) "
+                               "adds to the residual at fast play rates, and the output does not go "
+                               "below about code 780.").style("font-size: 14px; max-width: 26rem;")
                 with trig_chip:
                     ui.tooltip("Trigger mode of the time plot: 'trig @ k' = the level was crossed "
                                "at sample k of the grabbed half and the plot starts there; 'no "
@@ -1969,6 +2322,11 @@ def main_gui(args):
                 # other axis' zero - the top time axis (and its name) would
                 # sit at the bottom, on top of "sample"
                 time_chart.options["xAxis"][1]["axisLine"]["onZero"] = False
+                # SG.6: the generator's table as the loop expects it, fitted
+                # to the grab - empty unless the chain reads the generator's pin
+                time_chart.options["series"].append({
+                    "type": "line", "showSymbol": False, "data": [], "xAxisIndex": 0,
+                    "name": "expected", "lineStyle": {"width": 1, "color": "#f472b6", "type": "dashed"}})
             with ui.card().classes("tile w-full rounded-xl p-2"):
                 ui.label("spectrum · Hann window").classes("card-title px-2 pt-1")
                 fft_chart = chart("", "kHz", "dBFS", -100, 0, ACCENT2)
@@ -2151,6 +2509,38 @@ def main_gui(args):
                   "test triangle."),
         (interval_in, "How often this page halts the chain for one grab, in milliseconds (plus "
                       "however long the transfer itself takes at the current baud rate)."),
+        (sg_on_sel, "The signal generator (siggen.c): 'on' computes the table on the board "
+                    "(lib/wavegen, tab_wave_gen.py's formula) and plays it through DMA channel 1 "
+                    "into the chosen DAC, one entry per SCCP2 period - no CPU involved. A change "
+                    "goes to the board 0.8 s after the last one: every parameter as its own "
+                    "'siggen set' line (the console takes 63 characters), then 'siggen on'."),
+        (sg_dac_sel, "Which DAC plays the table: DAC1 drives RA1 (core 5 reads it as PINSEL 1), "
+                     "DAC2 drives RA8 (core 5 / PINSEL 3). DAC2 is also the test input's triangle - "
+                     "the board refuses the test input while the generator plays on DAC2 (use the "
+                     "loop preset: a custom input on RA8). A 'dac' command on the same DAC stops "
+                     "the generator."),
+        (sg_n_in, "Table size in entries (2..8192). The table plays cyclically: with 'snap' f0 "
+                  "is moved to a whole number of periods in it, so the wrap is seamless."),
+        (sg_play_in, "Play rate: entries per second (100 Hz..1 MHz). SCCP2 divides its 100 MHz "
+                     "clock by a whole number, so the actual rate the board reports can differ "
+                     "slightly; the DAC settles in 0.75-2 us per step, so above ~500 kHz the "
+                     "steps are not clean (Table 40-42)."),
+        (sg_f0_in, "Fundamental in Hz, below half the play rate."),
+        (sg_decay_in, "Envelope exp(-decay x t) over the table, 1/s: 0 = a steady tone, 1000 = "
+                      "tab_wave_gen.py's decaying pulse."),
+        (sg_amp_in, "Amplitude 0..1 of the range lo..hi the table is scaled to."),
+        (sg_lo_in, "Lowest table value (DAC code). The datasheet's range is 205..3890 (p1417, "
+                   "needs 'force' outside it); the board's DAC output did not follow below about "
+                   "code 780 (HARDWARE-LOG 29.09.2026), hence 800."),
+        (sg_hi_in, "Highest table value (DAC code)."),
+        (sg_snap_cb, "Move f0 to the nearest whole number of periods in the table (lib/wavegen's "
+                     "snap), so the table repeats without a jump."),
+        (sg_force_cb, "Let lo/hi outside the datasheet's 205..3890 through ('siggen on ... force')."),
+        (sg_loop_btn, "The loop: generator on DAC2 with a 1 kHz tone and a 3rd harmonic, and the "
+                      "chain on a custom input reading RA8 (core 5 / PINSEL 3). The time plot then "
+                      "draws the expected signal over the grab and the 'loop' chip says how well "
+                      "they match."),
+        (sg_apply_btn, "Send the card to the board now (it also goes by itself, 0.8 s after a change)."),
         (trig_cb, "Trigger the time plot: show every grab from the point where the signal "
                   "first crosses the level, so a periodic signal stands still. Display only - "
                   "the stream, the FFT and the triangle verdict keep the whole half. The plot "
@@ -2244,6 +2634,13 @@ def main_gui(args):
                 "samc": custom_input()[2],
                 "interval_ms": int(interval_in.value or 500),
             },
+            "siggen": {"on": bool(sg_on_sel.value), "dac": int(sg_dac_sel.value or 2),
+                       "n": int(sg_n_in.value or 5000), "play_hz": int(sg_play_in.value or 500000),
+                       "f0": float(sg_f0_in.value or 0.0),
+                       "h": [float(sg_h_in[k].value or 0.0) for k in range(2, 8)],
+                       "decay": float(sg_decay_in.value or 0.0), "amp": float(sg_amp_in.value or 0.0),
+                       "lo": int(sg_lo_in.value or 0), "hi": int(sg_hi_in.value or 0),
+                       "snap": bool(sg_snap_cb.value), "force": bool(sg_force_cb.value)},
             "trigger": {"on": bool(trig_cb.value), "level": int(trig_level_in.value or 0),
                         "slope": trig_slope_sel.value or RISING,
                         "hyst": int(trig_hyst_in.value or 0)},
@@ -2286,6 +2683,20 @@ def main_gui(args):
         rate_in.value = int(acq.get("ksps", 8000))
         core_sel.value, input_in.value, samc_in.value = ui_state["custom"]
         interval_in.value = int(acq.get("interval_ms", 500))
+        sgc = cfg.get("siggen", {})
+        sg_on_sel.value = bool(sgc.get("on", False))
+        sg_dac_sel.value = int(sgc.get("dac", 2)) if int(sgc.get("dac", 2)) in (1, 2) else 2
+        sg_n_in.value = int(sgc.get("n", 5000))
+        sg_play_in.value = int(sgc.get("play_hz", 500000))
+        sg_f0_in.value = float(sgc.get("f0", 10000.0))
+        for _k, _v in zip(range(2, 8), (list(sgc.get("h", [])) + [0.0] * 6)[:6]):
+            sg_h_in[_k].value = float(_v)
+        sg_decay_in.value = float(sgc.get("decay", 1000.0))
+        sg_amp_in.value = float(sgc.get("amp", 1.0))
+        sg_lo_in.value = int(sgc.get("lo", 800))
+        sg_hi_in.value = int(sgc.get("hi", 3500))
+        sg_snap_cb.value = bool(sgc.get("snap", True))
+        sg_force_cb.value = bool(sgc.get("force", True))
         trg = cfg.get("trigger", {})
         trig_cb.value = bool(trg.get("on", False))
         trig_level_in.value = int(trg.get("level", 2048))
@@ -2758,6 +3169,131 @@ def main_gui(args):
             if dac_mode(u) == "on":
                 await send_dac(u)
 
+    # ---- the signal generator card (SG.6) ----
+    state["siggen"] = None          # dict(dac, n, play, f0_used, table) while it plays
+
+    def sg_params():
+        return dict(on=bool(sg_on_sel.value), dac=int(sg_dac_sel.value or 2),
+                    n=int(sg_n_in.value or 5000), play=int(sg_play_in.value or 500000),
+                    f0=float(sg_f0_in.value or 0.0),
+                    h={k: float(sg_h_in[k].value or 0.0) for k in range(2, 8)},
+                    decay=float(sg_decay_in.value or 0.0), amp=float(sg_amp_in.value or 0.0),
+                    lo=int(sg_lo_in.value or 0), hi=int(sg_hi_in.value or 0),
+                    snap=bool(sg_snap_cb.value), force=bool(sg_force_cb.value))
+
+    def sg_preview_update():
+        """The table as the firmware computes it - with the rate and f0 it
+        reported when it plays, otherwise with SCCP2's rate and the snap the
+        card asks for."""
+        p = sg_params()
+        sg = state["siggen"]
+        try:
+            if sg:
+                table = sg["table"]
+            else:
+                real = wavegen_model.sccp2_rate(max(100, p["play"]))
+                f0 = wavegen_model.snap_hz(p["f0"], p["n"], real) if p["snap"] else p["f0"]
+                table = wavegen_model.wavegen(p["n"], real, f0, [p["h"][k] for k in range(2, 8)],
+                                              p["decay"], p["amp"], p["lo"], p["hi"])
+        except (ZeroDivisionError, ValueError):
+            table = []
+        step = max(1, len(table) // 1500)             # at most ~1500 points drawn
+        sg_preview.options["series"][0]["data"] = [[i, v] for i, v in enumerate(table)][::step]
+        sg_preview.options["xAxis"]["max"] = max(1, len(table))
+        sg_preview.update()
+
+    async def apply_siggen():
+        t = state["target"]
+        if not t:
+            sg_msg.text = "not connected"
+            return
+        p = sg_params()
+        lines, too_long = siggen_plan(p)
+        if too_long:
+            sg_msg.text = (f"not sent: '{too_long[:40]}...' is {len(too_long)} characters, "
+                           f"the console takes {CMD_LINE_MAX}")
+            ui.notify(sg_msg.text, type="negative")
+            return
+        reply, ok = [], True
+        async with port_lock:
+            for x in lines:
+                ok, reply = await run.io_bound(t.cmd, x)
+                if not ok:
+                    break
+        if not ok:
+            state["siggen"] = None
+            sg_msg.text = f"'{x}' refused: " + "  ".join(reply)
+        elif p["on"]:
+            st = parse_kv(reply)
+            play = int(st.get("play_hz_actual", "0") or 0)
+            f0u = float(st.get("f0_used", "0") or 0)
+            table = wavegen_model.wavegen(p["n"], play, f0u, [p["h"][k] for k in range(2, 8)],
+                                          p["decay"], p["amp"], p["lo"], p["hi"])
+            state["siggen"] = dict(dac=p["dac"], n=p["n"], play=play, f0_used=f0u, table=table)
+            sg_msg.text = (f"on: DAC{p['dac']}, {p['n']} entries at {play} Hz actual, f0 {f0u:g} Hz, "
+                           f"table {st.get('table_min')}..{st.get('table_max')}, "
+                           f"{st.get('transfers_per_s')} transfers/s")
+        else:
+            state["siggen"] = None
+            sg_msg.text = "off"
+        sg_preview_update()
+        refresh_channel()
+        if ok and not state["live"] and state["acq_active"] is not None:
+            await do_single()
+    sg_apply_btn.on_click(apply_siggen)
+
+    sg_pending = {}
+
+    def sg_changed():
+        sg_preview_update()
+        if not state["target"]:
+            return
+        old = sg_pending.get("t")
+        if old and not old.done():
+            old.cancel()
+
+        async def later():
+            await asyncio.sleep(0.8)
+            await apply_siggen()
+        sg_pending["t"] = asyncio.ensure_future(later())
+    for _el in [sg_on_sel, sg_dac_sel, sg_n_in, sg_play_in, sg_f0_in, sg_decay_in, sg_amp_in,
+                sg_lo_in, sg_hi_in, sg_snap_cb, sg_force_cb] + list(sg_h_in.values()):
+        _el.on_value_change(lambda e: sg_changed())
+
+    async def sg_loop_preset():
+        """The loop the design asks for (DESIGN-MULTICHANNEL 5): the
+        generator on DAC2, the chain reading RA8 = core 5 / PINSEL 3 as a
+        custom input (the test form would put its own triangle on DAC2),
+        a 1 kHz tone with a 3rd harmonic, table 800..3500 (the board's DAC
+        does not follow below about code 780, HARDWARE-LOG 29.09.2026)."""
+        sg_on_sel.value, sg_dac_sel.value = True, 2
+        sg_n_in.value, sg_play_in.value, sg_f0_in.value = 1000, 100000, 1000
+        for k in range(2, 8):
+            sg_h_in[k].value = 0.3 if k == 3 else 0.0
+        sg_decay_in.value, sg_amp_in.value, sg_lo_in.value, sg_hi_in.value = 0, 1.0, 800, 3500
+        sg_snap_cb.value = True
+        input_mode_sel.value = "custom"
+        core_sel.value = 5
+        input_in.value = 3
+        if rate_in.value and int(rate_in.value) > 4000:
+            rate_in.value = 1000
+        old = sg_pending.get("t")
+        if old and not old.done():
+            old.cancel()
+        await apply_siggen()
+    sg_loop_btn.on_click(sg_loop_preset)
+
+    def loop_eval(samples, fs):
+        """The loop's verdict for one grab, or None when the chain does not
+        read the generator's pin."""
+        sg = state["siggen"]
+        cfg = state["acq_active"] or {}
+        if not sg or cfg.get("mode") != "custom" or not fs:
+            return None
+        if (cfg.get("core"), cfg.get("pinsel")) != {1: (5, 1), 2: (5, 3)}[sg["dac"]]:
+            return None
+        return wavegen_model.align(samples, sg["table"], sg["play"], fs)
+
     async def apply_buf():
         t = state["target"]
         if not t:
@@ -2890,6 +3426,33 @@ def main_gui(args):
             t_scale, t_name = ((1e6, "time (µs)") if duration_s < 1e-3 else
                                (1e3, "time (ms)") if duration_s < 1.0 else (1.0, "time (s)"))
             time_chart.options["series"][0]["data"] = plot
+            # SG.6: the loop - the generator's table, aligned and fitted to
+            # this grab, drawn over it (in the trigger's window when that is on)
+            lp = loop_eval(samples, fs)
+            if lp is not None:
+                exp_v = lp["expected"]
+                rng = range(k, k + L) if trig_cb.value else range(len(exp_v))
+                off_x = x0 if trig_cb.value else 0.0
+                time_chart.options["series"][1]["data"] = [[round(j - off_x, 3), round(float(exp_v[j]), 1)]
+                                                          for j in rng]
+                loop_chip.text = (f"loop rms {lp['rms']:.1f} LSB · gain {lp['gain']:.3f} · "
+                                  f"entry {lp['entry']:.1f}")
+                # the harmonic factors the generator was told, against what the
+                # grab holds - fitted in the time domain at k x f0_used, not
+                # read off the FFT: a grab holds as little as one period of f0,
+                # far too few bins to tell the harmonics apart
+                if float(sg_decay_in.value or 0) == 0:
+                    meas = harmonic_factors(samples, fs, state["siggen"]["f0_used"], 7)
+                    set_h = {k: float(sg_h_in[k].value or 0.0) for k in range(2, 8)}
+                    shown = [f"h{k} {meas[k]:.2f}/{abs(set_h[k]):.2f}" for k in range(2, 8)
+                             if set_h[k] or meas[k] > 0.02]
+                    if shown:
+                        loop_chip.text += "  ·  " + " ".join(shown)
+                loop_chip.props(f'color={"positive" if lp["rms"] < 30 else "warning"}')
+            else:
+                time_chart.options["series"][1]["data"] = []
+                loop_chip.text = "loop –"
+                loop_chip.props("color=grey-8")
             time_chart.options["xAxis"][0]["max"] = n_samp
             time_chart.options["xAxis"][1]["max"] = duration_s * t_scale
             time_chart.options["xAxis"][1]["name"] = t_name

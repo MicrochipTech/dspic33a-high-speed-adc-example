@@ -111,8 +111,8 @@ not counted.
 | SG.3 `src/siggen/` | done | this commit | Opus | no registers; callers that touch a DAC stop it first; host test |
 | SG.4 `siggen` command | done | this commit | Opus | one parser slot; `help` change = BR rule, [SMOKE] |
 | SG.5 Routing claim | done | this commit | Opus | DMA 1, SCCP 2, DAC output, RAM; conflict with `ROUTE_STREAM` on DAC2 |
-| SG.6 GUI card | open | | | `tools/wavegen_model.py`, loop overlay and match chip |
-| SG.7 GUI tests | open | | | selftest + Playwright |
+| SG.6 GUI card | done | this commit | Opus | `tools/wavegen_model.py`, loop overlay and match chip |
+| SG.7 GUI tests | done | this commit | Opus | selftest + Playwright |
 | SG.8 Board run | open | | | block R8; fallback TMR2, then timer ISR ("A2 not met") |
 | SG.9 Documentation | open | | | CLAUDE.md, architecture, DESIGN 4.2 corrected |
 

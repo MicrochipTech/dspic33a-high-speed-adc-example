@@ -382,6 +382,38 @@ try:
         page.screenshot(path=SCREENSHOT.replace(".png", "_docs.png"))
         page.keyboard.press("Escape")
 
+        # ---- SG.7: the signal generator card - loop preset, LIVE, the loop
+        # chip and the overlay, generator off again ----
+        loop_chip = page.locator(".q-chip").filter(has_text=re.compile(r"^loop ")).first
+        page.get_by_role("button", name=re.compile(r"^\W*loop preset$", re.I)).click()
+        time.sleep(1.5)
+        live.click()
+        ok, txt = wait_text(page, loop_chip, r"^loop rms [\d.]+ LSB")
+        check("signal generator: loop preset + LIVE -> the loop chip reports a match", ok, txt[:90])
+        m = re.search(r"loop rms ([\d.]+) LSB", txt)
+        check("signal generator: the stand-in's loop residual is small (< 30 LSB)",
+              bool(m) and float(m.group(1)) < 30, txt[:90])
+        tchart_sg = page.locator(".tile", has=page.locator(".card-title", has_text="time signal")) \
+                        .locator(".nicegui-echart").first
+        n_overlay = page.evaluate(
+            "id => { const o = getElement(id).chart.getOption(); return o.series.length > 1 ?"
+            " o.series[1].data.length : -1; }", int(tchart_sg.get_attribute("id")[1:]))
+        check("signal generator: the expected signal is drawn over the grab", n_overlay > 100, str(n_overlay))
+        # with the trigger on too, the overlay follows the triggered window
+        page.get_by_role("checkbox", name=re.compile(r"^trigger$", re.I)).click()
+        time.sleep(2.5)
+        ok, txt = wait_text(page, loop_chip, r"^loop rms [\d.]+ LSB")
+        check("signal generator: loop and trigger together", ok, txt[:60])
+        page.get_by_role("checkbox", name=re.compile(r"^trigger$", re.I)).click()
+        stop_btn.first.click()
+        time.sleep(1.0)
+        page.get_by_label(re.compile(r"^generator$", re.I)).click()
+        page.get_by_role("option", name="off", exact=True).click()
+        time.sleep(2.0)
+        single.click()
+        ok, txt = wait_text(page, loop_chip, r"^loop –$")
+        check("signal generator: off -> no loop verdict", ok, txt[:40])
+
         # ---- DISCONNECT while LIVE: waits for the running grab, no
         # "cycle failed" (29.09.2026: the port was closed under a grab) ----
         time.sleep(0.5)
