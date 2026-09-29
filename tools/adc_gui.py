@@ -753,6 +753,9 @@ def board_svg(board_key, core, pinsel, dac_unit=0, dac_on=False):
 DAC_CLK_HZ = 400e6   # CLKGEN7 on the PLL1 VCO divider (clock.c, 25.09.2026; was 320e6, below the DAC's spec)
 
 
+DAC_CODE_MIN_GUI, DAC_CODE_MAX_GUI = 0x0CD, 0xF32   # dac.h's DAC_CODE_MIN/MAX
+
+
 def dac_period_ns_of(low: int, high: int, slp: int) -> float:
     """Mirrors dac.c's dac_period_ns(): two slopes of (high-low)*16 DAC
     clocks each, so a full triangle period is (high-low)*32 DAC clocks."""
@@ -1010,7 +1013,7 @@ class FakeTarget:
                         "[<samc 0..31>]] | stream off | stream grab | stream"]
         try:
             if c == "dac":
-                usage = ["usage: dac <1|2> <on|off> [low] [high] [slpdat]"]
+                usage = ["usage: dac <1|2> <on|off> [low] [high] [slpdat] [force]"]
                 if len(args) < 2 or args[0] not in ("1", "2"):
                     return False, usage
                 unit = int(args[0])
@@ -1022,17 +1025,28 @@ class FakeTarget:
                     return True, [f"dac: {unit}", "off"]
                 if not args[1].startswith("on"):
                     return False, usage
+                force = len(args) > 2 and args[-1] == "force"
+                if force:
+                    args = args[:-1]
                 low = int(args[2], 0) if len(args) > 2 else 0x100
                 high = int(args[3], 0) if len(args) > 3 else 0xF00
                 slp = int(args[4], 0) if len(args) > 4 else 8
-                if not (0 <= low <= 4095) or not (0 <= high <= 4095) or high <= low or not (1 <= slp <= 255):
+                if not (0 <= low <= 4095) or not (0 <= high <= 4095) or                         not ((0 if force else 1) <= slp <= (65535 if force else 255)) or                         (not force and high <= low):
                     return False, usage
+                if not force and low < DAC_CODE_MIN_GUI + slp:
+                    return False, [f"dac: refused - low must be >= 0xCD + slpdat = {DAC_CODE_MIN_GUI + slp} "
+                                   "(p1422, Example 18-3 note 1); append 'force' to write it anyway"]
+                if not force and high > DAC_CODE_MAX_GUI - slp:
+                    return False, [f"dac: refused - high must be <= 0xF32 - slpdat = {DAC_CODE_MAX_GUI - slp} "
+                                   "(p1422, Example 18-3 note 1); append 'force' to write it anyway"]
                 d.update(on=True, low=low, high=high, slp=slp)
                 if unit == 2 and self.chain_on and self.chain_test:
                     self.chain_dac2_user = True
                 return True, [f"dac: {unit}", "RA1" if unit == 1 else "RA8",
                               f"low: {low}", f"high: {high}", f"slpdat: {slp}",
-                              f"period ns: {round(dac_period_ns_of(low, high, slp))}"]
+                              f"period ns: {round(dac_period_ns_of(low, high, slp))}"] +                     ([("forced (within the datasheet's limits anyway)"
+                       if DAC_CODE_MIN_GUI + slp <= low < high <= DAC_CODE_MAX_GUI - slp
+                       else "forced - OUTSIDE the datasheet's limits (p1422)")] if force else [])
             if c == "buf":
                 if args:
                     n = int(args[0])
@@ -1302,6 +1316,13 @@ def selftest() -> int:
     t.cmd("dac 2 on 256 3000 39")
     okd2, sd2, _m = t.grab()
     hi_on2 = int(np.max(sd2)) if okd2 else 0
+    ok_r, ln_r = t.cmd("dac 2 on 32 3840 20")
+    ok_f, ln_f = t.cmd("dac 2 on 32 3840 20 force")
+    ok_force = (not ok_r and "low must be >= 0xCD + slpdat = 225" in " ".join(ln_r)
+                and ok_f and "OUTSIDE" in " ".join(ln_f))
+    ok_all &= ok_force
+    print(f"dac force: low 32 refused without it, taken with it ({ln_f[-1:]}):",
+          "PASS" if ok_force else f"FAIL {ln_r} {ln_f}")
     t.cmd("dac 2 off")
     okd3, sd3, _m = t.grab()
     hi_off = int(np.max(sd3)) if okd3 else 9999
@@ -1742,7 +1763,11 @@ def main_gui(args):
                         _high = ui.number("high (0..4095, > low)", value=0xF00, min=0, max=4095,
                                           step=16, format="%d").props("dense outlined").classes("flex-grow")
                     _slp = ui.number("SLPDAT · slope (1..255, counts/DAC clock; 8 = 22 kHz)",
-                                     value=8, min=1, max=255, step=1, format="%d").props("dense outlined")
+                                     value=8, min=0, max=65535, step=1, format="%d").props("dense outlined")
+                    # 'force' (cli.c): the board writes low/high/SLPDAT as typed,
+                    # outside the datasheet's 0xCD+SLPDAT..0xF32-SLPDAT too.
+                    _force = ui.checkbox("force - write any value, ignore the datasheet's limits",
+                                         value=True).classes("text-amber-400")
                     _freq = ui.label().classes("text-cyan-300 mono")
                     _btn = ui.button(f"apply dac{_unit}", icon="graphic_eq").props("unelevated").classes("w-full")
                     _msg = ui.label().classes("text-xs text-slate-400 mono")
@@ -1756,7 +1781,7 @@ def main_gui(args):
                         "kept across rate changes" if _unit == 2 else
                         "test input reads DAC2 (RA8) - DAC1 on RA1 acts on a custom input "
                         "(core 5 / AN1)").classes("text-xs text-amber-400")
-                    dac_ui[_unit] = {"on": _on, "low": _low, "high": _high, "slp": _slp,
+                    dac_ui[_unit] = {"on": _on, "low": _low, "high": _high, "slp": _slp, "force": _force,
                                      "freq": _freq, "btn": _btn, "msg": _msg, "note": _note}
 
             def dac_mode(unit):
@@ -2051,6 +2076,10 @@ def main_gui(args):
                          "end. The difference is the swing the ADC should see."),
             (_c["slp"], "SLPDAT: how many DAC codes the slope generator steps per DAC clock. "
                         "Larger is faster, so the period shown below shrinks."),
+            (_c["force"], "Ticked: the board takes low, high and SLPDAT exactly as typed (any "
+                          "0..4095, SLPDAT 0..65535, even high <= low) - 'dac ... force'. Unticked: "
+                          "the datasheet's limits apply (low >= 0xCD + SLPDAT, high <= 0xF32 - "
+                          "SLPDAT, p1422) and the board refuses anything outside them."),
             (_c["btn"], f"Send these settings to DAC{_u} right now. The line underneath is the "
                         "board's own answer, including the period it computed."),
         ]
@@ -2093,7 +2122,8 @@ def main_gui(args):
             "buffer": {"size": int(buf_in.value or 2048)},
             "dac": {str(u): {"on": dac_mode(u) if dac_mode(u) == "auto" else dac_mode(u) == "on",
                              "low": int(c["low"].value or 0),
-                             "high": int(c["high"].value or 0), "slpdat": int(c["slp"].value or 0)}
+                             "high": int(c["high"].value or 0), "slpdat": int(c["slp"].value or 0),
+                             "force": bool(c["force"].value)}
                     for u, c in dac_ui.items()},
             "fake": {"source": fake_src_sel.value or "dac2",
                      "signal_khz": float(sig_in.value or 0.0),
@@ -2136,6 +2166,7 @@ def main_gui(args):
             c["low"].value = int(d.get("low", 0x100))
             c["high"].value = int(d.get("high", 0xF00))
             c["slp"].value = int(d.get("slpdat", 8))
+            c["force"].value = bool(d.get("force", True))
         fake = cfg.get("fake", {})
         fake_src_sel.value = fake.get("source", "dac2") if fake.get("source") in ("sine", "dac1", "dac2") \
             else "dac2"
@@ -2514,7 +2545,7 @@ def main_gui(args):
         else:
             low, high = int(c["low"].value or 0), int(c["high"].value or 0)
             slp = int(c["slp"].value or 0)
-            cmd = f"dac {unit} on {low} {high} {slp}"
+            cmd = f"dac {unit} on {low} {high} {slp}" + (" force" if c["force"].value else "")
         async with port_lock:
             ok, lines = await run.io_bound(t.cmd, cmd)
         if ok and unit == 2 and (state["acq_active"] or {}).get("mode") == "test":
@@ -2567,7 +2598,7 @@ def main_gui(args):
             await apply_dac(unit)
         dac_pending[unit] = asyncio.ensure_future(later())
     for _u in sorted(dac_ui):
-        for _k in ("on", "low", "high", "slp"):
+        for _k in ("on", "low", "high", "slp", "force"):
             dac_ui[_u][_k].on_value_change(lambda e, u=_u: dac_changed(u))
 
     async def apply_active_dacs():

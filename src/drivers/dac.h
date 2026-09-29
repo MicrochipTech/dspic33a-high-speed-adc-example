@@ -36,6 +36,13 @@
  * up. Enables CLKGEN7, the DAC and its pin buffer; every data write is
  * taken at once (UPDTRG = 11 binary = 3, p1409). */
 bool     dac_triangle_start(uint8_t unit, uint16_t low, uint16_t high, uint16_t slpdat);
+/* The check dac_triangle_start() applies, on its own. */
+bool     dac_triangle_limits_ok(uint16_t low, uint16_t high, uint16_t slpdat);
+/* The same triangle WITHOUT that check - any 12-bit low/high, any SLPDAT
+ * (0 included, high <= low included): what the DAC does outside the
+ * datasheet's limits is the caller's experiment. Refused only for a bad
+ * unit, a code above 0xFFF, or the clock not coming up. */
+bool     dac_triangle_force(uint8_t unit, uint16_t low, uint16_t high, uint16_t slpdat);
 /* A static level, DAC_CODE_MIN..MAX, same enables. dac_set() then changes
  * it with one register write - fast enough for an interrupt at 100 kHz;
  * the CPU-stepped signal of the chain test's low-rate stages. */

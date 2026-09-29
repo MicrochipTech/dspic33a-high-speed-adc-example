@@ -6,7 +6,7 @@
 ##   ADC/DMA TEST LOG  -  START OF RUN  (copy from here)    ##
 ##############################################################
 
-[boot] adc_dma_40msps Sep 27 2026 23:12:03 git 826b274+local changes (master)
+[boot] adc_dma_40msps Sep 29 2026 13:04:46 git 5ed8173+local changes (master)
 [simtest] *** SIMULATOR BUILD - this log is not from hardware ***
 [simtest] Purpose: check that the program's buffer logic is right -
 [simtest] that the two halves of the ping-pong buffer are filled,
@@ -25,7 +25,7 @@
 adc_dma_40msps - ADC at 40 MSPS into RAM via DMA
 *** SIMULATOR BUILD: no hardware, ADC and DMA are software stand-ins, samples are a synthetic sine ***
 board: EV74H48A, dsPIC33AK512MPS512 GP DIM
-build: adc_dma_40msps Sep 27 2026 23:12:36 git 826b274+local changes (master)
+build: adc_dma_40msps Sep 29 2026 13:05:01 git 5ed8173+local changes (master)
 type 'help' for the commands
 please log this terminal from power-up and send it back
 > [boot] crc16/ccitt-false self-check: ok (0x29B1)
@@ -58,7 +58,7 @@ Available commands:
   test [all|self|clock|clkoff|bursts|matrix|rate|sweep|dac] [n]
   core <1..5> [pinsel] - switch the ADC core
   buf [n] - samples per buffer half (16..1024, even)
-  dac <1|2> <on|off> [low] [high] [slpdat] - triangle on DACOUT1/2
+  dac <1|2> <on|off> [low] [high] [slpdat] [force] - triangle on DACOUT1/2
   dactest [halves] - judge the running DAC's triangle through the chain
   snap - fill the buffer once and stop; then dump it
   rate <ksps> - the sample rate, 4000..40000
@@ -68,7 +68,7 @@ Available commands:
   reset - software reset
 > [smoke] > version
 version
-[build] adc_dma_40msps Sep 27 2026 23:12:26 git 826b274+local changes (master)
+[build] adc_dma_40msps Sep 29 2026 13:04:57 git 5ed8173+local changes (master)
 [build] board: EV74H48A, dsPIC33AK512MPS512 GP DIM
 [build] adc core: 3
 [build] default input (pinsel): 5

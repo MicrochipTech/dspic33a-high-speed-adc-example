@@ -1343,7 +1343,7 @@ class ReplayTarget:
                      "  test [all|self|clock|clkoff|bursts|matrix|rate|sweep|dac] [n]",
                      "  stream on <ksps> [core pinsel [samc]]|off|grab - the chain streaming",
                      "  buf [n] - samples per buffer half (16..1024, even)",
-                     "  dac <1|2> <on|off> [low] [high] [slpdat] - triangle on DACOUT1/2"]
+                     "  dac <1|2> <on|off> [low] [high] [slpdat] [force] - triangle on DACOUT1/2"]
             if self.has_route:
                 lines.append("  route list - the active route(s) and the resource table")
             return True, lines

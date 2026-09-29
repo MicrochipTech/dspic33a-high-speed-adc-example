@@ -576,6 +576,14 @@ CMD_DEFINE(buf, "buf", cmd_buf_fn, "buf [n] - samples per buffer half (16..1024,
 static void cmd_dac_fn(int argc, char **argv)
 {
     uint32_t unit, low = 0x100u, high = 0xF00u, slp = 8u;
+    /* A trailing "force" skips the datasheet's limits (dac_triangle_force()) -
+     * the defaults above stay the checked ones, "force" is the deliberate
+     * override. */
+    bool force = false;
+    if ((argc >= 4) && (strcmp(argv[argc - 1], "force") == 0)) {
+        force = true;
+        argc--;
+    }
     if ((argc < 3) || !arg_u32(argv[1], 1u, DAC_UNITS, &unit)) {
         usage("dac <1|2> <on|off> [low] [high] [slpdat]  (triangle on DACOUT1 = RA1 or DACOUT2 = RA8)");
         return;
@@ -589,15 +597,39 @@ static void cmd_dac_fn(int argc, char **argv)
     if ((argv[2][0] != 'o') || (argv[2][1] != 'n') || (argc > 6) ||
         ((argc >= 4) && !arg_u32(argv[3], 0u, 4095u, &low)) ||
         ((argc >= 5) && !arg_u32(argv[4], 0u, 4095u, &high)) ||
-        ((argc == 6) && !arg_u32(argv[5], 1u, 255u, &slp)) ||
-        (high <= low)) {
-        usage("dac <1|2> <on|off> [low] [high] [slpdat]  (0..4095, high > low, slpdat 1..255)");
+        ((argc == 6) && !arg_u32(argv[5], force ? 0u : 1u, force ? 65535u : 255u, &slp)) ||
+        (!force && (high <= low))) {
+        usage("dac <1|2> <on|off> [low] [high] [slpdat] [force]  (0..4095, high > low, slpdat 1..255; "
+              "force: any low/high 0..4095, slpdat 0..65535)");
         return;
     }
-    if (!dac_triangle_start((uint8_t)unit, (uint16_t)low, (uint16_t)high, (uint16_t)slp)) {
-        put_line("dac: refused - SLPDAT above 50 breaks the 0xCD+SLPDAT..0xF32-SLPDAT limits, or CLKGEN7 did not come up");
+    if (!force && !dac_triangle_limits_ok((uint16_t)low, (uint16_t)high, (uint16_t)slp)) {
+        /* Name the limit that was broken, with its number (slp <= 255 here,
+         * so neither bound under- or overflows): the old single line blamed
+         * SLPDAT even when low was the one out of range. */
+        char num[16];
+        if (low < DAC_CODE_MIN + slp) {
+            (void)u32_to_str(num, DAC_CODE_MIN + slp);
+            cmd_parser_write("dac: refused - low must be >= 0xCD + slpdat = ");
+        } else {
+            (void)u32_to_str(num, DAC_CODE_MAX - slp);
+            cmd_parser_write("dac: refused - high must be <= 0xF32 - slpdat = ");
+        }
+        cmd_parser_write(num);
+        put_line(" (p1422, Example 18-3 note 1); append 'force' to write it anyway");
         cmd_parser_fail();
         return;
+    }
+    if (!(force ? dac_triangle_force((uint8_t)unit, (uint16_t)low, (uint16_t)high, (uint16_t)slp)
+                : dac_triangle_start((uint8_t)unit, (uint16_t)low, (uint16_t)high, (uint16_t)slp))) {
+        put_line("dac: refused - CLKGEN7 did not come up");
+        cmd_parser_fail();
+        return;
+    }
+    if (force) {
+        put_line(dac_triangle_limits_ok((uint16_t)low, (uint16_t)high, (uint16_t)slp)
+                 ? "forced (within the datasheet's limits anyway)"
+                 : "forced - OUTSIDE the datasheet's limits (p1422)");
     }
     put_kv("dac", unit);
     put_line(dac_pin_name((uint8_t)unit));
@@ -606,7 +638,7 @@ static void cmd_dac_fn(int argc, char **argv)
     put_kv("slpdat", slp);
     put_kv("period ns", dac_period_ns((uint8_t)unit));
 }
-CMD_DEFINE(dac, "dac", cmd_dac_fn, "dac <1|2> <on|off> [low] [high] [slpdat] - triangle on DACOUT1/2");
+CMD_DEFINE(dac, "dac", cmd_dac_fn, "dac <1|2> <on|off> [low] [high] [slpdat] [force] - triangle on DACOUT1/2");
 
 /* The DAC test measures the DAC inside the chip: UREFCON puts DAC2 on
  * the UREF line and the ADC samples it as AN7, which every core has

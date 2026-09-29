@@ -84,15 +84,27 @@ static bool dac_enable(uint32_t u)
     return true;
 }
 
-bool dac_triangle_start(uint8_t unit, uint16_t low, uint16_t high, uint16_t slpdat)
+bool dac_triangle_limits_ok(uint16_t low, uint16_t high, uint16_t slpdat)
 {
-    if (!valid(unit)) { return false; }
     /* Note 1 of Example 18-3 (p1422): DACDAT at most 0xF32 - SLPDAT,
      * DACLOW at least 0xCD + SLPDAT, or the ends are not reached. */
-    if ((slpdat == 0u) || (low < DAC_CODE_MIN + slpdat) ||
-        (high > DAC_CODE_MAX - slpdat) || (high <= low)) {
-        return false;
-    }
+    return (slpdat != 0u) && (slpdat <= DAC_CODE_MAX) &&
+           (low >= DAC_CODE_MIN + slpdat) &&
+           (high <= DAC_CODE_MAX - slpdat) && (high > low);
+}
+
+bool dac_triangle_start(uint8_t unit, uint16_t low, uint16_t high, uint16_t slpdat)
+{
+    if (!valid(unit) || !dac_triangle_limits_ok(low, high, slpdat)) { return false; }
+    return dac_triangle_force(unit, low, high, slpdat);
+}
+
+bool dac_triangle_force(uint8_t unit, uint16_t low, uint16_t high, uint16_t slpdat)
+{
+    /* No range check on purpose: the console's "dac ... force", for
+     * trying what the DAC does outside the datasheet's limits. The
+     * registers are 12-bit codes (DACLOW/DACDAT) and 16-bit SLPDAT. */
+    if (!valid(unit) || (low > 0xFFFu) || (high > 0xFFFu)) { return false; }
     const uint32_t u = unit - 1u;
     if (!clock_dac_on()) { return false; }
     CON(u).DACEN     = 0u;
@@ -188,7 +200,7 @@ uint32_t dac_period_ns(uint8_t unit)
     if (!valid(unit)) { return 0u; }
     const uint32_t u = unit - 1u;
     const uint32_t f = clock_dac_hz();
-    if (!state[u].tri || (state[u].slp == 0u) || (f == 0u)) { return 0u; }
+    if (!state[u].tri || (state[u].slp == 0u) || (f == 0u) || (state[u].high <= state[u].low)) { return 0u; }
     return (uint32_t)(2u * slope_clocks_x(u, 1000000000u) / f);
 }
 
@@ -200,7 +212,7 @@ uint32_t dac_slope_samples_x1000(uint8_t unit, uint32_t sample_hz)
     if (!valid(unit)) { return 0u; }
     const uint32_t u = unit - 1u;
     const uint32_t f = clock_dac_hz();
-    if (!state[u].tri || (state[u].slp == 0u) || (f == 0u)) { return 0u; }
+    if (!state[u].tri || (state[u].slp == 0u) || (f == 0u) || (state[u].high <= state[u].low)) { return 0u; }
     return (uint32_t)(slope_clocks_x(u, 1000u) * sample_hz / f);
 }
 
