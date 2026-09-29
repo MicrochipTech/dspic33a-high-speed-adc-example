@@ -1856,3 +1856,15 @@ streaming is refused ("stop the stream first"); after `stream off` it is accepte
 in `adc_gui.py` (bc00470: stop the stream before `buf`, send samples per half, parse the
 real reply). Flashed locally with `ipecmd -TPPKOB4 -M -OL` (Program Succeeded), banner
 `git 955c473`: `buf 256` + `stream on 8000` -> grab n=256; `buf 1024` -> n=1024.
+
+## 2026-09-29, `stream`'s "free CPU cycles per sample" reads the full budget - 955c473, local
+
+Checked for the GUI's new CPU chip over COM14: `stream on 1000/4000/8000`, then `stream`,
+reported free 200/50/25 - exactly 200 MHz / rate, i.e. a mean processing time of 0
+(`acquisition.c` `chain_stream_state()`: `pmean = proc_ticks_sum / proc_count`). "processing
+max per half, us" read 0 as well, at 128 samples per half, 8 MSPS, 2 s of streaming. Run 20's
+S6 measured the same loop at 3.0 cycles per sample (load 12.3 % at 8 MSPS), so the figure
+`stream` reports is wrong, not the loop free. Not yet explained: either `capture_service()`'s
+timing (Timer1, 80 ns ticks, around `process_buffer()`) does not run on the stream path, or
+it measures nothing. The GUI shows the budget only (200 MHz / actual rate = 1.25 x N) until
+this is found.

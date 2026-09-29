@@ -754,6 +754,27 @@ DAC_CLK_HZ = 400e6   # CLKGEN7 on the PLL1 VCO divider (clock.c, 25.09.2026; was
 
 
 DAC_CODE_MIN_GUI, DAC_CODE_MAX_GUI = 0x0CD, 0xF32   # dac.h's DAC_CODE_MIN/MAX
+# The CPU clock (PLL2, clock.h). The trigger is SCCP1 on CLKGEN13 = 160 MHz,
+# one sample every N of its clocks, so the CPU has 200/160 x N = 1.25 x N
+# cycles per sample - exactly, both PLLs run from the same FRC.
+CPU_HZ = 200_000_000
+_FREE_CYC_RE = re.compile(r"free CPU cycles per sample \(mean\):\s*(\d+)")
+
+
+def cpu_budget_cycles(ksps: int) -> float:
+    """CPU cycles per sample at the frame's actual rate (200 MHz / rate)."""
+    return CPU_HZ / (ksps * 1e3) if ksps > 0 else 0.0
+
+
+def parse_free_cycles(lines):
+    """cli.c's 'stream' status: 'free CPU cycles per sample (mean): <n>' -
+    the budget minus the measured mean processing time (acquisition.c's
+    chain_stream_state()) - or None."""
+    for l in lines:
+        m = _FREE_CYC_RE.search(l)
+        if m:
+            return int(m.group(1))
+    return None
 
 
 def dac_period_ns_of(low: int, high: int, slp: int) -> float:
@@ -1107,9 +1128,11 @@ class FakeTarget:
                     return False, usage_stream
                 if not self.chain_on:
                     return True, ["stream: off"]
+                budget = CPU_HZ // (self.chain_ksps * 1000) if self.chain_ksps else 0
                 return True, [f"stream: on - {self.chain_ksps} ksps",
                               f"core: {self.chain_core}", f"pinsel: {self.chain_pinsel}",
-                              f"grabs: {self.chain_grabs}"]
+                              f"grabs: {self.chain_grabs}",
+                              f"free CPU cycles per sample (mean): {max(budget - 3, 0)}"]
         except (ValueError, IndexError):
             return False, ["usage error"]
         return False, ["unknown command"]
@@ -1338,6 +1361,15 @@ def selftest() -> int:
     ok_all &= ok_dac
     print(f"fake source 'DAC2 triangle' follows the DAC2 tile: high 1000 -> max {hi_on}, high 3000 -> "
           f"max {hi_on2}, off -> max {hi_off}:", "PASS" if ok_dac else "FAIL")
+
+    # ---- CPU budget per sample: 200 MHz / rate, and the 'stream' figure ----
+    t.cmd("stream on 8000")
+    ok_s, st_l = t.cmd("stream")
+    free = parse_free_cycles(st_l) if ok_s else None
+    ok_cpu = cpu_budget_cycles(8000) == 25.0 and cpu_budget_cycles(4000) == 50.0 and free is not None         and 0 <= free <= 25
+    ok_all &= ok_cpu
+    print(f"CPU cycles per sample: budget 25 at 8 MSPS, 50 at 4 MSPS, 'stream' free {free}:",
+          "PASS" if ok_cpu else "FAIL")
 
     # ---- 'buf': samples per half, refused while streaming (cli.c) ----
     ok_b1, _ = t.cmd("buf 64")                          # the chain still streams here
@@ -1841,6 +1873,13 @@ def main_gui(args):
                         ui.tooltip(COUNTER_TIPS[_k]).style("font-size: 14px; max-width: 24rem;")
                 rate_chip = ui.chip("actual rate –", color="grey-8").props("dense outline")
                 halves_chip = ui.chip("halves/xfer –", color="grey-8").props("dense outline")
+                cpu_chip = ui.chip("CPU –", color="grey-8").props("dense outline")
+                with cpu_chip:
+                    ui.tooltip("CPU cycles per sample: the budget is 200 MHz (CPU, PLL2) / the actual "
+                               "rate = 1.25 x N, N the SCCP1 period in 160 MHz clocks (CLKGEN13) - "
+                               "exact, both PLLs run from the FRC. The processing loop needs about "
+                               "3 of them (run 20, S6); the DMA interrupt costs about 150 cycles "
+                               "per half on top, so a small buffer shrinks what is left.")                        .style("font-size: 14px; max-width: 26rem;")
                 with rate_chip:
                     ui.tooltip("The frame's own 'ksps' - the nearest 160 MHz / N (CLKGEN13) the "
                                "chain actually runs at, not the number typed on the left. Used as "
@@ -2796,6 +2835,13 @@ def main_gui(args):
             rate_chip.props("color=grey-8")
             halves_chip.text = f"halves {meta['halves']} / xfer {meta['transfers']}"
             halves_chip.props("color=grey-8")
+            # The budget only: the board's own 'free' figure (parse_free_cycles())
+            # read the full budget at every rate on 29.09.2026 (955c473) - the mean
+            # processing time it subtracts came out 0 - so it is not shown until
+            # that is explained (docs/HARDWARE-LOG.md, 29.09.2026).
+            budget = cpu_budget_cycles(meta["ksps"])
+            cpu_chip.text = f"CPU {budget:.1f} cycles/sample"
+            cpu_chip.props("color=grey-8")
 
             metrics = analyze_spectrum(f, db)
             if metrics:
