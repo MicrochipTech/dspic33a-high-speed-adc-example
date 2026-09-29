@@ -1,67 +1,636 @@
 {
   "_comment": [
     "Test status per box of docs/architecture_*.svg, read by docs/gen_architecture.py.",
-    "status:   proven = fully tested on silicon with the current code (green);",
-    "          restructured = ran on silicon, but the code changed since (amber);",
-    "          never = never ran on silicon (red).",
-    "offboard: false = no test without a board covers it (hollow ring).",
-    "blocks:   the board-run blocks (tools/board_run.py, R0..R7) that exercise it -",
-    "          'gen_architecture.py --apply-run <zip>' turns a box green when every one",
-    "          of them passed in B with no deviation (tools/eval_board.py) and 'open' is empty.",
-    "          An empty list: no board-run block reaches it, it cannot turn green that way.",
-    "open:     parts in scope that no test reaches yet (docs/TEST-COVERAGE.md) - while",
-    "          any is listed the box stays as it is; remove one when a test covers it.",
-    "files:    its source files - a green box whose files changed since 'rev' is drawn",
-    "          amber again (the code changed after it was tested).",
-    "rev/run:  written by --apply-run: the B image's git revision and the session zip."
+    "The dot says one thing: is this module functionally tested on silicon with the current version?",
+    "status:   tested  = yes (green) - needs rev and evidence;",
+    "          pending = not tested with this version yet (grey ring) - no verdict on whether it works.",
+    "rev:      the git revision it was tested at. A tested box whose files changed since rev",
+    "          is drawn pending again by itself.",
+    "evidence: where the test is written down: 'board run <zip>' (--apply-run) or a dated",
+    "          docs/HARDWARE-LOG.md entry (--mark-tested REV EVIDENCE BOX...); for a pending box,",
+    "          what is known from earlier versions.",
+    "files:    its source files (for the check above).",
+    "blocks:   the board-run blocks (tools/board_run.py, R0..R7) that exercise it: --apply-run marks",
+    "          a box tested when every one passed in B with no deviation and 'open' is empty.",
+    "open:     parts in scope that no test reaches yet, or findings still open (docs/TEST-COVERAGE.md) -",
+    "          shown in the tooltip.",
+    "offboard: true = a test without a board covers it too (host test, trace, simulator)."
   ],
-  "as_of": "29.09.2026, after run 20 - no box changed; three later fixes checked by hand",
+  "as_of": "30.09.2026",
   "boxes": {
-    "adc_gui.py": {"status": "never", "offboard": true, "blocks": [], "open": ["the GUI itself in a board-run block - checked by hand 29.09.2026 (DAC cards with force, buffer tile, DISCONNECT during LIVE), not by a block"], "files": ["tools/adc_gui.py"]},
-    "adc_gui.py (host)": {"status": "never", "offboard": true, "blocks": [], "open": ["the GUI itself in a board-run block - checked by hand 29.09.2026 (DAC cards with force, buffer tile, DISCONNECT during LIVE), not by a block"], "files": ["tools/adc_gui.py"]},
-    "board_run.py · eval_board.py": {"status": "never", "offboard": true, "blocks": ["R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7"], "open": [], "files": ["tools/board_run.py", "tools/eval_board.py"]},
-    "remote.py → bench_client": {"status": "never", "offboard": true, "blocks": [], "open": ["a --remote run against the real relay"], "files": ["tools/remote.py"]},
-
-    "cli.c · console.h": {"status": "restructured", "offboard": true, "blocks": ["R0", "R6", "R7"], "open": [], "files": ["src/cli/cli.c", "src/cli/console.h"]},
-    "cli.c": {"status": "restructured", "offboard": true, "blocks": ["R4", "R5"], "open": [], "files": ["src/cli/cli.c"]},
-    "cmd_parser.c": {"status": "proven", "offboard": true, "blocks": ["R0"], "open": [], "files": ["src/cli/cmd_parser.c", "src/cli/cmd_parser.h"]},
-    "gui_link.c": {"status": "never", "offboard": false, "blocks": ["R4", "R5"], "open": ["snap, rate, blk"], "files": ["src/link/gui_link.c", "src/link/gui_link.h"]},
-    "gui_link_stream_grab()": {"status": "never", "offboard": false, "blocks": ["R4", "R5"], "open": [], "files": ["src/link/gui_link.c"]},
-
-    "chaintest.c": {"status": "restructured", "offboard": false, "blocks": ["R2"], "open": [], "files": ["src/tests/chaintest.c", "src/tests/chaintest.h"]},
-    "bench.c": {"status": "restructured", "offboard": false, "blocks": ["R3"], "open": [], "files": ["src/tests/bench.c", "src/tests/bench.h"]},
-    "dactest.c": {"status": "proven", "offboard": false, "blocks": ["R3"], "open": [], "files": ["src/tests/dactest.c", "src/tests/dactest.h"]},
-    "meter.c": {"status": "restructured", "offboard": false, "blocks": ["R3"], "open": [], "files": ["src/meter/meter.c", "src/meter/meter.h"]},
-
-    "siggen.c": {"status": "never", "offboard": false, "blocks": [], "open": ["SG.8 board_run.py block R8", "intermittent fail 8 after stream off with the generator on (HARDWARE-LOG 2026-09-29)"], "files": ["src/siggen/siggen.c", "src/siggen/siggen.h"]},
-    "main.c": {"status": "restructured", "offboard": true, "blocks": ["R0"], "open": [], "files": ["src/app/main.c"]},
-    "acquisition.c": {"status": "restructured", "offboard": true, "blocks": ["R2", "R3", "R4", "R5"], "open": [], "files": ["src/app/acquisition.c", "src/app/acquisition.h", "src/app/acquisition_priv.h"]},
-    "routing.c": {"status": "never", "offboard": true, "blocks": ["R4", "R5", "R6"], "open": [], "files": ["src/app/routing.c", "src/app/routing.h"]},
-    "routing_apply()": {"status": "never", "offboard": true, "blocks": ["R4", "R5"], "open": [], "files": ["src/app/routing.c"]},
-    "board.h · board_cfg": {"status": "restructured", "offboard": true, "blocks": ["R0", "R2", "R3"], "open": ["the EV17P63A (Nano) profile - its own first run"], "files": ["src/app/board.h", "src/boards/board_cfg.h", "src/boards/ev74h48a.c", "src/boards/ev17p63a.c"]},
-    "capture.c": {"status": "restructured", "offboard": true, "blocks": ["R2", "R3", "R4", "R5"], "open": [], "files": ["src/app/capture.c", "src/app/capture.h", "src/app/capture_priv.h"]},
-    "capture_service()": {"status": "restructured", "offboard": true, "blocks": ["R2", "R4"], "open": [], "files": ["src/app/capture.c"]},
-    "dma0_event()": {"status": "restructured", "offboard": true, "blocks": ["R2", "R4", "R5"], "open": [], "files": ["src/app/capture.c", "src/app/pingpong.h"]},
-    "pingpong.c": {"status": "restructured", "offboard": true, "blocks": ["R2", "R4", "R5"], "open": [], "files": ["src/app/pingpong.c", "src/app/pingpong.h"]},
-    "port_impl.c": {"status": "never", "offboard": true, "blocks": ["R0", "R1"], "open": [], "files": ["src/app/port_impl.c"]},
-
-    "frame · crc16 · fmt · stats · tri_eval": {"status": "never", "offboard": true, "blocks": ["R0", "R2", "R3", "R4", "R5"], "open": [], "files": ["src/lib/frame.c", "src/lib/crc16.c", "src/lib/fmt.c", "src/lib/stats.c", "src/lib/tri_eval.c"]},
-    "diag.c": {"status": "restructured", "offboard": true, "blocks": ["R0", "R1", "R7"], "open": [], "files": ["src/diag/diag.c", "src/diag/diag.h"]},
-
-    "log.h · port_log/trace": {"status": "never", "offboard": true, "blocks": ["R0", "R1"], "open": [], "files": ["src/port/log.h"]},
-    "panic.h · port_panic()": {"status": "never", "offboard": true, "blocks": [], "open": ["runs only on a fault"], "files": ["src/port/panic.h"]},
-    "wait.h · PORT_WAIT_WHILE()": {"status": "never", "offboard": true, "blocks": ["R0"], "open": [], "files": ["src/port/wait.h"]},
-    "regs.h · reg_visit_t": {"status": "never", "offboard": true, "blocks": ["R1"], "open": [], "files": ["src/port/regs.h"]},
-
-    "clock.c": {"status": "restructured", "offboard": true, "blocks": ["R0", "R1", "R2", "R3"], "open": [], "files": ["src/drivers/clock.c", "src/drivers/clock.h"]},
-    "adc.c": {"status": "restructured", "offboard": true, "blocks": ["R1", "R2", "R3", "R4", "R5"], "open": [], "files": ["src/drivers/adc.c", "src/drivers/adc.h"]},
-    "dma.c": {"status": "restructured", "offboard": true, "blocks": ["R1", "R2", "R3", "R4", "R5"], "open": [], "files": ["src/drivers/dma.c", "src/drivers/dma.h", "src/drivers/dma_tx.h"]},
-    "_DMA0Interrupt": {"status": "proven", "offboard": true, "blocks": ["R2", "R4", "R5"], "open": [], "files": []},
-    "sccp.c": {"status": "restructured", "offboard": true, "blocks": ["R1", "R2", "R4", "R5"], "open": [], "files": ["src/drivers/sccp.c", "src/drivers/sccp.h"]},
-    "dac.c": {"status": "restructured", "offboard": true, "blocks": ["R1", "R2", "R3", "R4"], "open": ["dac 1 (DACOUT1 = RA1) - the GUI has a DAC1 card", "dac ... force (dac_triangle_force()) - checked by hand 29.09.2026, no block sends it"], "files": ["src/drivers/dac.c", "src/drivers/dac.h"]},
-    "uart.c": {"status": "restructured", "offboard": true, "blocks": ["R0", "R4", "R5"], "open": [], "files": ["src/drivers/uart.c", "src/drivers/uart.h"]},
-    "uart.c · UART2": {"status": "restructured", "offboard": true, "blocks": ["R4", "R5"], "open": [], "files": ["src/drivers/uart.c"]},
-    "timebase.c": {"status": "proven", "offboard": true, "blocks": ["R2", "R3"], "open": [], "files": ["src/drivers/timebase.c", "src/drivers/timebase.h"]},
-    "led.c": {"status": "proven", "offboard": true, "blocks": ["R2"], "open": [], "files": ["src/drivers/led.c", "src/drivers/led.h"]}
+    "adc_gui.py": {
+      "status": "tested",
+      "offboard": true,
+      "blocks": [],
+      "open": [
+        "the GUI itself in a board-run block - checked by hand 29.09.2026 (DAC cards with force, buffer tile, DISCONNECT during LIVE), not by a block"
+      ],
+      "files": [
+        "tools/adc_gui.py"
+      ],
+      "evidence": "HARDWARE-LOG 2026-09-29: the GUI's signal generator card on the board, by the user",
+      "rev": "86f4753"
+    },
+    "adc_gui.py (host)": {
+      "status": "tested",
+      "offboard": true,
+      "blocks": [],
+      "open": [
+        "the GUI itself in a board-run block - checked by hand 29.09.2026 (DAC cards with force, buffer tile, DISCONNECT during LIVE), not by a block"
+      ],
+      "files": [
+        "tools/adc_gui.py"
+      ],
+      "evidence": "HARDWARE-LOG 2026-09-29: the GUI's signal generator card on the board, by the user",
+      "rev": "86f4753"
+    },
+    "board_run.py · eval_board.py": {
+      "status": "pending",
+      "offboard": true,
+      "blocks": [
+        "R0",
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5",
+        "R6",
+        "R7"
+      ],
+      "open": [],
+      "files": [
+        "tools/board_run.py",
+        "tools/eval_board.py"
+      ],
+      "evidence": ""
+    },
+    "remote.py → bench_client": {
+      "status": "pending",
+      "offboard": true,
+      "blocks": [],
+      "open": [
+        "a --remote run against the real relay"
+      ],
+      "files": [
+        "tools/remote.py"
+      ],
+      "evidence": ""
+    },
+    "cli.c · console.h": {
+      "status": "tested",
+      "offboard": true,
+      "blocks": [
+        "R0",
+        "R6",
+        "R7"
+      ],
+      "open": [],
+      "files": [
+        "src/cli/cli.c",
+        "src/cli/console.h"
+      ],
+      "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
+      "rev": "7b16260"
+    },
+    "cli.c": {
+      "status": "tested",
+      "offboard": true,
+      "blocks": [
+        "R4",
+        "R5"
+      ],
+      "open": [],
+      "files": [
+        "src/cli/cli.c"
+      ],
+      "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
+      "rev": "7b16260"
+    },
+    "cmd_parser.c": {
+      "status": "tested",
+      "offboard": true,
+      "blocks": [
+        "R0"
+      ],
+      "open": [],
+      "files": [
+        "src/cli/cmd_parser.c",
+        "src/cli/cmd_parser.h"
+      ],
+      "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
+      "rev": "7b16260"
+    },
+    "gui_link.c": {
+      "status": "tested",
+      "offboard": false,
+      "blocks": [
+        "R4",
+        "R5"
+      ],
+      "open": [
+        "snap, rate, blk"
+      ],
+      "files": [
+        "src/link/gui_link.c",
+        "src/link/gui_link.h"
+      ],
+      "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
+      "rev": "7b16260"
+    },
+    "gui_link_stream_grab()": {
+      "status": "tested",
+      "offboard": false,
+      "blocks": [
+        "R4",
+        "R5"
+      ],
+      "open": [],
+      "files": [
+        "src/link/gui_link.c"
+      ],
+      "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
+      "rev": "7b16260"
+    },
+    "chaintest.c": {
+      "status": "pending",
+      "offboard": false,
+      "blocks": [
+        "R2"
+      ],
+      "open": [],
+      "files": [
+        "src/tests/chaintest.c",
+        "src/tests/chaintest.h"
+      ],
+      "evidence": "earlier: ran on silicon before N+1's restructuring"
+    },
+    "bench.c": {
+      "status": "pending",
+      "offboard": false,
+      "blocks": [
+        "R3"
+      ],
+      "open": [],
+      "files": [
+        "src/tests/bench.c",
+        "src/tests/bench.h"
+      ],
+      "evidence": "earlier: ran on silicon before N+1's restructuring"
+    },
+    "dactest.c": {
+      "status": "pending",
+      "offboard": false,
+      "blocks": [
+        "R3"
+      ],
+      "open": [],
+      "files": [
+        "src/tests/dactest.c",
+        "src/tests/dactest.h"
+      ],
+      "evidence": "earlier: tested on silicon (no revision recorded)"
+    },
+    "meter.c": {
+      "status": "pending",
+      "offboard": false,
+      "blocks": [
+        "R3"
+      ],
+      "open": [],
+      "files": [
+        "src/meter/meter.c",
+        "src/meter/meter.h"
+      ],
+      "evidence": "earlier: ran on silicon before N+1's restructuring"
+    },
+    "siggen.c": {
+      "status": "tested",
+      "offboard": false,
+      "blocks": [],
+      "open": [
+        "SG.8 board_run.py block R8",
+        "intermittent fail 8 after stream off with the generator on (HARDWARE-LOG 2026-09-29)"
+      ],
+      "files": [
+        "src/siggen/siggen.c",
+        "src/siggen/siggen.h"
+      ],
+      "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
+      "rev": "7b16260"
+    },
+    "main.c": {
+      "status": "tested",
+      "offboard": true,
+      "blocks": [
+        "R0"
+      ],
+      "open": [
+        "intermittent fail 8 just after stream off with the generator on: 2 in ~176, not reproduced in 76 more (HARDWARE-LOG 2026-09-29)"
+      ],
+      "files": [
+        "src/app/main.c"
+      ],
+      "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
+      "rev": "7b16260"
+    },
+    "acquisition.c": {
+      "status": "tested",
+      "offboard": true,
+      "blocks": [
+        "R2",
+        "R3",
+        "R4",
+        "R5"
+      ],
+      "open": [
+        "intermittent fail 8 just after stream off with the generator on: 2 in ~176, not reproduced in 76 more (HARDWARE-LOG 2026-09-29)"
+      ],
+      "files": [
+        "src/app/acquisition.c",
+        "src/app/acquisition.h",
+        "src/app/acquisition_priv.h"
+      ],
+      "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
+      "rev": "7b16260"
+    },
+    "routing.c": {
+      "status": "tested",
+      "offboard": true,
+      "blocks": [
+        "R4",
+        "R5",
+        "R6"
+      ],
+      "open": [],
+      "files": [
+        "src/app/routing.c",
+        "src/app/routing.h"
+      ],
+      "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
+      "rev": "7b16260"
+    },
+    "routing_apply()": {
+      "status": "tested",
+      "offboard": true,
+      "blocks": [
+        "R4",
+        "R5"
+      ],
+      "open": [],
+      "files": [
+        "src/app/routing.c"
+      ],
+      "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
+      "rev": "7b16260"
+    },
+    "board.h · board_cfg": {
+      "status": "tested",
+      "offboard": true,
+      "blocks": [
+        "R0",
+        "R2",
+        "R3"
+      ],
+      "open": [
+        "the EV17P63A (Nano) profile - its own first run"
+      ],
+      "files": [
+        "src/app/board.h",
+        "src/boards/board_cfg.h",
+        "src/boards/ev74h48a.c",
+        "src/boards/ev17p63a.c"
+      ],
+      "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
+      "rev": "7b16260"
+    },
+    "capture.c": {
+      "status": "tested",
+      "offboard": true,
+      "blocks": [
+        "R2",
+        "R3",
+        "R4",
+        "R5"
+      ],
+      "open": [
+        "intermittent fail 8 just after stream off with the generator on: 2 in ~176, not reproduced in 76 more (HARDWARE-LOG 2026-09-29)"
+      ],
+      "files": [
+        "src/app/capture.c",
+        "src/app/capture.h",
+        "src/app/capture_priv.h"
+      ],
+      "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
+      "rev": "7b16260"
+    },
+    "capture_service()": {
+      "status": "tested",
+      "offboard": true,
+      "blocks": [
+        "R2",
+        "R4"
+      ],
+      "open": [],
+      "files": [
+        "src/app/capture.c"
+      ],
+      "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
+      "rev": "7b16260"
+    },
+    "dma0_event()": {
+      "status": "tested",
+      "offboard": true,
+      "blocks": [
+        "R2",
+        "R4",
+        "R5"
+      ],
+      "open": [],
+      "files": [
+        "src/app/capture.c",
+        "src/app/pingpong.h"
+      ],
+      "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
+      "rev": "7b16260"
+    },
+    "pingpong.c": {
+      "status": "tested",
+      "offboard": true,
+      "blocks": [
+        "R2",
+        "R4",
+        "R5"
+      ],
+      "open": [],
+      "files": [
+        "src/app/pingpong.c",
+        "src/app/pingpong.h"
+      ],
+      "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
+      "rev": "7b16260"
+    },
+    "port_impl.c": {
+      "status": "pending",
+      "offboard": true,
+      "blocks": [
+        "R0",
+        "R1"
+      ],
+      "open": [],
+      "files": [
+        "src/app/port_impl.c"
+      ],
+      "evidence": ""
+    },
+    "frame · crc16 · fmt · stats · tri_eval": {
+      "status": "pending",
+      "offboard": true,
+      "blocks": [
+        "R0",
+        "R2",
+        "R3",
+        "R4",
+        "R5"
+      ],
+      "open": [],
+      "files": [
+        "src/lib/frame.c",
+        "src/lib/crc16.c",
+        "src/lib/fmt.c",
+        "src/lib/stats.c",
+        "src/lib/tri_eval.c"
+      ],
+      "evidence": ""
+    },
+    "diag.c": {
+      "status": "tested",
+      "offboard": true,
+      "blocks": [
+        "R0",
+        "R1",
+        "R7"
+      ],
+      "open": [],
+      "files": [
+        "src/diag/diag.c",
+        "src/diag/diag.h"
+      ],
+      "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
+      "rev": "7b16260"
+    },
+    "log.h · port_log/trace": {
+      "status": "pending",
+      "offboard": true,
+      "blocks": [
+        "R0",
+        "R1"
+      ],
+      "open": [],
+      "files": [
+        "src/port/log.h"
+      ],
+      "evidence": ""
+    },
+    "panic.h · port_panic()": {
+      "status": "pending",
+      "offboard": true,
+      "blocks": [],
+      "open": [
+        "runs only on a fault"
+      ],
+      "files": [
+        "src/port/panic.h"
+      ],
+      "evidence": ""
+    },
+    "wait.h · PORT_WAIT_WHILE()": {
+      "status": "tested",
+      "offboard": true,
+      "blocks": [
+        "R0"
+      ],
+      "open": [],
+      "files": [
+        "src/port/wait.h"
+      ],
+      "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
+      "rev": "7b16260"
+    },
+    "regs.h · reg_visit_t": {
+      "status": "pending",
+      "offboard": true,
+      "blocks": [
+        "R1"
+      ],
+      "open": [],
+      "files": [
+        "src/port/regs.h"
+      ],
+      "evidence": ""
+    },
+    "clock.c": {
+      "status": "tested",
+      "offboard": true,
+      "blocks": [
+        "R0",
+        "R1",
+        "R2",
+        "R3"
+      ],
+      "open": [],
+      "files": [
+        "src/drivers/clock.c",
+        "src/drivers/clock.h"
+      ],
+      "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
+      "rev": "7b16260"
+    },
+    "adc.c": {
+      "status": "tested",
+      "offboard": true,
+      "blocks": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5"
+      ],
+      "open": [],
+      "files": [
+        "src/drivers/adc.c",
+        "src/drivers/adc.h"
+      ],
+      "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
+      "rev": "7b16260"
+    },
+    "dma.c": {
+      "status": "tested",
+      "offboard": true,
+      "blocks": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5"
+      ],
+      "open": [],
+      "files": [
+        "src/drivers/dma.c",
+        "src/drivers/dma.h",
+        "src/drivers/dma_tx.h"
+      ],
+      "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
+      "rev": "7b16260"
+    },
+    "_DMA0Interrupt": {
+      "status": "tested",
+      "offboard": true,
+      "blocks": [
+        "R2",
+        "R4",
+        "R5"
+      ],
+      "open": [],
+      "files": [
+        "src/drivers/dma.c"
+      ],
+      "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
+      "rev": "7b16260"
+    },
+    "sccp.c": {
+      "status": "tested",
+      "offboard": true,
+      "blocks": [
+        "R1",
+        "R2",
+        "R4",
+        "R5"
+      ],
+      "open": [],
+      "files": [
+        "src/drivers/sccp.c",
+        "src/drivers/sccp.h"
+      ],
+      "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
+      "rev": "7b16260"
+    },
+    "dac.c": {
+      "status": "tested",
+      "offboard": true,
+      "blocks": [
+        "R1",
+        "R2",
+        "R3",
+        "R4"
+      ],
+      "open": [
+        "dac 1 (DACOUT1 = RA1) - the GUI has a DAC1 card",
+        "dac ... force (dac_triangle_force()) - checked by hand 29.09.2026, no block sends it"
+      ],
+      "files": [
+        "src/drivers/dac.c",
+        "src/drivers/dac.h"
+      ],
+      "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
+      "rev": "7b16260"
+    },
+    "uart.c": {
+      "status": "tested",
+      "offboard": true,
+      "blocks": [
+        "R0",
+        "R4",
+        "R5"
+      ],
+      "open": [],
+      "files": [
+        "src/drivers/uart.c",
+        "src/drivers/uart.h"
+      ],
+      "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
+      "rev": "7b16260"
+    },
+    "uart.c · UART2": {
+      "status": "tested",
+      "offboard": true,
+      "blocks": [
+        "R4",
+        "R5"
+      ],
+      "open": [],
+      "files": [
+        "src/drivers/uart.c"
+      ],
+      "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
+      "rev": "7b16260"
+    },
+    "timebase.c": {
+      "status": "tested",
+      "offboard": true,
+      "blocks": [
+        "R2",
+        "R3"
+      ],
+      "open": [],
+      "files": [
+        "src/drivers/timebase.c",
+        "src/drivers/timebase.h"
+      ],
+      "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
+      "rev": "7b16260"
+    },
+    "led.c": {
+      "status": "pending",
+      "offboard": true,
+      "blocks": [
+        "R2"
+      ],
+      "open": [],
+      "files": [
+        "src/drivers/led.c",
+        "src/drivers/led.h"
+      ],
+      "evidence": "earlier: tested on silicon (no revision recorded)"
+    }
   }
 }

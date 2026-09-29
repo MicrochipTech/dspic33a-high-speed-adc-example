@@ -30,11 +30,27 @@ Every block needs boot and console, so `main.c`, `config_bits.c`, `clock.c`'s
 them; the table names the block where a module is the thing being tested.
 
 After the run, update this file from the result. The dots in `docs/ARCHITECTURE.md`'s
-diagrams follow by themselves: `python docs/gen_architecture.py --apply-run <session zip>`
-turns a box green (fully tested) once every board-run block covering it passed in B with
-no deviation and nothing in scope is left open (`docs/test_status.json`, fields `blocks`
-and `open`), and draws a green box amber again as soon as its files change after the
-revision it was tested at. When a gap in the "Not reached" column is closed, remove it
+diagrams (since 30.09.2026 two states: green = functionally tested on silicon with the
+current version, grey ring = not tested with this version yet) follow from
+`docs/test_status.json`: `python docs/gen_architecture.py --apply-run <session zip>`
+marks a box green once every board-run block covering it passed in B with no deviation
+and nothing in scope is left open (fields `blocks` and `open`); a manual board test
+written down in `docs/HARDWARE-LOG.md` counts too (`--mark-tested <rev> "<evidence>"
+"<box>" ...`, owner's decision 30.09.2026). A green box turns grey again as soon as its
+files change after the revision it was tested at. The status column in the tables below
+is the history before N+1 (proven/restructured/never), not the dot.
+
+**30.09.2026, the dots after the signal generator session** (`docs/HARDWARE-LOG.md`
+29.09.2026, firmware 7b16260 on the EV74H48A): green are the modules those runs
+exercised - console (`cli.c`, `cmd_parser.c`, `uart.c`), `gui_link.c`, `main.c`,
+`acquisition.c`, `routing.c`, `board.h` (EV74H48A), `capture.c`/`pingpong.c`/
+`dma0_event()`/`_DMA0Interrupt`, `diag.c`, `wait.h`, `clock.c`, `adc.c`, `dma.c`,
+`sccp.c`, `dac.c`, `timebase.c`, `siggen.c`, and the GUI at 86f4753. Grey: what those
+runs did not reach - `chaintest.c` (`chain all`), `bench.c`/`dactest.c`/`meter.c`
+(`test`), the libraries box (`tri_eval`/`stats` not exercised by the firmware), `port_impl.c`,
+`log.h`/`panic.h`/`regs.h`, `led.c` (not observed), `board_run.py`, `remote.py`. The
+intermittent fail 8 after `stream off` stays listed as open on `capture.c`,
+`acquisition.c` and `main.c`. When a gap in the "Not reached" column is closed, remove it
 from that box's `open` list too.
 
 ## Since run 20 (29.09.2026)

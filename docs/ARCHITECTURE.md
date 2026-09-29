@@ -8,20 +8,22 @@ The diagrams are generated: `python docs/gen_architecture.py` writes both SVGs n
 this file. When a module is added, moved or renamed, change the generator and
 regenerate - do not edit the SVGs by hand.
 
-**Test status.** The dot in each box's top-right corner says what is still to be tested:
-green = fully tested on silicon with the current code; amber = ran on silicon, but the
-code changed since, so a board run has to confirm it again; red = never ran on silicon.
-A hollow red ring next to it means no test without a board covers the module either - a
-failure there can only be narrowed down on the board. A box holding several modules
-shows the worst of them; hovering over a dot names what is still open.
+**Test status.** The dot in each box's top-right corner answers one question: *is this
+module functionally tested on silicon with the current version?* Green = yes; a grey
+ring = not tested with this version yet - no verdict on whether it works, only that the
+test for this version is still to come. Hovering over a dot names the revision it was
+tested at and where that is written down, or what is known from earlier versions, and
+any finding still open. (Until 30.09.2026 the dots were green/amber/red plus a red
+ring; that read as "broken" where it only meant "not re-tested by a board run".)
 
-**A box turns green by itself** once it is fully tested: after a board run,
-`python docs/gen_architecture.py --apply-run <session zip>` turns every box green whose
-board-run blocks all passed in B with no deviation (`tools/eval_board.py`) and which has
-nothing in scope left open, writes that into `docs/test_status.json` and regenerates the
-diagrams. It prints every box that stays as it is, and why. A green box whose source
-files change afterwards is drawn amber again at the next regeneration - the code that
-was tested is gone. The data per box (covering blocks, open gaps, files) is
+**Green needs evidence with a revision**: a board run - `python docs/gen_architecture.py
+--apply-run <session zip>` marks every box whose board-run blocks all passed in B with
+no deviation (`tools/eval_board.py`) and which has nothing in scope left open - or a
+dated `docs/HARDWARE-LOG.md` entry that exercised the module on the board -
+`python docs/gen_architecture.py --mark-tested <rev> "<evidence>" "<box>" ...`. Both
+write `docs/test_status.json` and regenerate the diagrams. **A green box turns grey by
+itself** at the next regeneration once one of its source files changes after the tested
+revision - the code that was tested is gone. The data per box (covering blocks, open gaps, files) is
 `docs/test_status.json`; the prose, module by module, is
 [TEST-COVERAGE.md](TEST-COVERAGE.md).
 

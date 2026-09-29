@@ -4,12 +4,12 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 --b-host:#eceef1;--s-host:#8b95a3;--b-cli:#e5edf9;--s-cli:#4f74b3;--b-test:#f0e9f8;--s-test:#8062ad;
 --b-app:#e2f2ee;--s-app:#2f8a78;--b-lib:#f8efe0;--s-lib:#b07a2a;--s-diag:#b0574d;
 --b-port:#ebeae6;--s-port:#7c7768;--b-drv:#e7f0e1;--s-drv:#5c8a3f;--b-hw:#e3e7ec;--s-hw:#4a5868;
---st-proven:#2e9d57;--st-restructured:#d08a00;--st-never:#d64545}
+--st-tested:#2e9d57;--st-pending:#9aa3ad}
 @media (prefers-color-scheme:dark){svg{--bg:#11161c;--ink:#e3e8ee;--muted:#9aa6b4;--line:#3a4552;
 --surface:#1a2129;--accent:#3cc2ab;--b-host:#1a1f25;--s-host:#6f7b89;--b-cli:#172236;--s-cli:#7fa3e0;
 --b-test:#221b2e;--s-test:#a88bd6;--b-app:#12251f;--s-app:#52b8a2;--b-lib:#2a2215;--s-lib:#d6a352;
 --s-diag:#d98277;--b-port:#22211d;--s-port:#a8a292;--b-drv:#18231a;--s-drv:#86b865;--b-hw:#1b2027;--s-hw:#8c9aab;
---st-proven:#4cc47a;--st-restructured:#f0b030;--st-never:#f06a6a}}
+--st-tested:#4cc47a;--st-pending:#6f7b89}}
 .bg{fill:var(--bg)} text{fill:var(--ink)}
 .b-host{fill:var(--b-host)}.b-cli{fill:var(--b-cli)}.b-test{fill:var(--b-test)}.b-app{fill:var(--b-app)}
 .b-lib{fill:var(--b-lib)}.b-port{fill:var(--b-port)}.b-drv{fill:var(--b-drv)}.b-hw{fill:var(--b-hw)}
@@ -25,8 +25,7 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 .ar,.ar2{fill:none;stroke:var(--accent);stroke-width:1.6;marker-end:url(#arr)}
 .ar2{marker-start:url(#arrs)} .ar.dash{stroke-dasharray:5 4}
 .ln1{stroke:var(--line);stroke-width:1.3} .mk{fill:var(--accent)}
-.st-proven{fill:var(--st-proven)}.st-restructured{fill:var(--st-restructured)}.st-never{fill:var(--st-never)}
-.nooff{fill:none;stroke:var(--st-never);stroke-width:1.6}
+.st-tested{fill:var(--st-tested)}.st-pending{fill:none;stroke:var(--st-pending);stroke-width:1.6}
 </style>
 <defs>
 <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="mk" d="M0 0 L10 5 L0 10 z"/></marker>
@@ -38,15 +37,15 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 <text class="lf" x="24" y="56">tools/</text>
 <text class="lf" x="24" y="69">off-target</text>
 <rect class="bx s-host dash" x="170" y="26" width="233" height="44" rx="4"/>
-<circle class="st-never" cx="392" cy="37" r="5"><title>never ran on silicon; open: the GUI itself in a board-run block - checked by hand 29.09.2026 (DAC cards with force, buffer tile, DISCONNECT during LIVE), not by a block</title></circle>
+<circle class="st-tested" cx="392" cy="37" r="5"><title>functionally tested on silicon with this version (at 86f4753 - HARDWARE-LOG 2026-09-29: the GUI&#x27;s signal generator card on the board, by the user); open: the GUI itself in a board-run block - checked by hand 29.09.2026 (DAC cards with force, buffer tile, DISCONNECT during LIVE), not by a block</title></circle>
 <text class="t" x="180" y="45">adc_gui.py</text>
 <text class="s" x="180" y="59">NiceGUI: stream on / grab, time + FFT</text>
 <rect class="bx s-host dash" x="415" y="26" width="233" height="44" rx="4"/>
-<circle class="st-never" cx="637" cy="37" r="5"><title>never ran on silicon</title></circle>
+<circle class="st-pending" cx="637" cy="37" r="5"><title>not tested with this version yet</title></circle>
 <text class="t" x="425" y="45">board_run.py · eval_board.py</text>
 <text class="s" x="425" y="59">board run A/B, list of deviations</text>
 <rect class="bx s-host dash" x="660" y="26" width="233" height="44" rx="4"/>
-<circle class="st-never" cx="882" cy="37" r="5"><title>never ran on silicon; open: a --remote run against the real relay</title></circle>
+<circle class="st-pending" cx="882" cy="37" r="5"><title>not tested with this version yet; open: a --remote run against the real relay</title></circle>
 <text class="t" x="670" y="45">remote.py → bench_client</text>
 <text class="s" x="670" y="59">relay: flash, tunnel (socket://)</text>
 <rect class="bx s-host dash" x="905" y="26" width="233" height="44" rx="4"/>
@@ -60,17 +59,17 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 <text class="lf" x="24" y="152">src/cli/</text>
 <text class="lf" x="24" y="165">src/link/</text>
 <rect class="bx s-cli" x="170" y="124" width="400" height="62" rx="4"/>
-<circle class="st-restructured" cx="559" cy="135" r="5"><title>ran on silicon, code changed since - to be tested</title></circle>
+<circle class="st-tested" cx="559" cy="135" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session)</title></circle>
 <text class="t" x="180" y="145">cli.c · console.h</text>
 <text class="s" x="180" y="159">28 commands + help in 32 parser slots</text>
 <text class="s" x="180" y="173">stream on|off|grab · route list · siggen · status · clk</text>
 <rect class="bx s-cli" x="582" y="124" width="250" height="62" rx="4"/>
-<circle class="st-proven" cx="821" cy="135" r="5"><title>fully tested on silicon</title></circle>
+<circle class="st-tested" cx="821" cy="135" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session)</title></circle>
 <text class="t" x="592" y="145">cmd_parser.c</text>
 <text class="s" x="592" y="159">upstream zabooh/cmd_parser</text>
 <text class="s" x="592" y="173">do not edit (MAX_COMMANDS only)</text>
 <rect class="bx s-cli" x="844" y="124" width="296" height="62" rx="4"/>
-<circle class="st-never" cx="1129" cy="135" r="5"><title>never ran on silicon; open: snap, rate, blk</title></circle><circle class="nooff" cx="1114" cy="135" r="4.5"><title>no off-board test</title></circle>
+<circle class="st-tested" cx="1129" cy="135" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session); open: snap, rate, blk</title></circle>
 <text class="t" x="854" y="145">gui_link.c</text>
 <text class="s" x="854" y="159">snap · rate · blk</text>
 <text class="s" x="854" y="173">stream grab: halt → send → resume</text>
@@ -79,22 +78,22 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 <text class="lf" x="24" y="254">src/tests/</text>
 <text class="lf" x="24" y="267">src/meter/</text>
 <rect class="bx s-test" x="170" y="226" width="233" height="62" rx="4"/>
-<circle class="st-restructured" cx="392" cy="237" r="5"><title>ran on silicon, code changed since - to be tested</title></circle><circle class="nooff" cx="377" cy="237" r="4.5"><title>no off-board test</title></circle>
+<circle class="st-pending" cx="392" cy="237" r="5"><title>not tested with this version yet (earlier: ran on silicon before N+1&#x27;s restructuring)</title></circle>
 <text class="t" x="180" y="247">chaintest.c</text>
 <text class="s" x="180" y="261">chain all S0..S9 · chain run</text>
 <text class="s" x="180" y="275">@ log for eval_chain.py</text>
 <rect class="bx s-test" x="415" y="226" width="233" height="62" rx="4"/>
-<circle class="st-restructured" cx="637" cy="237" r="5"><title>ran on silicon, code changed since - to be tested</title></circle><circle class="nooff" cx="622" cy="237" r="4.5"><title>no off-board test</title></circle>
+<circle class="st-pending" cx="637" cy="237" r="5"><title>not tested with this version yet (earlier: ran on silicon before N+1&#x27;s restructuring)</title></circle>
 <text class="t" x="425" y="247">bench.c</text>
 <text class="s" x="425" y="261">sweep · test self/clock/clkoff/</text>
 <text class="s" x="425" y="275">bursts/rate/matrix/dac</text>
 <rect class="bx s-test" x="660" y="226" width="233" height="62" rx="4"/>
-<circle class="st-proven" cx="882" cy="237" r="5"><title>fully tested on silicon</title></circle><circle class="nooff" cx="867" cy="237" r="4.5"><title>no off-board test</title></circle>
+<circle class="st-pending" cx="882" cy="237" r="5"><title>not tested with this version yet (earlier: tested on silicon (no revision recorded))</title></circle>
 <text class="t" x="670" y="247">dactest.c</text>
 <text class="s" x="670" y="261">judges captured halves</text>
 <text class="s" x="670" y="275">against the DAC triangle</text>
 <rect class="bx s-test" x="905" y="226" width="233" height="62" rx="4"/>
-<circle class="st-restructured" cx="1127" cy="237" r="5"><title>ran on silicon, code changed since - to be tested</title></circle><circle class="nooff" cx="1112" cy="237" r="4.5"><title>no off-board test</title></circle>
+<circle class="st-pending" cx="1127" cy="237" r="5"><title>not tested with this version yet (earlier: ran on silicon before N+1&#x27;s restructuring)</title></circle>
 <text class="t" x="915" y="247">meter.c</text>
 <text class="s" x="915" y="261">selftest · oneshot</text>
 <text class="s" x="915" y="275">measure_rate (back-to-back)</text>
@@ -103,35 +102,35 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 <text class="lf" x="24" y="356">src/app/</text>
 <text class="lf" x="24" y="369">src/boards/</text>
 <rect class="bx s-app" x="170" y="328" width="150" height="48" rx="4"/>
-<circle class="st-restructured" cx="309" cy="339" r="5"><title>ran on silicon, code changed since - to be tested</title></circle>
+<circle class="st-tested" cx="309" cy="339" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session); open: intermittent fail 8 just after stream off with the generator on: 2 in ~176, not reproduced in 76 more (HARDWARE-LOG 2026-09-29)</title></circle>
 <text class="t" x="180" y="349">main.c</text>
 <text class="s" x="180" y="363">start-up order, loop</text>
 <rect class="bx s-app" x="332" y="328" width="330" height="48" rx="4"/>
-<circle class="st-restructured" cx="651" cy="339" r="5"><title>ran on silicon, code changed since - to be tested</title></circle>
+<circle class="st-tested" cx="651" cy="339" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session); open: intermittent fail 8 just after stream off with the generator on: 2 in ~176, not reproduced in 76 more (HARDWARE-LOG 2026-09-29)</title></circle>
 <text class="t" x="342" y="349">acquisition.c</text>
 <text class="s" x="342" y="363">rate (PLL1), variant matrix, stream on/off, chain setup</text>
 <rect class="bx s-app" x="674" y="328" width="250" height="48" rx="4"/>
-<circle class="st-never" cx="913" cy="339" r="5"><title>never ran on silicon</title></circle>
+<circle class="st-tested" cx="913" cy="339" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session)</title></circle>
 <text class="t" x="684" y="349">routing.c</text>
 <text class="s" x="684" y="363">route_t, resources, routing_apply()</text>
 <rect class="bx s-app" x="936" y="328" width="204" height="48" rx="4"/>
-<circle class="st-restructured" cx="1129" cy="339" r="5"><title>ran on silicon, code changed since - to be tested; open: the EV17P63A (Nano) profile - its own first run</title></circle>
+<circle class="st-tested" cx="1129" cy="339" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session); open: the EV17P63A (Nano) profile - its own first run</title></circle>
 <text class="t" x="946" y="349">board.h · board_cfg</text>
 <text class="s" x="946" y="363">EV74H48A | EV17P63A</text>
 <rect class="bx s-app" x="170" y="384" width="440" height="44" rx="4"/>
-<circle class="st-restructured" cx="599" cy="395" r="5"><title>ran on silicon, code changed since - to be tested</title></circle>
+<circle class="st-tested" cx="599" cy="395" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session); open: intermittent fail 8 just after stream off with the generator on: 2 in ~176, not reproduced in 76 more (HARDWARE-LOG 2026-09-29)</title></circle>
 <text class="t" x="180" y="403">capture.c</text>
 <text class="s" x="180" y="417">DMA buffer + guard words · dma0_event() · counters · chain halt/resume</text>
 <rect class="bx s-app" x="622" y="384" width="240" height="44" rx="4"/>
-<circle class="st-restructured" cx="851" cy="395" r="5"><title>ran on silicon, code changed since - to be tested</title></circle>
+<circle class="st-tested" cx="851" cy="395" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session)</title></circle>
 <text class="t" x="632" y="403">pingpong.c</text>
 <text class="s" x="632" y="417">completed half, missed, block count</text>
 <rect class="bx s-app" x="874" y="384" width="266" height="44" rx="4"/>
-<circle class="st-never" cx="1129" cy="395" r="5"><title>never ran on silicon</title></circle>
+<circle class="st-pending" cx="1129" cy="395" r="5"><title>not tested with this version yet</title></circle>
 <text class="t" x="884" y="403">port_impl.c</text>
 <text class="s" x="884" y="417">port_* → console / fail(), clock_fail_hook()</text>
 <rect class="bx s-app" x="170" y="440" width="970" height="44" rx="4"/>
-<circle class="st-never" cx="1129" cy="451" r="5"><title>never ran on silicon; open: SG.8 board_run.py block R8; intermittent fail 8 after stream off with the generator on (HARDWARE-LOG 2026-09-29)</title></circle><circle class="nooff" cx="1114" cy="451" r="4.5"><title>no off-board test</title></circle>
+<circle class="st-tested" cx="1129" cy="451" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session); open: SG.8 board_run.py block R8; intermittent fail 8 after stream off with the generator on (HARDWARE-LOG 2026-09-29)</title></circle>
 <text class="t" x="180" y="459">siggen.c</text>
 <text class="s" x="180" y="473">src/siggen/ · wavegen table (8192 x 16 bit, .dma_buffer) → dma.c ch. 1 → dac.c, paced by sccp.c (SCCP2); claim in routing.c; no register</text>
 <rect class="b-lib" x="10" y="508" width="1140" height="86" rx="6"/>
@@ -139,7 +138,7 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 <text class="lf" x="24" y="548">src/lib/</text>
 <text class="lf" x="24" y="561">src/diag/</text>
 <rect class="bx s-lib" x="170" y="520" width="380" height="62" rx="4"/>
-<circle class="st-never" cx="539" cy="531" r="5"><title>never ran on silicon</title></circle>
+<circle class="st-pending" cx="539" cy="531" r="5"><title>not tested with this version yet</title></circle>
 <text class="t" x="180" y="541">frame · crc16 · fmt · stats · tri_eval</text>
 <text class="s" x="180" y="555">hardware-free, tested on the host</text>
 <text class="s" x="180" y="569">(tests/host, Python cross-checks)</text>
@@ -149,7 +148,7 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 <text class="s" x="572" y="555">wavegen: called by siggen.c</text>
 <text class="s" x="572" y="569">rest linked, not called yet (N+4)</text>
 <rect class="bx s-diag" x="874" y="520" width="266" height="62" rx="4"/>
-<circle class="st-restructured" cx="1129" cy="531" r="5"><title>ran on silicon, code changed since - to be tested</title></circle>
+<circle class="st-tested" cx="1129" cy="531" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session)</title></circle>
 <text class="t" x="884" y="541">diag.c</text>
 <text class="s" x="884" y="555">fail() codes, trap, boot record,</text>
 <text class="s" x="884" y="569">reg_print(), stack high-water mark</text>
@@ -157,16 +156,16 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 <text class="ln" x="24" y="634">Port layer</text>
 <text class="lf" x="24" y="650">src/port/ · headers</text>
 <rect class="bx s-port" x="170" y="618" width="233" height="34" rx="4"/>
-<circle class="st-never" cx="392" cy="629" r="5"><title>never ran on silicon</title></circle>
+<circle class="st-pending" cx="392" cy="629" r="5"><title>not tested with this version yet</title></circle>
 <text class="t" x="180" y="639">log.h · port_log/trace</text>
 <rect class="bx s-port" x="415" y="618" width="233" height="34" rx="4"/>
-<circle class="st-never" cx="637" cy="629" r="5"><title>never ran on silicon; open: runs only on a fault</title></circle>
+<circle class="st-pending" cx="637" cy="629" r="5"><title>not tested with this version yet; open: runs only on a fault</title></circle>
 <text class="t" x="425" y="639">panic.h · port_panic()</text>
 <rect class="bx s-port" x="660" y="618" width="233" height="34" rx="4"/>
-<circle class="st-never" cx="882" cy="629" r="5"><title>never ran on silicon</title></circle>
+<circle class="st-tested" cx="882" cy="629" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session)</title></circle>
 <text class="t" x="670" y="639">wait.h · PORT_WAIT_WHILE()</text>
 <rect class="bx s-port" x="905" y="618" width="233" height="34" rx="4"/>
-<circle class="st-never" cx="1127" cy="629" r="5"><title>never ran on silicon</title></circle>
+<circle class="st-pending" cx="1127" cy="629" r="5"><title>not tested with this version yet</title></circle>
 <text class="t" x="915" y="639">regs.h · reg_visit_t</text>
 <rect class="b-drv" x="10" y="676" width="1140" height="86" rx="6"/>
 <text class="ln" x="24" y="700">Drivers</text>
@@ -177,7 +176,7 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 <text class="lf" x="24" y="818">dsPIC33AK512</text>
 <text class="lf" x="24" y="831">MPS512</text>
 <rect class="bx s-drv" x="170" y="688" width="110" height="62" rx="4"/>
-<circle class="st-restructured" cx="269" cy="699" r="5"><title>ran on silicon, code changed since - to be tested</title></circle>
+<circle class="st-tested" cx="269" cy="699" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session)</title></circle>
 <text class="t" x="180" y="709">clock.c</text>
 <text class="s" x="180" y="723">PLL1, PLL2</text>
 <text class="s" x="180" y="737">CLKGEN6/7/13</text>
@@ -188,7 +187,7 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 <text class="s" x="180" y="825">PLL1 → ADC path</text>
 <text class="s" x="180" y="839">PLL2 → CPU</text>
 <rect class="bx s-drv" x="292" y="688" width="110" height="62" rx="4"/>
-<circle class="st-restructured" cx="391" cy="699" r="5"><title>ran on silicon, code changed since - to be tested</title></circle>
+<circle class="st-tested" cx="391" cy="699" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session)</title></circle>
 <text class="t" x="302" y="709">adc.c</text>
 <text class="s" x="302" y="723">core 5, burst</text>
 <text class="s" x="302" y="737">trigger, calib.</text>
@@ -199,7 +198,7 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 <text class="s" x="302" y="825">core 5, AD5AN3</text>
 <text class="s" x="302" y="839">(pin RA8)</text>
 <rect class="bx s-drv" x="414" y="688" width="110" height="62" rx="4"/>
-<circle class="st-restructured" cx="513" cy="699" r="5"><title>ran on silicon, code changed since - to be tested</title></circle>
+<circle class="st-tested" cx="513" cy="699" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session)</title></circle>
 <text class="t" x="424" y="709">dma.c</text>
 <text class="s" x="424" y="723">ch. 0 + ISR, ch. 1 tx</text>
 <text class="s" x="424" y="737">sim: sim_dma.c</text>
@@ -207,10 +206,10 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 <rect class="bx s-hw" x="414" y="790" width="110" height="62" rx="4"/>
 
 <text class="t" x="424" y="811">DMA0 · DMA1</text>
-<text class="s" x="424" y="825">one-shot: ADC → RAM,</text>
-<text class="s" x="424" y="839">RAM → DAC</text>
+<text class="s" x="424" y="825">ch. 0: ADC → RAM</text>
+<text class="s" x="424" y="839">ch. 1: RAM → DAC</text>
 <rect class="bx s-drv" x="536" y="688" width="110" height="62" rx="4"/>
-<circle class="st-restructured" cx="635" cy="699" r="5"><title>ran on silicon, code changed since - to be tested</title></circle>
+<circle class="st-tested" cx="635" cy="699" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session)</title></circle>
 <text class="t" x="546" y="709">sccp.c</text>
 <text class="s" x="546" y="723">SCCP1 trigger,</text>
 <text class="s" x="546" y="737">SCCP2 play clock</text>
@@ -221,7 +220,7 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 <text class="s" x="546" y="825">CLKGEN13 160 MHz,</text>
 <text class="s" x="546" y="839">peripheral 100 MHz</text>
 <rect class="bx s-drv" x="658" y="688" width="110" height="62" rx="4"/>
-<circle class="st-restructured" cx="757" cy="699" r="5"><title>ran on silicon, code changed since - to be tested; open: dac 1 (DACOUT1 = RA1) - the GUI has a DAC1 card; dac ... force (dac_triangle_force()) - checked by hand 29.09.2026, no block sends it</title></circle>
+<circle class="st-tested" cx="757" cy="699" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session); open: dac 1 (DACOUT1 = RA1) - the GUI has a DAC1 card; dac ... force (dac_triangle_force()) - checked by hand 29.09.2026, no block sends it</title></circle>
 <text class="t" x="668" y="709">dac.c</text>
 <text class="s" x="668" y="723">DAC1/2 triangle</text>
 <text class="s" x="668" y="737">UREF route</text>
@@ -232,7 +231,7 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 <text class="s" x="668" y="825">on CLKGEN7</text>
 <text class="s" x="668" y="839">400 MHz → RA8</text>
 <rect class="bx s-drv" x="780" y="688" width="110" height="62" rx="4"/>
-<circle class="st-restructured" cx="879" cy="699" r="5"><title>ran on silicon, code changed since - to be tested</title></circle>
+<circle class="st-tested" cx="879" cy="699" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session)</title></circle>
 <text class="t" x="790" y="709">uart.c</text>
 <text class="s" x="790" y="723">UART2, PPS</text>
 <text class="s" x="790" y="737">RX ISR</text>
@@ -243,7 +242,7 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 <text class="s" x="790" y="825">console</text>
 <text class="s" x="790" y="839">(COM port)</text>
 <rect class="bx s-drv" x="902" y="688" width="110" height="62" rx="4"/>
-<circle class="st-proven" cx="1001" cy="699" r="5"><title>fully tested on silicon</title></circle>
+<circle class="st-tested" cx="1001" cy="699" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session)</title></circle>
 <text class="t" x="912" y="709">timebase.c</text>
 <text class="s" x="912" y="723">Timer1</text>
 <text class="s" x="912" y="737">stopwatch</text>
@@ -254,7 +253,7 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 <text class="s" x="912" y="825">12.5 MHz</text>
 <text class="s" x="912" y="839">on PLL2</text>
 <rect class="bx s-drv" x="1024" y="688" width="110" height="62" rx="4"/>
-<circle class="st-proven" cx="1123" cy="699" r="5"><title>fully tested on silicon</title></circle>
+<circle class="st-pending" cx="1123" cy="699" r="5"><title>not tested with this version yet (earlier: tested on silicon (no revision recorded))</title></circle>
 <text class="t" x="1034" y="716">led.c</text>
 <text class="s" x="1034" y="730">LED0</text>
 <path class="ln1" d="M1079 750 V790"/>
@@ -262,13 +261,9 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 
 <text class="t" x="1034" y="818">LED0</text>
 <text class="s" x="1034" y="832">heartbeat</text>
-<text class="s" x="20" y="894">Test status, 29.09.2026, after run 20 - no box changed; three later fixes checked by hand (docs/TEST-COVERAGE.md):</text>
-<circle class="st-proven" cx="26" cy="910" r="5"/>
-<text class="s" x="36" y="914">fully tested on silicon</text>
-<circle class="st-restructured" cx="184" cy="910" r="5"/>
-<text class="s" x="194" y="914">ran on silicon, code changed since - to be tested</text>
-<circle class="st-never" cx="482" cy="910" r="5"/>
-<text class="s" x="492" y="914">never ran on silicon</text>
-<circle class="nooff" cx="624" cy="910" r="4.5"/>
-<text class="s" x="634" y="914">no test without a board</text>
+<text class="s" x="20" y="894">Test status, 30.09.2026 (docs/TEST-COVERAGE.md):</text>
+<circle class="st-tested" cx="26" cy="910" r="5"/>
+<text class="s" x="36" y="914">functionally tested on silicon with this version</text>
+<circle class="st-pending" cx="319" cy="910" r="5"/>
+<text class="s" x="329" y="914">not tested with this version yet</text>
 </svg>
