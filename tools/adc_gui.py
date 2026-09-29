@@ -809,11 +809,13 @@ def probe_grab(target) -> bool:
 
 
 def _parse_buf(lines) -> int:
-    """'buf: <n>' (plus a 'half: <n/2>' line) -> n, or None if not found."""
+    """cli.c's 'buf' reply, 'samples per half: <h>' -> the TOTAL 2*h, or None.
+    (Until 29.09.2026 this looked for 'buf: <n>', a line only FakeTarget ever
+    sent - against the board it never matched and the GUI assumed 2048.)"""
     for l in lines:
-        m = re.match(r"\s*buf:\s*(\d+)", l)
+        m = re.match(r"\s*samples per half:\s*(\d+)", l)
         if m:
-            return int(m.group(1))
+            return 2 * int(m.group(1))
     return None
 
 
@@ -1048,12 +1050,17 @@ class FakeTarget:
                        if DAC_CODE_MIN_GUI + slp <= low < high <= DAC_CODE_MAX_GUI - slp
                        else "forced - OUTSIDE the datasheet's limits (p1422)")] if force else [])
             if c == "buf":
+                # cli.c's cmd_buf_fn(): the argument is samples PER HALF,
+                # 16..1024 even, refused while the chain streams.
                 if args:
-                    n = int(args[0])
-                    if n < 16 or n > 8192 or n % 2:
-                        return False, ["usage: buf <n, even, 16..8192> - total ping-pong buffer"]
-                    self.buf_size = n
-                return True, [f"buf: {self.buf_size}", f"half: {self.buf_size // 2}"]
+                    h = int(args[0])
+                    if h < 16 or h > 1024:
+                        return False, ["usage: buf [samples per half 16..1024, even]  "
+                                       "(stop first; the next start uses the new size)"]
+                    if h % 2 or self.chain_on:
+                        return False, ["buf: stop the stream first, and give an even number"]
+                    self.buf_size = 2 * h
+                return True, [f"samples per half: {self.buf_size // 2}", "maximum: 1024"]
             if c == "version":
                 return True, ["[build] adc_dma_40msps (fake target, synthetic signal)",
                               "[build] board: " + self.FAKE_BOARD_NAMES[self.board]]
@@ -1331,6 +1338,19 @@ def selftest() -> int:
     ok_all &= ok_dac
     print(f"fake source 'DAC2 triangle' follows the DAC2 tile: high 1000 -> max {hi_on}, high 3000 -> "
           f"max {hi_on2}, off -> max {hi_off}:", "PASS" if ok_dac else "FAIL")
+
+    # ---- 'buf': samples per half, refused while streaming (cli.c) ----
+    ok_b1, _ = t.cmd("buf 64")                          # the chain still streams here
+    t.cmd("stream off")
+    ok_b2, ln_b2 = t.cmd("buf 64")
+    t.cmd("stream on 8000")
+    okg, sg, _m = t.grab()
+    ok_buf = (not ok_b1 and ok_b2 and _parse_buf(ln_b2) == 128 and okg and len(sg) == 64)
+    ok_all &= ok_buf
+    print(f"buf 64: refused while streaming, taken after stop -> total {_parse_buf(ln_b2)}, "
+          f"grab n={len(sg) if okg else '-'}:", "PASS" if ok_buf else "FAIL")
+    t.cmd("stream off")
+    t.cmd("buf 1024")
 
     # ---- the custom form: 'stream on <ksps> <core> <pinsel> [<samc>]' ----
     ok, lines = t.cmd("stream on 5000 3 5 0")
@@ -1792,7 +1812,8 @@ def main_gui(args):
             with ui.card().classes("tile w-full rounded-xl p-4 gap-2"):
                 ui.label("buffer").classes("card-title")
                 with ui.row().classes("w-full gap-2 items-end"):
-                    buf_in = ui.number("buffer size, total ('buf')", value=2048, min=16, max=8192, step=16,
+                    buf_in = ui.number("buffer size, total (32..2048, 'buf' = half of it)", value=2048, min=32,
+                                       max=2048, step=32,
                                        format="%d").props("dense outlined").classes("flex-grow")
                     buf_btn = ui.button("apply", icon="tune").props("unelevated dense")
                 buf_lbl = ui.label("buf: not queried yet").classes("text-xs text-slate-400 mono")
@@ -2057,8 +2078,8 @@ def main_gui(args):
         (harm3_in, "Third harmonic the fake target adds, peak counts."),
         (buf_in, "Total size of the ping-pong buffer in samples; each half is half of it - and "
                  "half of it is exactly what one 'stream grab' sends. Console: 'buf <n>'."),
-        (buf_btn, "Send the buffer size. The firmware sets the DMA block to match at the next "
-                  "'stream on'."),
+        (buf_btn, "Send the buffer size. A running stream is stopped for it (the firmware "
+                  "refuses 'buf' otherwise) and restarted with the new size at the next grab."),
     ]
     for _u, _c in sorted(dac_ui.items()):
         _pin = "RA1" if _u == 1 else "RA8"
@@ -2631,13 +2652,22 @@ def main_gui(args):
             buf_lbl.text = "not connected"
             return
         n = int(buf_in.value or state["buf_size"])
+        half = max(16, min(1024, n // 2 & ~1))     # cli.c: samples per half, 16..1024, even
+        # The firmware refuses 'buf' while the chain streams: stop it first.
+        # acq_active = None makes the next cycle send 'stream on' again, which
+        # sets the DMA block up with the new size (LIVE carries on by itself).
+        while state["busy"]:
+            await asyncio.sleep(0.05)
         async with port_lock:
-            ok, lines = await run.io_bound(t.cmd, f"buf {n}")
+            if state["acq_active"] is not None:
+                await run.io_bound(t.cmd, "stream off")
+                state["acq_active"] = None
+            ok, lines = await run.io_bound(t.cmd, f"buf {half}")
         got = _parse_buf(lines)
         if ok and got is not None:
             state["buf_size"] = got
             buf_in.value = got
-            buf_lbl.text = f"buf: {got} (half {got // 2})"
+            buf_lbl.text = f"buf: {got} (half {got // 2})" + (f" - {n} rounded" if got != n else "")
         else:
             buf_lbl.text = "buf refused: " + " ".join(lines)
         if ok and not state["live"]:
