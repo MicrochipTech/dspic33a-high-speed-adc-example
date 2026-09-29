@@ -959,6 +959,101 @@ deviations BR.9 produces.
 - `docs/test_status.json` / `docs/TEST-COVERAGE.md`: the new code in `diag.c` starts
   amber/never like any new code.
 
+## TRG: trigger mode in the GUI (host only)
+
+Added 29.09.2026 (user request). **Goal:** a "trigger" checkbox with a level next to it
+in the acquisition card; with it ticked, every grab is shown from the point where the
+signal first crosses that level, so a periodic signal stands still in the time plot.
+Switchable at run time, without touching the stream.
+
+**Design decision 1 - a fixed display window, not a rotation.** The request as first
+stated was: search the transferred half from the front, send from the crossing to the
+end, then wrap to the start of the buffer up to the sample before the crossing. That
+does not give a standing picture. The half is one contiguous time window x[0..N-1];
+after the wrap, x[N-1] is followed by x[0], which is N samples earlier, not one. For
+any signal whose period does not divide N exactly, that seam is a visible jump at
+position N-k, and it moves with the trigger index k from grab to grab. It would also
+break the analysis: `chain_tri_eval()` reads the seam as a lost sample (FAIL on every
+grab), and the FFT gets a discontinuity in the middle of its window (leakage, wrong
+SNR/THD). Instead, the oscilloscope rule: the display shows a fixed length L (default
+N/2), the trigger is searched only in x[0..N-L], and x[k..k+L) is shown - contiguous
+by construction, no seam.
+
+**Design decision 2 - in the GUI, not in the firmware.** The GUI already holds the
+whole half once `parse_grab_frame()` returns. Searching there needs no firmware change,
+no wire-protocol change (no new GRAB header field), no trace/[SMOKE]/goldens, no
+`board_run.py`/`eval_board.py` update (the BR rule) and no board run; the triangle
+evaluation and the FFT keep working on the full, unrotated window. The search itself
+is not a cost argument either way (~2048 compares, about 40 us on the CPU while the
+stream is halted anyway, against milliseconds of UART transfer). The firmware variant
+only pays once the transfer is cut to L samples to raise the frame rate - TRG.7,
+optional.
+
+### TRG.1 Search function
+
+- `find_trigger(samples, level, slope, hyst, search_end) -> (k, frac) | None`, pure,
+  no NiceGUI (in `tools/adc_gui.py` or a small `tools/trigger.py`).
+- Rising edge: armed once a sample is below `level - hyst`, fires at the first sample
+  `>= level` after that; falling edge mirrored. The hysteresis keeps ADC noise (a few
+  LSB) from firing several times on a slow slope.
+- `frac`: the crossing linearly interpolated between x[k-1] and x[k], for an optional
+  sub-sample shift of the x axis - without it the picture jitters by up to one sample
+  (125 ns at 8 MSPS), visible only at high signal-to-sample-rate ratios.
+
+### TRG.2 Controls
+
+- In the acquisition card next to "grab interval, ms": checkbox "trigger", number
+  "level" (ADC counts 0..4095, default 2048), edge rising/falling, hysteresis (LSB,
+  default 16). Tooltips like the other fields.
+- Values live in `state`; a change takes effect with the next grab - switching on and
+  off while LIVE needs nothing else.
+
+### TRG.3 Display
+
+- In `one_cycle()`, only the time series changes when the trigger is on: `L = N // 2`,
+  search in x[0..N-L], plot x[k..k+L). x axis in samples and time relative to the
+  trigger point (t = 0 at the crossing, `frac` applied when enabled).
+- A dashed horizontal line at the level (ECharts `markLine`); a chip "trig @ k" or
+  "no trigger".
+- **No trigger found:** "auto" behaviour like an oscilloscope - x[0..L) untriggered,
+  chip "no trigger", no error.
+- FFT, spectrum metrics and the triangle card are untouched: they keep receiving the
+  full `samples`.
+
+### TRG.4 Self-test
+
+- `adc_gui.py --selftest` gains: a sine of known phase - the index found is the
+  expected crossing to within one sample; two `FakeTarget` grabs at different phases
+  (its sine already follows wall-clock time, so consecutive grabs differ in phase) -
+  the displayed windows agree at the trigger point to within the noise; a noisy slow
+  slope - exactly one crossing with the hysteresis, several without it; a level outside
+  the signal - "no trigger"; the triangle verdict identical with the trigger on and off.
+
+### TRG.5 UI test
+
+- `tools/gui_ui_test.py`: trigger on while LIVE (chip "trig @" appears, the level line
+  is drawn), off again, no server-side exception; both board profiles as before.
+
+### TRG.6 Documentation
+
+- README (GUI section) and the `tools/adc_gui.py` row in CLAUDE.md. No HARDWARE-LOG
+  entry for the change itself (no firmware); the first use on the board is noted with
+  the board run it happens in.
+
+### TRG.7 Firmware-side search with a shortened transfer (optional, later)
+
+- Only if the GUI's frame rate turns out too low. `stream trig <level> <edge> | off` as
+  a sub-command of `stream` (no parser slot), the search in `gui_link_stream_grab()`
+  before `frame_send()`, L samples sent instead of N - still one contiguous
+  `frame_send()`, never a wrap - and a header field `trig=<k>` (`protocol.py`'s regex).
+- Brings the full chain CLAUDE.md asks for: `-Wall -Wextra` on hw/sim/nano/smoke,
+  `trace.bat`, [SMOKE] (`help` changes), `board_run.py`/`eval_board.py` in the same
+  commit (GRAB header and `help` are reply formats under the BR rule), a board run and
+  its HARDWARE-LOG entry.
+
+**Effort:** TRG.1-TRG.6 about 6-9 hours, host only; TRG.7 about two to three days
+including the board run.
+
 ---
 
 ## Order and dependencies
@@ -978,6 +1073,8 @@ P0 ──► P1 ──► P2 ──► P3
 - **BR**: BR.1-BR.4 (tools/ and tests/ only) in a worktree alongside P9-P11; BR.5 merges
   them after P11; BR.6 (firmware, [SMOKE]) after P11 and before P12; BR.7 with or after
   BR.6; BR.8 (B image) after P12; BR.9 is the board run.
+- **TRG.1-TRG.6** touch `tools/` only and depend on nothing above - any time, also
+  alongside BR/DBG. TRG.7 (firmware) goes into a B image like DBG, after BR.9.
 - The only real risk of changing timing lies in P8.1 (DMA ISR), now in N+2. It is checked with
   `fncmp` (no indirect call, instruction count recorded), but only a board run can
   confirm it.
