@@ -98,6 +98,16 @@ not counted.
 | DBG.1 `mem` command | open | | | after BR.9 (a firmware change invalidates B); one parser slot, address check before any access |
 | DBG.2 `tools/sym.py` | open | | | name -> address from the ELF/map and the pack; refuses a map that does not match the banner's revision |
 | DBG.3 Documentation, board-run integration | open | | | the `help` change is a reply-format change (BR rule) |
+| SG.0 Datasheet check | open | | | window check on a RAM source, `DACxDAT` upper-half write, DAC rate limit, SCCP2 event and clock |
+| SG.1 `dma.c` channel 1 | open | | | shared `DMALOW`/`DMAHIGH`, no `DMACON.ON` toggle while channel 1 runs; ISR 42/0 |
+| SG.2 `sccp.c` SCCP2 | open | | | playback clock, trace scenario |
+| SG.3 `src/siggen/` | open | | | no registers; callers that touch a DAC stop it first; host test |
+| SG.4 `siggen` command | open | | | one parser slot; `help` change = BR rule, [SMOKE] |
+| SG.5 Routing claim | open | | | DMA 1, SCCP 2, DAC output, RAM; conflict with `ROUTE_STREAM` on DAC2 |
+| SG.6 GUI card | open | | | `tools/wavegen_model.py`, loop overlay and match chip |
+| SG.7 GUI tests | open | | | selftest + Playwright |
+| SG.8 Board run | open | | | block R8; fallback TMR2, then timer ISR ("A2 not met") |
+| SG.9 Documentation | open | | | CLAUDE.md, architecture, DESIGN 4.2 corrected |
 
 ### Decisions taken during the work
 
@@ -128,6 +138,7 @@ not counted.
 | 27.09. | BR: `sim_trap.py` cannot serve as a transport for the runner - the simulator's UART is write-only to a file, nothing feeds bytes in at run time (BR.1's look); the runner is tested against its stand-in only | BR.1 |
 | 27.09. | `stream on` custom input through the routing: PINSEL 6/7 (the internal 15/16 VDD reference and UREF) always reachable, and the internal channels the ATDF names on core 5 (AD5AN5 "Touch ADC Input", AD5AN8 "VDDCORE") likewise; PINSEL 9..15 (unnamed in the ATDF) and package pins a core does not bring out are refused - intended by P11.2's rule "a pin the core cannot reach", the only console behaviour change of N+1 (same "set-up failed" line as any other refusal; the GUI already snapped its PINSEL field to the core's pins plus 6/7, its hint narrowed) | P11.4: `routing.c`'s `route_int_mask[]`, `acquisition.h` |
 | 28.09. | BR decision 4 superseded for remote runs: with bench_client (`CLAUDE.md`, `1a1464e`) the lead can flash through `ipecmd` over the relay; runs by the colleague stay by hand | `CLAUDE.md` "Remote board access" |
+| 29.09. | SG added (user request): N+3's signal generator brought forward before N+2, with narrow channel-1/SCCP2 functions that P8 generalises later; one DMA window over table and ADC buffer (the window is global); `TRMODE = 1`, not DESIGN 4.2's Repeated Continuous; parameters set one per line (64-character console line) | section SG |
 | 28.09. | DBG added after BR.9: a `mem rd/wr` console command (one parser slot, `diag.c`) and `tools/sym.py`, so an agent can read and change memory over the relay without a rebuild; deliberately after the first board run, since any firmware change invalidates the B image | this plan, section DBG |
 
 ### Handover to the next lead session (27.09.2026, 18:30)
@@ -1056,6 +1067,226 @@ including the board run.
 
 ---
 
+## SG: signal generator in firmware and GUI (N+3, brought forward)
+
+Added 29.09.2026 (user request). **Goal:** requirement A2 (`docs/DESIGN-MULTICHANNEL.md`
+section 1): the firmware computes a table from the `tab_wave_gen.py` parameters with
+`lib/wavegen` (P3.6, done, host-tested, linked but called from nowhere), and plays it
+through a DMA channel into a DAC at a selectable rate, with no CPU involvement. The GUI
+sets the parameters, shows the expected table and, in the loop DAC2 -> RA8 -> ADC core 5
+-> chain stream, compares what comes back with what was sent. That loop is the test the
+design asks for (DESIGN-MULTICHANNEL 5, "the captured table must match") and gives the
+GUI a known signal other than the triangle.
+
+This is N+3 from "After N+1" below. It comes before N+2 (P8, drivers with instances), so
+the new channel and the new SCCP get narrow functions of their own in `dma.c`/`sccp.c`.
+P8 folds them into the instance API later. Nothing of SG has run on silicon.
+
+**What the code and the ATDF already say (checked 29.09.2026, pack 1.4.260):**
+
+- **The DMA address window is global.** `DMALOW`/`DMAHIGH` exist once, not per channel,
+  and `dma0_init()` sets them to exactly the ADC buffer (`dma.c`, "the window is the
+  destination buffer itself"). A second channel whose table lies outside that window
+  may be refused with `ADRERR` (checked "every transaction", 13.4.8.1 p829). Whether
+  the check also covers a channel's RAM *source* is not settled: the board has only
+  shown that an SFR source below `DMALOW` passes.
+- **`dma0_init()` switches the whole controller off** (`DMACONbits.ON = 0`) and back
+  on. Every `stream on` would therefore stop a running generator.
+- **`DACxDAT` is 32 bits:** `DACLOW` in 15:0, `DACDAT` in 31:16 (pack header
+  `p33AK512MPS512.h`). A DMA write of the table value has to land in the upper half.
+  Either a 16-bit transfer to `&DACxDAT + 2`, if a halfword write to an SFR's upper
+  half is allowed, or 32-bit transfers from a `uint32_t` table (twice the RAM).
+- **DMA trigger:** ATDF `DMA_SEL__CHSEL` 0x19 = "SCCP2" (0x18 SCCP1, 0x0E TMR2,
+  0x05 TMR1). Which SCCP2 event raises it (timer period or only IC/OC) is not given.
+  Run 18 found OC mode produced no ADC events and timer mode did.
+- **DESIGN-MULTICHANNEL 4.2 says "Repeated Continuous".** That is `TRMODE = 3`, the
+  mode that copied a whole block per trigger and caused runs 1-18's false rates. The
+  generator uses `TRMODE = 1` (Repeated One-Shot, one table entry per trigger) like the
+  ADC channel. SG.9 corrects 4.2.
+- **Console line: 64 characters** (`CMD_PARSER_LINE_MAX_LEN`). The design's one-liner
+  `siggen 8192 50000 f0=10000 h2=0.3 decay=20 amp=0.8` fits, but not with all six
+  harmonics. So the parameters are set one per line (SG.4).
+- **SCCP1's clock, CLKGEN13, is PLL1 out / 2.** When anything changes PLL1 while the
+  generator runs, its rate moves too. SG.0 decides the clock (SG.2).
+- RAM: 64 KB (`data` 0x4000, size 0x10000), 14.8 KB used at P0.1. The stack takes the
+  rest (BR.6), and BR's criterion is at least 25 % of it unused.
+- Parser slots: 27 + help = 28 of 32 in use; DBG.1 takes one, SG one.
+
+**Design decision 1 - one window over both regions.** `dma.c` sets `DMALOW`/`DMAHIGH`
+to the smallest range covering the ADC buffer and the generator table. The table goes
+*below* the ADC buffer (one linker-placed object, or both in one named section), so the
+buffer's end is still the window's end: an ADC overrun past the buffer still hits
+`DMAHIGH` and stops the channel as today (fail 8). Its guard words stay. What is lost is
+the hardware fence between table and buffer, which neither channel's configuration can
+cross. `dma0_init()` no longer toggles `DMACON.ON` while another channel is enabled.
+
+**Design decision 2 - the table is computed on the target, parameters only over the
+wire** (decision of 26.09.2026, DESIGN-MULTICHANNEL 4.2, unchanged). The GUI computes
+the same table from the same formula for its preview and for the loop comparison.
+
+**Design decision 3 - no interrupt for the generator.** Channel 1 runs with
+`HALFEN = DONEEN = 0`, `RELOADS`/`RELOADC` set. Errors (`ADRERR`, `BUSERR`) are read
+back by `siggen` status rather than counted in an ISR. `_DMA0Interrupt` stays 42/0
+(fncmp).
+
+**Design decision 4 - checked defaults, explicit override.** Output range 205..3890
+(ATDF, Example 18-3's note) by default. `force` lets any `lo`/`hi` through, as `dac ...
+force` does, and the GUI ticks it by default (owner's choice for the DAC, 29.09.2026).
+Every refusal names the violated limit with its number.
+
+### SG.0 Datasheet check (docs only)
+
+- Write the answers into this section with page/table, before any code:
+  - Does the DMA window check apply to a RAM source (13.4.8.1)? Decision 1 holds
+    either way; the answer says whether it was needed.
+  - Is a 16-bit write to `DACxDAT`'s upper half allowed, from the CPU and from the
+    DMA? If not: 32-bit transfers, a `uint32_t` table, `SIGGEN_N_MAX` 4096.
+  - The DAC's update-rate/settling limit (DAC chapter 18, Table 40-x). It sets
+    `play_hz`'s upper bound.
+  - Which SCCP2 event raises the DMA request in timer mode.
+  - SCCP2's clock: CLKGEN13 (as SCCP1, moves with PLL1), or the peripheral clock
+    (PLL2, independent of every ADC rate change, maximum 200 MHz, Table 40-24).
+    Recommended: the peripheral clock. The generator has no reason to share the ADC's
+    clock, and a rate that changes under a running `stream on` is exactly the kind of
+    coupling that cost runs 5-7.
+  - Which DAC drives `DACOUT1`/`DACOUT2`, and whether the DAC runs in basic (DC) mode
+    with `UPDTRG = 3` (every write taken at once), as `dac_level_start()` already does.
+- Output: the fixed values for SG.1-SG.3 and the answer to "16 or 32 bit". Effort:
+  half a day.
+
+### SG.1 `dma.c`: channel 1 as a transmit channel
+
+- `dma1_tx_start(trigger, src_table, n, dst_sfr, size)` / `dma1_tx_stop()` /
+  `dma1_tx_status()` / `dma1_regs_visit()`. Repeated One-Shot, source incremented,
+  destination fixed, `RELOADS`/`RELOADC`, no interrupt. Datasheet page per register as
+  everywhere.
+- The shared window (decision 1): `dma.c` keeps both regions and writes
+  `DMALOW`/`DMAHIGH` from them. `dma0_init()` leaves `DMACON.ON` alone when channel 1
+  is enabled.
+- `sim_dma.c`: stand-ins with the same names (a variable per register, as for channel 0).
+- Checks: `_DMA0Interrupt` 42/0 unchanged (fncmp). `trace.bat` - the `stream_on`-type
+  goldens change only if the window or the `DMACON` sequence changes. The task says
+  which lines changed and why.
+
+### SG.2 `sccp.c`: SCCP2 as the playback clock
+
+- `sccp2_start(ticks, clk)` / `sccp2_stop()` / `sccp2_hz()` / `sccp2_regs_visit()`,
+  timer mode, the clock from SG.0. Register layout checked against SCCP1's in the ATDF,
+  not assumed.
+- `siggen_actual_hz()` = clock / ticks, rounded ticks, reported.
+- Trace scenario `sccp2` with golden.
+
+### SG.3 `src/siggen/siggen.c/.h`
+
+- Owns the table (`SIGGEN_N_MAX` from SG.0: 8192 x 2 B = 16 KB if the stack keeps at
+  least 25 % unused after BR.6's measurement, otherwise 4096), a `wavegen_cfg_t` with
+  the defaults of `tab_wave_gen.py`, and the running state.
+- `siggen_set(param, value)`, `siggen_start(dac, n, play_hz, snap)` (`wavegen_fill()`,
+  then `dac_level_start(dac, table[0])`, then `dma1_tx_start()`, then `sccp2_start()`),
+  `siggen_stop()` (the reverse order), `siggen_running()`/`_dac()`/`_actual_hz()`/
+  `_f0_used()`, `siggen_visit()` for the status report (print-free, like
+  `routing_visit()`).
+- No register of its own, no device header; it calls `dma.c`, `sccp.c`, `dac.c` and
+  `lib/wavegen` only.
+- Every application path that starts or stops a DAC stops the generator on that unit
+  first: `cmd_dac_fn()`, `run_dactest()`, `acq_triangle_for()`, `acq_chain_restore()`,
+  `dactest.c`. `grep -rn "dac_\(off\|all_off\|triangle\|level\)" src/` is the checklist.
+  A driver cannot call up, so this lives in the callers.
+- `tests/host/test_siggen.c`, drivers stubbed with counters (the `test_routing.c`
+  pattern): the order of start/stop, refusal before any driver call for every wavegen
+  error code, and `snap`'s reported f0.
+
+### SG.4 Console command `siggen` (one parser slot)
+
+```
+siggen set <param> <value>        f0 h2..h7 decay amp lo hi   (one per line, 64-char limit)
+siggen on <dac> <n> <play_hz> [snap] [force]
+siggen off
+siggen                            status: every parameter, dac, n, play_hz set/actual,
+                                  f0 set/used, table min/max, dma1 status
+```
+
+- Fractional values (`f0`, `h2..h7`, `decay`, `amp`) through a new
+  `fmt_parse_dec()` in `lib/fmt` (at most six decimals, no `strtof`, no locale).
+  `tests/host/test_fmt.c` gets its cases.
+- Reply lines sized to the longest one, stated in the comment (CLAUDE.md rule).
+- A change to `help`, so under the BR rule: [SMOKE] with `--update-expected`, and
+  `board_run.py`/`eval_board.py` in the same commit, checked by their self-tests.
+
+### SG.5 Routing: the generator's resources
+
+- `routing.c`'s resource table gains the generator's claim (DMA 1, SCCP 2, one DAC
+  output, the table's RAM against `ROUTE_RAM_BUDGET_BYTES`). `route list` shows it.
+- Conflicts, each with its own `route_err_t` and host test: the test-form
+  `stream on <ksps>` (`ROUTE_STREAM`, DAC2 triangle) while the generator is on DAC2,
+  and the reverse.
+- The loop needs no new route shape: `stream on <ksps> 5 3` (custom form, DAC left
+  alone) reads RA8 = DACOUT2 while the generator drives it.
+
+### SG.6 GUI: signal generator card
+
+- `tools/wavegen_model.py`: the formula, moved from `tests/ref/wavegen_ref.py` (which
+  then imports it). One model for the host test, the GUI and `FakeTarget`, the
+  `eval_chain.py` rule.
+- A card next to the acquisition card with: DAC 1/2, n, play_hz, f0, h2..h7, decay,
+  amp, lo/hi, snap (default on), force (default on, decision 4), on/off. On change it
+  sends `siggen set ...` line by line, then `siggen on ...`, and shows the actual
+  play_hz and the f0 used from the reply.
+- The table preview, computed by `wavegen_model.py` with the firmware's reported
+  values.
+- "Loop" preset: generator on DAC2, acquisition on core 5 / PINSEL 3 (RA8).
+- In the loop, the time plot overlays the expected signal: the table resampled at the
+  frame's `ksps`, aligned by cross-correlation. A chip shows the RMS error in LSB and
+  the delay. The spectrum shows f0 and the harmonics against the set factors.
+- `FakeTarget` plays the table (at `play_hz`, sampled at `ksps`, plus a modelled DAC
+  settling) when the input is RA8 and the generator is on.
+
+### SG.7 GUI tests
+
+- `adc_gui.py --selftest`: `wavegen_model.py` against `tests/ref` vectors; `siggen`
+  set/on/off against `FakeTarget`, reply parsing; the loop with the fake. It must
+  recover the RMS error ~0 and the right delay, and fail visibly with a wrong
+  harmonic. A 64-character overflow is refused by the sender, not truncated.
+- `gui_ui_test.py`: generator card on/off, loop preset, overlay drawn, both board
+  profiles, no server-side exception.
+
+### SG.8 Board run
+
+- `board_run.py` block R8 "siggen": `siggen set f0 10000`, `h3 0.3`,
+  `siggen on 2 1000 100000 snap`, `stream on 1000 5 3`, 10 grabs, then the play-rate
+  ladder (10 k / 100 k / 1 M / the SG.0 limit) with the chain at 8 MSPS: `ov`/`late`
+  counters per step (does a second DMA channel bring the overruns below 10 MSPS?),
+  `siggen off`, `stream off`.
+- `eval_board.py`: the loop match against `wavegen_model.py` (RMS error, delay, f0
+  within the DAC's rounding); `tests/board/expected.json` entries `source: prediction`.
+- The questions the run answers in one pass: does SCCP2 trigger the DMA at all
+  (`dma1` transfer count = SCCP2 periods over the run); does the value reach
+  `DACDAT`; is the RAM source inside the window accepted; the highest clean play_hz;
+  whether the ADC chain's overrun threshold moves.
+- **Fallback, decided now** so a failed first run does not stall the card: if SCCP2
+  does not trigger the DMA, try TMR2 (0x0E) in the same B image (`siggen on ...
+  trig=tmr2`, a hidden second trigger option). Only if neither works does a timer-ISR
+  transport (`dac_set()` from `_T2Interrupt`, below ~200 kSps) stand in for the DMA -
+  explicitly as "A2 not met", in the HARDWARE-LOG and on the console.
+- A new B image, a dated HARDWARE-LOG entry, predictions that missed included.
+
+### SG.9 Documentation
+
+- CLAUDE.md: rows for `siggen.c`, the new `dma.c`/`sccp.c` functions, `wavegen_model.py`,
+  the command in the parser-slot count; "Rules" unaffected.
+- `docs/gen_architecture.py`: box `siggen` (app layer) with its arrows to
+  dma/sccp/dac/wavegen, regenerate both SVGs; `docs/test_status.json` entry with its
+  open gaps; `docs/TEST-COVERAGE.md`.
+- DESIGN-MULTICHANNEL 4.2: `TRMODE = 1` instead of "Repeated Continuous", the shared
+  window, per-line parameters. README: the command and the GUI card.
+
+**Effort:** SG.0 half a day; SG.1-SG.5 (firmware, tests, goldens, [SMOKE],
+board_run/eval_board) two and a half to three days; SG.6-SG.7 (GUI) one to one and a
+half days; SG.9 half a day. Together about four and a half to five and a half working
+days, plus the board run in SG.8 (and a second one if the fallback is needed).
+
+---
+
 ## Order and dependencies
 
 ```
@@ -1075,6 +1306,9 @@ P0 ──► P1 ──► P2 ──► P3
   BR.6; BR.8 (B image) after P12; BR.9 is the board run.
 - **TRG.1-TRG.6** touch `tools/` only and depend on nothing above - any time, also
   alongside BR/DBG. TRG.7 (firmware) goes into a B image like DBG, after BR.9.
+- **SG**: SG.0 first (docs only). SG.1/SG.2 in parallel, then SG.3-SG.5. SG.6/SG.7 can
+  start after SG.4's command syntax is fixed, against `FakeTarget`. SG.8 goes into a B
+  image after DBG's, SG.9 with each card and closed at the end.
 - The only real risk of changing timing lies in P8.1 (DMA ISR), now in N+2. It is checked with
   `fncmp` (no indirect call, instruction count recorded), but only a board run can
   confirm it.
@@ -1084,7 +1318,7 @@ P0 ──► P1 ──► P2 ──► P3
 | Version | Content |
 |---|---|
 | N+2 | P8 (drivers with instances) and P10 (split `clock.c`), moved here from N+1 on 27.09.2026; further single-channel routes (other core, pin, DAC1..8 as the source); the `test` suite on `ROUTE_B2B` |
-| N+3 | signal generator `siggen/`: table → DMA → DAC, playback clock from an SCCP, using `lib/wavegen` |
+| N+3 | signal generator `siggen/`: table → DMA → DAC, playback clock from an SCCP, using `lib/wavegen` - planned in detail as section SG (29.09.2026), brought forward before N+2 |
 | N+4 | processing chain `dsp_run/` with `lib/goertzel_f` (default), `goertzel_i`, `detect`; measure the cycles per block |
 | N+5 | multi-channel `acq/`, up to 5 cores, common trigger |
 
