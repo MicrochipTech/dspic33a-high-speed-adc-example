@@ -315,6 +315,12 @@ void acq_wait_ticks(uint32_t t)
  * state are in this file since P9.4b, so it is a plain static again. */
 static uint8_t s_core = CHAIN_CORE, s_pinsel = CHAIN_PINSEL, s_samc = CHAIN_SAMC;
 static bool    s_test_dac = true;
+/* The buffer half acq_chain_setup() sets up: the full length for the chain
+ * test's own stages, the length 'buf' chose for a 'stream on' (set by
+ * acq_chain_setup_input() for that one call). Until 29.09.2026 it was
+ * always SAMPLES_PER_HALF_MAX, so 'buf' was accepted and then undone by the
+ * next 'stream on' - the GUI's buffer tile had no effect. */
+static uint32_t s_half = SAMPLES_PER_HALF_MAX;
 
 /* The two paths as route_t data (routing.h, P11.3, 27.09.2026), defined
  * here so that they are built from the same board.h macros the code below
@@ -340,7 +346,7 @@ bool acq_chain_setup(void)
     timebase_init();
     (void)capture_settle();
     sccp1_stop();
-    (void)capture_set_half_len(SAMPLES_PER_HALF_MAX);
+    (void)capture_set_half_len(s_half);
     acq_setup_rc_pll = capture_set_pll(5u, 1u);       /* 320 MHz, VCO 1600 */
     acq_setup_trig   = clock_trig_on();               /* CLKGEN13 160 MHz  */
     clock_dac_select(CLOCK_DAC_PLL1_VCO);
@@ -364,8 +370,10 @@ bool acq_chain_setup(void)
 bool acq_chain_setup_input(uint8_t core, uint8_t pinsel, uint8_t samc, bool test_dac)
 {
     s_core = core; s_pinsel = pinsel; s_samc = samc; s_test_dac = test_dac;
+    s_half = capture_half_len();                     /* what 'buf' chose, kept */
     const bool ok = acq_chain_setup();
     s_core = CHAIN_CORE; s_pinsel = CHAIN_PINSEL; s_samc = CHAIN_SAMC; s_test_dac = true;
+    s_half = SAMPLES_PER_HALF_MAX;
     return ok;
 }
 
