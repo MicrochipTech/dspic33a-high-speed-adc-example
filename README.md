@@ -1079,7 +1079,21 @@ loop the time plot overlays the fitted table (also inside the trigger's window) 
 fitted in the time domain against the set ones (an FFT of one period has no bins for
 them). The model is `tools/wavegen_model.py`; `--fake` plays the table on the generator's
 pin. The test input (`stream on <ksps>` with the firmware's triangle) is refused while
-the generator plays on DAC2.
+the generator plays on DAC2; switching the generator on while the test input streams
+sends `stream off` first.
+
+`decay` is the rate of the envelope exp(-decay x t), in 1/s, with t counted from the
+start of the table: the time constant is 1/decay, the amplitude is down to a fraction r
+after ln(1/r)/decay - so decay = ln(100)/T makes the pulse fall to 1 % in T (921 for
+5 ms). The table repeats every n / play rate, so a pulse needs a table clearly longer
+than its decay; `decay` 0 is a steady tone.
+
+A DAC card and the generator share the DAC: while the generator plays on a DAC, the GUI
+does not send that DAC's card by itself (a `dac` command would stop the generator -
+`siggen_release_dac()`); only switching the card to **on** replaces the generator with
+the triangle, and the generator card then says so. **loop preset** sets DAC2's card to
+**auto**. At start the card is filled from the settings file but nothing is sent to the
+board: **apply** (or any change in the card) starts the generator.
 
 Board limits from the last hardware run are shown as guidance under the rate field, not
 enforced: clean to about 8 MSPS with the CPU processing, occasional DMA overruns from

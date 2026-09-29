@@ -1937,3 +1937,14 @@ before their commit) and flashed locally with `ipecmd -TPPKOB4 -P33AK512MPS512 -
 
 Not run: DAC1 as the generator's output, `decay` > 0 on the board, the GUI card (SG.6),
 a board_run.py block (SG.8).
+
+## 2026-09-29, the GUI's signal generator card on the board - 7b16260, GUI 86f4753, local (COM26)
+
+The user, at the board with the GUI: first only the triangle, never the generator. Two
+GUI faults, no firmware one: DAC2's card had been left `on` (256..3840, SLPDAT 29) in the
+settings file, and the GUI sent it after every custom `stream on`, which stops the
+generator on DAC2 (`siggen_release_dac()`, as designed); and with the test input
+streaming, `siggen on 2` is refused (DAC2 busy). Fixed in 86f4753 (a DAC the generator
+plays on is not sent by itself; switching the generator on stops the test stream first).
+After the fix, **loop preset** + **live** showed the generator on the board (user: "geht").
+Firmware unchanged, still 7b16260; not repeated: the fail-8 hunt.
