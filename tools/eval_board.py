@@ -401,12 +401,34 @@ def check_expectation(entry, results):
     return out
 
 
-def evaluate_expectations(entries, results_a, results_b):
+def grab_lengths(log_entries, block):
+    """The sample counts of every successful grab logged under `block`
+    (e.g. "R4.gui"), from board_run.py's grab_summary_line()."""
+    out = []
+    for e in log_entries:
+        if e["dir"] == "RX" and e["block"] == block:
+            m = _GRAB_OK_RE.match(e["text"])
+            if m:
+                out.append(int(m.group(1)))
+    return out
+
+
+def check_grab_n(entry, log_entries):
+    """check "grab_n": every successful grab in entry["block"] carries
+    entry["value"] samples (29.09.2026, R4.gui after "buf 512")."""
+    ns = grab_lengths(log_entries, entry["block"])
+    bad = sorted({n for n in ns if n != entry["value"]})
+    return [dict(line=f"{entry['block']} grab n", got=bad, expect=entry["value"])] if bad else []
+
+
+def evaluate_expectations(entries, results_a, results_b, log_a=None, log_b=None):
     out = []
     for e in entries:
-        targets = [("B", results_b)] if e["source"] == "prediction" else [("A", results_a), ("B", results_b)]
-        for label, results in targets:
-            for d in check_expectation(e, results):
+        targets = [("B", results_b, log_b)] if e["source"] == "prediction" else             [("A", results_a, log_a), ("B", results_b, log_b)]
+        for label, results, log_entries in targets:
+            found = (check_grab_n(e, log_entries or []) if e["check"] == "grab_n"
+                     else check_expectation(e, results))
+            for d in found:
                 out.append(dict(block=e.get("block", "R2"), kind="expectation",
                                  detail=f"{e['id']} ({e.get('note', '')}) - {label} {d['line']}",
                                  **({"a": d["got"]} if label == "A" else {"b": d["got"]}),
@@ -470,7 +492,8 @@ def evaluate(log_a_lines, log_b_lines, expected_entries=None):
     deviations += diff_kv_block(entries_a, entries_b, "R7", "status")
     deviations += check_stack_criterion(entries_b)
 
-    expectation_deviations = evaluate_expectations(expected_entries, chain_results_a, chain_results_b) \
+    expectation_deviations = evaluate_expectations(expected_entries, chain_results_a, chain_results_b,
+                                                   entries_a, entries_b) \
         if expected_entries else []
 
     return dict(runner_version_a=rv_a, runner_version_b=rv_b,
@@ -558,7 +581,8 @@ def build_summary_text_single(log_lines, expected_entries=None, label="A", not_r
         if e["source"] == "prediction":
             skipped_predictions += 1
             continue
-        for d in check_expectation(e, chain_results):
+        found = check_grab_n(e, entries) if e["check"] == "grab_n" else check_expectation(e, chain_results)
+        for d in found:
             deviations.append(dict(block=e.get("block", "R2"), kind="expectation",
                                     detail=f"{e['id']} ({e.get('note', '')}) - {label} {d['line']}",
                                     a=d["got"], expect=d["expect"], source=e["source"], date=e["date"]))
@@ -772,6 +796,18 @@ def selftest():
     check("build_summary_text_single(): a timeout in A alone is reported and FAILs",
           "R1 incomplete: A block timeout" in text_a_timeout
           and text_a_timeout.rstrip("\n").splitlines()[-1] == "overview: FAIL")
+
+    # 10. "grab_n" (29.09.2026): R4.gui's grabs must carry the buf length.
+    # A stand-in B whose firmware ignores buf (the pre-955c473 fault) is
+    # reported against the r4gui-grab-length entry; the honest B is not.
+    t_bad = board_run.ReplayTarget("B", has_route=True)
+    t_bad.buf_follows, t_bad._fixed_n = False, 1024
+    log_bad, _, _ = board_run.run_session(t_bad, board_run.StubUI(answers=["", "", "n"]), "B")
+    r10 = evaluate(log_a.lines, log_bad.lines, expected)
+    check("grab_n: a B that ignores 'buf' is reported (R4.gui grab n)",
+          any("r4gui-grab-length" in d["detail"] for d in r10["expectation_deviations"]))
+    check("grab_n: the honest B is not", not any("r4gui-grab-length" in d["detail"]
+                                                  for d in r7["expectation_deviations"]))
 
     print("eval_board", "PASS" if ok_all else "FAIL")
     return 0 if ok_all else 1

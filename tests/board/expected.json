@@ -1,5 +1,5 @@
 {
-  "_readme": "tools/eval_board.py's expectations against 'chain all' (R2). Each entry: 'stage' (a list of chain-test stage numbers), an optional 'match' (field->value, or field->[allowed values], to pick which @S<stage>.<n> result lines within those stages this entry judges), 'check' (one of 'verdict', 'field_eq', 'field_max', 'field_min', 'field_in') with 'value' (or 'field'+'value' for the field_* checks), 'source' ('run19': measured on silicon, checked against BOTH A and B; 'prediction': about the NEXT run only, checked against B only), 'date' (the docs/HARDWARE-LOG.md entry this came from), and 'note' (kept in the deviation line). Field names match chaintest.c's own @S<stage>.<n> lines verbatim (ksps, overrun, late, missed, load_max_x10, ...). Update this file only from a confirmed board run (BR.9), tagging new/changed entries with that run's number - see board-run-task.md section 6 and 10.",
+  "_readme": "tools/eval_board.py's expectations against 'chain all' (R2). Each entry: 'stage' (a list of chain-test stage numbers), an optional 'match' (field->value, or field->[allowed values], to pick which @S<stage>.<n> result lines within those stages this entry judges), 'check' (one of 'verdict', 'field_eq', 'field_max', 'field_min', 'field_in'; or, since 29.09.2026, 'grab_n' with a 'block' like 'R4.gui' and no 'stage': every successful grab logged in that block carries 'value' samples) with 'value' (or 'field'+'value' for the field_* checks), 'source' ('run19': measured on silicon, checked against BOTH A and B; 'prediction': about the NEXT run only, checked against B only), 'date' (the docs/HARDWARE-LOG.md entry this came from), and 'note' (kept in the deviation line). Field names match chaintest.c's own @S<stage>.<n> lines verbatim (ksps, overrun, late, missed, load_max_x10, ...). Update this file only from a confirmed board run (BR.9), tagging new/changed entries with that run's number - see board-run-task.md section 6 and 10.",
   "schema_version": 1,
   "expectations": [
     {
@@ -81,6 +81,15 @@
       "source": "prediction",
       "date": "2026-09-25",
       "note": "predicted after run 19 (unrolled 32-bit processing loop): processing load at 8 MSPS falls well below half (was 92% = load_max_x10 920 in run 19)"
+    },
+    {
+      "id": "r4gui-grab-length-follows-buf",
+      "block": "R4.gui",
+      "check": "grab_n",
+      "value": 512,
+      "source": "prediction",
+      "date": "2026-09-29",
+      "note": "after 'buf 512' every grab carries 512 samples - fixed in 955c473 (stream on kept resetting the half to 1024), checked by hand on the board 29.09.2026; checked against B only: A (b41af3b) has the fault and its R4.gui grabs stay at 1024"
     }
   ]
 }
