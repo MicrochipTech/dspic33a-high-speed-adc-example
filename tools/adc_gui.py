@@ -138,6 +138,10 @@ def architecture_markdown(docs_dir=DOCS_DIR, url=DOCS_URL):
     except OSError as e:
         return f"`{path}` could not be read: {e.strerror}.", []
     images = []
+    # ARCHITECTURE.md embeds each diagram as <picture> with a dark variant for
+    # GitHub; here the adaptive SVG alone, as a plain Markdown image
+    text = re.sub(r'<picture>.*?<img alt="([^"]*)" src="([^"]+)">\s*</picture>',
+                  lambda m: f"![{m.group(1)}]({m.group(2)})", text, flags=re.S)
 
     def local(m):
         alt, src = m.group(1), m.group(2)

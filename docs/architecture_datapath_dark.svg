@@ -5,11 +5,11 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 --b-app:#e2f2ee;--s-app:#2f8a78;--b-lib:#f8efe0;--s-lib:#b07a2a;--s-diag:#b0574d;
 --b-port:#ebeae6;--s-port:#7c7768;--b-drv:#e7f0e1;--s-drv:#5c8a3f;--b-hw:#e3e7ec;--s-hw:#4a5868;
 --st-tested:#2e9d57;--st-pending:#9aa3ad}
-@media (prefers-color-scheme:dark){svg{--bg:#11161c;--ink:#e3e8ee;--muted:#9aa6b4;--line:#3a4552;
+svg{--bg:#11161c;--ink:#e3e8ee;--muted:#9aa6b4;--line:#3a4552;
 --surface:#1a2129;--accent:#3cc2ab;--b-host:#1a1f25;--s-host:#6f7b89;--b-cli:#172236;--s-cli:#7fa3e0;
 --b-test:#221b2e;--s-test:#a88bd6;--b-app:#12251f;--s-app:#52b8a2;--b-lib:#2a2215;--s-lib:#d6a352;
 --s-diag:#d98277;--b-port:#22211d;--s-port:#a8a292;--b-drv:#18231a;--s-drv:#86b865;--b-hw:#1b2027;--s-hw:#8c9aab;
---st-tested:#4cc47a;--st-pending:#6f7b89}}
+--st-tested:#4cc47a;--st-pending:#6f7b89}
 .bg{fill:var(--bg)} text{fill:var(--ink)}
 .b-host{fill:var(--b-host)}.b-cli{fill:var(--b-cli)}.b-test{fill:var(--b-test)}.b-app{fill:var(--b-app)}
 .b-lib{fill:var(--b-lib)}.b-port{fill:var(--b-port)}.b-drv{fill:var(--b-drv)}.b-hw{fill:var(--b-hw)}

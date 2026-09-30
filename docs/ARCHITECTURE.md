@@ -29,7 +29,10 @@ revision - the code that was tested is gone. The data per box (covering blocks, 
 
 ## Layers and modules
 
-![Firmware layers and modules](architecture_layers.svg)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="architecture_layers_dark.svg">
+  <img alt="Firmware layers and modules" src="architecture_layers.svg">
+</picture>
 
 Calls go downwards. A driver under `src/drivers/` reaches upwards only through the port
 layer (`port_log()`, `port_trace*()`, `port_flush()`, `PORT_WAIT_WHILE()`,
@@ -55,7 +58,10 @@ never by a driver. Every build links exactly one board file (`ev74h48a.c` or
 
 ## Data path while streaming
 
-![Data path while streaming](architecture_datapath.svg)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="architecture_datapath_dark.svg">
+  <img alt="Data path while streaming" src="architecture_datapath.svg">
+</picture>
 
 Top, the chain in silicon; bottom, what the firmware does with it. `stream on` sets the
 chain up through the routing core (`routing_apply()` -> `acq_chain_setup_input()`: DMA

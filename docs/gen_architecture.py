@@ -328,12 +328,23 @@ def datapath():
     return svg(1190, 528, "Data path while streaming", "\n".join(g))
 
 
+def dark_only(svg_text):
+    """The same SVG with the dark palette unconditional: the
+    prefers-color-scheme block turned into a plain rule after the light one.
+    For GitHub's <picture> in ARCHITECTURE.md - an SVG shown through <img>
+    does not reliably see the page's dark mode (iOS Safari on github.com
+    drew the adaptive one light, 30.09.2026), GitHub's <picture> source
+    selection follows the user's GitHub theme."""
+    return re.sub(r"@media \(prefers-color-scheme:dark\)\{(svg\{[^}]*\})\}", r"\1", svg_text)
+
+
 def write_svgs():
     for name, text in (("architecture_layers.svg", layers()), ("architecture_datapath.svg", datapath())):
-        path = os.path.join(HERE, name)
-        with open(path, "w", encoding="utf-8", newline="\n") as f:
-            f.write(text)
-        print("wrote", path)
+        for fname, body in ((name, text), (name.replace(".svg", "_dark.svg"), dark_only(text))):
+            path = os.path.join(HERE, fname)
+            with open(path, "w", encoding="utf-8", newline="\n") as f:
+                f.write(body)
+            print("wrote", path)
 
 
 if __name__ == "__main__":
