@@ -937,6 +937,28 @@ def _parse_buf(lines) -> int:
     return None
 
 
+def _parse_buf_max(lines):
+    """cli.c's 'buf' reply, 'maximum: <h>' (samples per half) -> h, or None.
+    The firmware's own SAMPLES_PER_HALF_MAX: 1024 until 01.10.2026, 2048
+    since - a board with an older image refuses anything above its own."""
+    for l in lines:
+        m = re.match(r"\s*maximum:\s*(\d+)", l)
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def query_buf_max(target) -> int:
+    """The board's samples-per-half maximum from 'buf'; 1024 (the older
+    images' value) when the reply does not carry it."""
+    try:
+        ok, lines = target.cmd("buf")
+    except Exception:
+        ok, lines = False, []
+    h = _parse_buf_max(lines) if ok else None
+    return h if h else 1024
+
+
 def query_buf(target) -> int:
     """Ask 'buf' (no argument) for the total, currently configured ping-pong
     buffer size. Falls back to the legacy fixed 2048 (1024-sample halves) for
@@ -993,6 +1015,7 @@ class FakeTarget:
         self.dac = {1: {"on": False, "low": 0x100, "high": 0xF00, "slp": 8},
                     2: {"on": False, "low": 0x100, "high": 0xF00, "slp": 8}}
         self.buf_size = 4096                      # total ping-pong buffer, 'buf'
+        self.buf_half_max = BUF_HALF_MAX          # 1024 plays an image from before 01.10.2026
         self.signal_khz = signal_khz               # custom-input sine, kHz
         self.amplitude = amplitude                 # fundamental peak, ADC counts
         self.noise_std = noise_std                 # noise, ADC counts (sets the SNR)
@@ -1300,13 +1323,13 @@ class FakeTarget:
                 # 16..2048 even, refused while the chain streams.
                 if args:
                     h = int(args[0])
-                    if h < 16 or h > BUF_HALF_MAX:
-                        return False, ["usage: buf [samples per half 16..2048, even]  "
+                    if h < 16 or h > self.buf_half_max:
+                        return False, [f"usage: buf [samples per half 16..{self.buf_half_max}, even]  "
                                        "(stop first; the next start uses the new size)"]
                     if h % 2 or self.chain_on:
                         return False, ["buf: stop the stream first, and give an even number"]
                     self.buf_size = 2 * h
-                return True, [f"samples per half: {self.buf_size // 2}", f"maximum: {BUF_HALF_MAX}"]
+                return True, [f"samples per half: {self.buf_size // 2}", f"maximum: {self.buf_half_max}"]
             if c == "siggen":
                 return self._siggen(args)
             if c == "version":
@@ -1599,6 +1622,14 @@ def selftest() -> int:
     okg, sg, _m = t.grab()
     ok_buf = (not ok_b1 and ok_b2 and _parse_buf(ln_b2) == 128 and okg and len(sg) == 64)
     ok_all &= ok_buf
+    # the board's own maximum is read from 'buf': an older image (1024 per
+    # half) is not offered more, the current one 2048
+    t_old = FakeTarget(noise_std=3.0)
+    t_old.buf_half_max, t_old.buf_size = 1024, 2048
+    ok_max = query_buf_max(t_old) == 1024 and query_buf_max(FakeTarget()) == BUF_HALF_MAX
+    ok_all &= ok_max
+    print(f"buf maximum read from the board (old image 1024, current {BUF_HALF_MAX}):",
+          "PASS" if ok_max else "FAIL")
     print(f"buf 64: refused while streaming, taken after stop -> total {_parse_buf(ln_b2)}, "
           f"grab n={len(sg) if okg else '-'}:", "PASS" if ok_buf else "FAIL")
     t.cmd("stream off")
@@ -3243,6 +3274,11 @@ def main_gui(args):
             conn_chip.props("color=positive")
             conn_btn.text, conn_btn.icon = "disconnect", "usb_off"
             state["buf_size"] = query_buf(state["target"])
+            # the field's limit is the board's, not this tool's: an older
+            # image takes at most 1024 per half
+            state["buf_half_max"] = query_buf_max(state["target"])
+            buf_in.max = 2 * state["buf_half_max"]
+            buf_in.label = f"buffer size, total (32..{2 * state['buf_half_max']}, 'buf' = half of it)"
             buf_in.value = state["buf_size"]
             buf_lbl.text = f"buf: {state['buf_size']} (half {state['buf_size'] // 2})"
         except Exception as ex:
@@ -3499,7 +3535,8 @@ def main_gui(args):
             buf_lbl.text = "not connected"
             return
         n = int(buf_in.value or state["buf_size"])
-        half = max(16, min(BUF_HALF_MAX, n // 2 & ~1))   # cli.c: samples per half, 16..2048, even
+        # cli.c: samples per half, 16..the board's maximum, even
+        half = max(16, min(state.get("buf_half_max", BUF_HALF_MAX), n // 2 & ~1))
         # The firmware refuses 'buf' while the chain streams: stop it first.
         # acq_active = None makes the next cycle send 'stream on' again, which
         # sets the DMA block up with the new size (LIVE carries on by itself).
