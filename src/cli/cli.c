@@ -84,7 +84,7 @@
 #include "gui_link.h"
 #include "routing.h"
 #include "siggen.h"     /* SG.4: the "siggen" command */
-#include "dma_tx.h"     /* SG.4: dma1_regs_visit() for "siggen regs" */
+#include "dma_tx.h"     /* SG.4: dma_tx_regs_visit() for "siggen regs" */
 #include "sccp.h"       /* SG.4: sccp2_regs_visit() for "siggen regs" */
 
 /* ------------------------------------------------------------------ *
@@ -623,7 +623,7 @@ static void cmd_siggen_fn(int argc, char **argv)
         return;
     }
     if ((argc == 2) && (strcmp(argv[1], "regs") == 0)) {
-        dma1_regs_visit(reg_print);
+        dma_tx_regs_visit(reg_print);
         sccp2_regs_visit(reg_print);
         return;
     }

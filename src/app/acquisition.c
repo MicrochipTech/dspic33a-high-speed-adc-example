@@ -541,22 +541,29 @@ bool chain_streaming(void)
 bool chain_stream_grab_begin(chain_grab_t *g)
 {
     if (!s_on) { return false; }
-    if (!capture_chain_halt()) {
+    if (!capture_chain_active()) {
         /* The brake fired, or the chain was already down under us: leave
          * nothing half-configured, and let "stream" say it is off. */
         chain_stream_off();
         return false;
     }
-    /* With the signal processing on, the half sent must be the processed
-     * one: the trigger is halted, so no half completes any more, and the
-     * last completed one is processed now if the main loop had not got to
-     * it yet (capture.c, sigproc.h). Read after that, like every counter
-     * below. */
-    capture_sigproc_catch_up();
+    /* Since 01.10.2026 the stream is not halted for a grab: it moves on to
+     * the other ping-pong pair and the pair just completed - ping then
+     * pong, 2 * half_len samples, contiguous - stands still while it is
+     * sent (capture_pair_freeze(), dma.c's pair mode). The wait for the
+     * move is at most about three halves; four plus a millisecond is
+     * the bound. With the signal processing on, both halves were
+     * processed in place on the way (capture_service() runs while it
+     * waits), so the pair sent is the processed one. */
+    const uint32_t hl = capture_half_len();
+    const uint32_t half_ticks = (uint32_t)(((uint64_t)hl * s_ticks * TIMEBASE_HZ) / acq_trig_hz);
+    uint32_t n = 0u, from = 0u;
+    if (!capture_pair_freeze(4u * half_ticks + TIMEBASE_HZ / 1000u, &g->win, &n, &from)) {
+        return false;
+    }
     g->proc    = capture_sigproc_enabled() ? 1u : 0u;
-    g->win     = capture_completed_half();
-    g->win_len = capture_half_len();
-    g->from    = (uint32_t)(g->win - capture_buffer());
+    g->win_len = n;
+    g->from    = from;
     g->ksps    = acq_ksps_of(s_ticks);
     const uint32_t ov = dma_overrun, la = late_service, mi = proc_missed, hv = blocks_done;
     const uint64_t xf = capture_transfers();
@@ -574,11 +581,8 @@ bool chain_stream_grab_begin(chain_grab_t *g)
 bool chain_stream_grab_end(void)
 {
     if (!s_on) { return false; }
-    if (!capture_chain_resume()) {
-        chain_stream_off();
-        return false;
-    }
-    return true;
+    capture_pair_release();           /* the pair is free for the next move */
+    return capture_chain_active();    /* nothing was stopped, nothing restarts */
 }
 
 bool chain_stream_state(uint32_t *ksps, uint64_t *transfers, uint32_t *free_cyc)

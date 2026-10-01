@@ -6,7 +6,7 @@
 ##   ADC/DMA TEST LOG  -  START OF RUN  (copy from here)    ##
 ##############################################################
 
-[boot] adc_dma_40msps Oct  1 2026 21:27:27 git 46f2b6a+local changes (master)
+[boot] adc_dma_40msps Oct  2 2026 00:20:00 git e349300+local changes (master)
 [simtest] *** SIMULATOR BUILD - this log is not from hardware ***
 [simtest] Purpose: check that the program's buffer logic is right -
 [simtest] that the two halves of the ping-pong buffer are filled,
@@ -25,7 +25,7 @@
 adc_dma_40msps - ADC at 40 MSPS into RAM via DMA
 *** SIMULATOR BUILD: no hardware, ADC and DMA are software stand-ins, samples are a synthetic sine ***
 board: EV17P63A, dsPIC33AK512MPS506 Curiosity Nano
-build: adc_dma_40msps Oct  1 2026 21:27:42 git 46f2b6a+local changes (master)
+build: adc_dma_40msps Oct  2 2026 00:20:16 git e349300+local changes (master)
 type 'help' for the commands
 please log this terminal from power-up and send it back
 > [boot] crc16/ccitt-false self-check: ok (0x29B1)
@@ -70,14 +70,14 @@ Available commands:
   reset - software reset
 > [smoke] > version
 version
-[build] adc_dma_40msps Oct  1 2026 21:27:38 git 46f2b6a+local changes (master)
+[build] adc_dma_40msps Oct  2 2026 00:20:12 git e349300+local changes (master)
 [build] board: EV17P63A, dsPIC33AK512MPS506 Curiosity Nano
 [build] adc core: 1
 [build] default input (pinsel): 0
 [build] default samc: 0
 [build] adc clock divider x100: 100
-[build] samples per half (max): 2048
-[build] samples per half (in use): 2048
+[build] samples per half (max): 1024
+[build] samples per half (in use): 1024
 [build] boot_verbose: 0
 [build] simulator build (sim_dma.c, no ADC, no DMA)
 input: AD1AN0 = edge connector RA2
@@ -110,13 +110,13 @@ rx_bytes: 0
 rx_last: 0
 rx_cr: 0
 rx_lf: 0
-stack_size: 19208
+stack_size: 23288
 stack_used: 192
-stack_hwm_addr: 62824
+stack_hwm_addr: 58744
 stack_free_pct: 99
-buf_addr: 33228
+buf_addr: 33244
 buf_align_mod4: 0
-buf_len: 8192
+buf_len: 4096
 buf_guard_ok: 1
 boot_stage: 8
 trap_seen: 0

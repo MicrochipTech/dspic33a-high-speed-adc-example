@@ -103,9 +103,10 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 <text class="s" x="460" y="322">→ acq_chain_setup_input()</text>
 <text class="s" x="460" y="336">DMA off, cores off, clock, cores on, DMA anew</text>
 <rect class="bx s-drv" x="780" y="290" width="150" height="56" rx="4"/>
-<circle class="st-tested" cx="919" cy="301" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session)</title></circle>
-<text class="t" x="790" y="315">_DMA0Interrupt</text>
-<text class="s" x="790" y="329">dma.c · 42 instr.</text>
+<circle class="st-pending" cx="919" cy="301" r="5"><title>not tested with this version yet (changed since it was tested at 7b16260)</title></circle>
+<text class="t" x="790" y="308">_DMA0Interrupt</text>
+<text class="s" x="790" y="322">dma.c · + _DMA1Interrupt</text>
+<text class="s" x="790" y="336">46 / 41 instr.</text>
 <rect class="bx s-app" x="980" y="290" width="170" height="56" rx="4"/>
 <circle class="st-pending" cx="1139" cy="301" r="5"><title>not tested with this version yet (changed since it was tested at 7b16260)</title></circle>
 <text class="t" x="990" y="308">dma0_event()</text>
@@ -122,8 +123,8 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 <rect class="bx s-cli" x="700" y="390" width="250" height="56" rx="4"/>
 <circle class="st-pending" cx="939" cy="401" r="5"><title>not tested with this version yet (changed since it was tested at 7b16260)</title></circle>
 <text class="t" x="710" y="408">gui_link_stream_grab()</text>
-<text class="s" x="710" y="422">halt → completed half → frame_send()</text>
-<text class="s" x="710" y="436">(sigproc on: processed first) → resume</text>
+<text class="s" x="710" y="422">freeze a pair → frame_send()</text>
+<text class="s" x="710" y="436">→ release; the stream runs on</text>
 <rect class="bx s-app" x="980" y="390" width="170" height="56" rx="4"/>
 <circle class="st-pending" cx="1139" cy="401" r="5"><title>not tested with this version yet (changed since it was tested at 7b16260)</title></circle>
 <text class="t" x="990" y="408">capture_service()</text>

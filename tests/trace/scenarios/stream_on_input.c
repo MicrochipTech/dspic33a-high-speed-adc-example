@@ -40,7 +40,7 @@ static const hwmodel_rule_t rules[] = {
 int main(void)
 {
     trace_begin("stream_on_input");
-    trace_region(capture_buffer(), SAMPLES_PER_BUF_MAX * sizeof(uint16_t), "dma_buffer");
+    trace_region(capture_buffer(), SAMPLES_PER_ALLOC * sizeof(uint16_t), "dma_buffer");   /* both ping-pong pairs */
 
     PLL1DIV = 0x0100C829u;
     VCO1DIV = 0x20000u;

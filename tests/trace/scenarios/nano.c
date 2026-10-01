@@ -44,7 +44,7 @@ static const hwmodel_rule_t rules[] = {
 int main(void)
 {
     trace_begin("nano");
-    trace_region(capture_buffer(), SAMPLES_PER_BUF_MAX * sizeof(uint16_t), "dma_buffer");
+    trace_region(capture_buffer(), SAMPLES_PER_ALLOC * sizeof(uint16_t), "dma_buffer");   /* both ping-pong pairs */
 
     hwmodel_start(rules, sizeof rules / sizeof rules[0], 0u);
 

@@ -93,7 +93,7 @@
  * So a DMA transfer cannot collide with the rest of memory: not by
  * layout, not by the hardware, and if it somehow did, not unnoticed. */
 static volatile struct {
-    uint16_t data[SAMPLES_PER_BUF_MAX];
+    uint16_t data[SAMPLES_PER_ALLOC];       /* pairs A and B (capture.h) */
     uint32_t guard[BUF_GUARD_WORDS];
 } dma_buffer __attribute__((section(".dma_buffer"), aligned(4)));
 #define buf (dma_buffer.data)
@@ -172,6 +172,30 @@ static volatile bool    burst_active = false;
 static volatile bool    powered      = true;    /* ADC core + CLKGEN6 on */
 static volatile bool    dma_armed    = false;   /* dma0_init() done, not deinit */
 static volatile uint32_t half_len    = SAMPLES_PER_HALF_MAX;   /* in use  */
+
+/* Ping-pong pairs (01.10.2026). The triggered stream runs dma.c's pair
+ * mode: channel 0 fills the ping half, channel 1 the pong half, of pair
+ * A (buf[0..2H-1]) or pair B (buf[2H..4H-1]), H = half_len. For a
+ * "stream grab", capture_pair_freeze() asks the DMA event below to move
+ * on to the other pair: at the ping-complete event the waiting channel 0
+ * gets the other pair's ping half, at the pong-complete event the then
+ * waiting channel 1 its pong half - so the pair just completed, ping and
+ * pong in order, stands still and the stream never stops (the waiting
+ * channel's address can be moved at any time, a running one's cannot -
+ * dma.h). The back-to-back burst mode keeps the single channel on pair A.
+ *   pair_base   first sample of the pair being filled
+ *   ready_off   first sample of the half completed last - one word, so
+ *               the main loop never sees a half number from one event
+ *               with a pair from another
+ *   pair_req    a switch asked for; pair_moving: channel 0 already moved
+ *   pair_frozen first sample of the pair that stands still, or PAIR_NONE */
+#define PAIR_NONE  0xFFFFFFFFu
+static volatile uint32_t pair_base   = 0u;
+static volatile uint32_t ready_off   = 0u;
+static volatile bool     pair_mode   = false;
+static volatile bool     pair_req    = false;
+static volatile bool     pair_moving = false;
+static volatile uint32_t pair_frozen = PAIR_NONE;
 
 /* Channel reconfiguration requested by the console or the self-test,
  * applied by the ISR between two bursts, when the channel is idle. */
@@ -273,6 +297,8 @@ bool capture_settle(void)
     if (powered) { adc_clear_events(); }
     dma0_deinit();                    /* channel down; capture_start() */
     dma_armed  = false;               /* re-initialises it from scratch */
+    pair_req    = false;              /* no pair move left pending      */
+    pair_moving = false;
     ready_half = 0u;
     return was_running;
 }
@@ -298,8 +324,8 @@ static void start_burst(void)
  * words = 32 samples; the minimum half length keeps room for them. */
 static volatile uint32_t *guard_word(uint32_t i)
 {
-    const uint32_t used = 2u * half_len;
-    if (used + 2u * BUF_GUARD_WORDS <= SAMPLES_PER_BUF_MAX) {
+    const uint32_t used = 4u * half_len;      /* both pairs, A and B */
+    if (used + 2u * BUF_GUARD_WORDS <= SAMPLES_PER_ALLOC) {
         return (volatile uint32_t *)&dma_buffer.data[used] + i;
     }
     return &dma_buffer.guard[i];
@@ -315,12 +341,26 @@ void capture_init(void)
      * length in use: 2 * half_len conversions per burst, 2 * half_len
      * transactions per block, both re-done before every start. */
     adc_set_burst_len(2u * half_len);
-    dma0_init(adc_dma_trigger(),
-              chain_src_data ? adc_dma_source_data() : adc_dma_source(),
-              dma_buffer.data, 2u * half_len * sizeof(uint16_t));
+    pair_base   = 0u;
+    ready_off   = 0u;
+    pair_req    = false;
+    pair_moving = false;
+    pair_frozen = PAIR_NONE;
+    pair_mode   = chain_mode;
+    if (pair_mode) {
+        /* the triggered stream: channels 0+1 in hardware ping-pong over
+         * pairs A and B (dma.h) */
+        dma0_pp_init(adc_dma_trigger(),
+                     chain_src_data ? adc_dma_source_data() : adc_dma_source(),
+                     dma_buffer.data, half_len * sizeof(uint16_t));
+    } else {
+        dma0_init(adc_dma_trigger(),
+                  chain_src_data ? adc_dma_source_data() : adc_dma_source(),
+                  dma_buffer.data, 2u * half_len * sizeof(uint16_t));
+    }
     dma_armed = true;
 }
-_Static_assert(sizeof dma_buffer.data == SAMPLES_PER_BUF_MAX * sizeof(uint16_t),
+_Static_assert(sizeof dma_buffer.data == SAMPLES_PER_ALLOC * sizeof(uint16_t),
                "buffer allocation and its maximum must be the same thing");
 
 uint32_t capture_half_len(void) { return half_len; }
@@ -434,14 +474,34 @@ void dma0_event(uint32_t st)
         /* Which half is ready, the last sample, blocks_done - now
          * pingpong.c's pingpong_on_half() (P9.1), `static inline` so
          * this stays the same handful of instructions it always was. */
-        pingpong_on_half(buf, half_len, &blocks_done, &ready_half, &last_sample,
-                         false);
+        pingpong_on_half(&buf[pair_base], half_len, &blocks_done, &ready_half,
+                         &last_sample, false);
+        ready_off = pair_base;
+        /* Pair mode: channel 1 now writes the pong half, channel 0 waits -
+         * the moment to send channel 0 to the other pair if a grab asked. */
+        if (pair_req && !pair_moving) {
+            const uint32_t other = (pair_base == 0u) ? 2u * half_len : 0u;
+            dma0_pp_set_dst(0u, &buf[other]);
+            pair_moving = true;
+        }
     }
     if (st & DMA0_DONE) {
         done_events++;
         dma0_clear(DMA0_DONE);
-        pingpong_on_half(buf, half_len, &blocks_done, &ready_half, &last_sample,
-                         true);
+        pingpong_on_half(&buf[pair_base], half_len, &blocks_done, &ready_half,
+                         &last_sample, true);
+        ready_off = pair_base + half_len;
+        /* Pair mode: the pair is complete, ping and pong; channel 0 writes
+         * the other pair's ping already, channel 1 waits and follows. The
+         * completed pair stands still from here (capture_pair_freeze()). */
+        if (pair_moving) {
+            const uint32_t other = (pair_base == 0u) ? 2u * half_len : 0u;
+            dma0_pp_set_dst(1u, &buf[other + half_len]);
+            pair_frozen = pair_base;
+            pair_base   = other;
+            pair_moving = false;
+            pair_req    = false;
+        }
 
         /* The channel is idle between bursts: this is the only safe
          * moment to change its input or sample time. */
@@ -696,7 +756,43 @@ const struct pll_step *capture_sweep_steps(uint32_t *count)
 
 const volatile uint16_t *capture_completed_half(void)
 {
-    return pingpong_completed_half(buf, half_len, ready_half);
+    return &buf[ready_off];
+}
+
+/* "stream grab" (01.10.2026): move the stream on to the other pair and
+ * hand back the pair just completed - ping then pong, contiguous in time
+ * and in memory, still from here on. The stream does not stop: the DMA
+ * event does the move at the next ping-complete/pong-complete events
+ * (above). Meanwhile this keeps the main loop's work going, since it
+ * runs inside a console command - capture_service() each turn, so no
+ * half goes unprocessed while it waits (at 1 kSPS the move takes up to
+ * three halves, 3 s). False if no triggered stream runs or the move did
+ * not come within `max_ticks` (timebase). Release it with
+ * capture_pair_release() once sent. */
+bool capture_pair_freeze(uint32_t max_ticks, const volatile uint16_t **win,
+                         uint32_t *n, uint32_t *from)
+{
+    if (!pair_mode || !chain_mode || !run_enabled) { return false; }
+    pair_frozen = PAIR_NONE;
+    pair_req    = true;
+    const uint32_t t0 = timebase_ticks();
+    while (pair_frozen == PAIR_NONE) {
+        (void)capture_service();
+        if ((timebase_ticks() - t0) > max_ticks) {
+            pair_req = false;            /* the event may still move it: */
+            return false;                /* harmless, the next grab waits */
+        }
+    }
+    (void)capture_service();             /* the pong just completed      */
+    *from = pair_frozen;
+    *win  = &buf[pair_frozen];
+    *n    = 2u * half_len;
+    return true;
+}
+
+void capture_pair_release(void)
+{
+    pair_frozen = PAIR_NONE;
 }
 
 void counters_clear(void)
@@ -766,14 +862,21 @@ void process_buffer(const volatile uint16_t *b, uint32_t n)
  * with it - capture_selftest() is its only caller. */
 
 /* The signal processing switch ("sigproc on|off", off after reset) and
- * the flag that says capture_service() is running with it on. While that
- * flag is set, cli.c's uart_rx_hook() holds received bytes back instead of
- * running a command (capture_sigproc_busy()), so no console command - in
- * particular "stream grab" - can interrupt the processing of a half
- * part-way through (sigproc.h). It is set for the WHOLE call, not only
- * around sigproc_block(): a grab landing between pingpong_service() and
- * the processing would otherwise find the half marked as seen but not yet
- * processed, and send it raw under proc=1. */
+ * the flag that says capture_service() is running. While that flag is
+ * set, cli.c's uart_rx_hook() holds received bytes back instead of
+ * running a command (capture_sigproc_busy()), so no console command can
+ * interrupt capture_service() part-way through:
+ *   - with the processing on, "stream grab" would otherwise send a
+ *     half-processed block (sigproc.h); set for the WHOLE call, not only
+ *     around sigproc_block(), since a grab between pingpong_service()
+ *     and the processing would find the half seen but not processed;
+ *   - and since 01.10.2026 always, processing on or off: "stream grab"
+ *     itself calls capture_service() while it waits for the pair move
+ *     and while it sends, and a command landing inside the main loop's
+ *     own call would run a second capture_service() over the first -
+ *     two writers of pingpong's bookkeeping at once, which the board
+ *     showed as a negative "missed" (-2) in a grab. Without processing a
+ *     call takes microseconds, so the delay for a command is nothing. */
 static volatile bool sigproc_on   = false;
 static volatile bool sigproc_busy = false;
 
@@ -786,21 +889,12 @@ static bool service_once(bool processing);
 bool capture_service(void)
 {
     const bool processing = sigproc_on;     /* one reading for this half */
-    if (processing) { sigproc_busy = true; }
+    sigproc_busy = true;
     const bool served = service_once(processing);
     sigproc_busy = false;
     return served;
 }
 
-/* "stream grab" with the processing on, after the trigger is halted: the
- * half it is about to send must be processed. Nothing can be part-way
- * (see above), so either the main loop already processed the last
- * completed half, and capture_service() finds nothing new, or it has not,
- * and capture_service() does it now. Off, nothing is touched. */
-void capture_sigproc_catch_up(void)
-{
-    if (sigproc_on) { (void)capture_service(); }
-}
 
 static bool service_once(bool processing)
 {
@@ -809,7 +903,7 @@ static bool service_once(bool processing)
     }
     proc_missed = pp.missed;
     /* The completed half goes to the signal processing (sigproc.c), ping
-     * and pong alike, when it is switched on. ready_half and half_len are
+     * and pong alike, when it is switched on. ready_off and half_len are
      * read once, so the pointer, the length and info.half agree even if
      * the next DMA event lands in between. The DMA is writing the other
      * half, so the block is handed over as plain memory, to read and to
@@ -820,9 +914,10 @@ static bool service_once(bool processing)
      * the service, not the processing, and must run with it off too. The
      * time is measured either way - with the processing off it is the
      * cost of the service alone. */
-    const uint32_t h = ready_half;
+    const uint32_t off = ready_off;
     const uint32_t n = half_len;
-    const volatile uint16_t *half = pingpong_completed_half(buf, n, h);
+    const uint32_t h = ((off / n) & 1u);  /* ping or pong, from the same read */
+    const volatile uint16_t *half = &buf[off];
     SIM_CHECK_HALF(half, n);          /* simulator: is this really the next half? */
     const sigproc_info_t info = { h, pp.seen_blocks, proc_missed };
     __asm__ volatile ("" ::: "memory");
@@ -896,6 +991,7 @@ bool capture_chain_start(uint32_t ticks, uint32_t sccp_mode,
     chain_src_data  = src_data;
     chain_ticks     = ticks;
     chain_sccp_mode = sccp_mode;
+    chain_mode      = true;           /* before capture_init(): pair mode */
     capture_init();                   /* DMA armed on RES or DATA        */
     adc_clear_events();
     chain_stop_after = stop_after_done;
@@ -986,7 +1082,7 @@ bool capture_chain_resume(void)
 
 void capture_fill(uint16_t v)
 {
-    for (uint32_t i = 0; i < SAMPLES_PER_BUF_MAX; i++) { buf[i] = v; }
+    for (uint32_t i = 0; i < SAMPLES_PER_ALLOC; i++) { buf[i] = v; }
 }
 
 /* capture_oneshot() and capture_oneshot_n() moved to meter.c with the

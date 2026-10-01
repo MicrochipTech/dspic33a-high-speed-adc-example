@@ -117,6 +117,21 @@ void dma0_init(uint32_t trigger, const volatile void *src,
     console_puts("[dma] simulator stand-in armed: halves come from sim_dma_tick()\r\n");
 }
 
+/* Pair mode (01.10.2026) - the triggered stream, which the simulator
+ * build never starts (CHAIN_ON_SIMULATOR); linked, so it stands in as
+ * the single channel on pair A, and a move to the other pair is a no-op. */
+void dma0_pp_init(uint32_t trigger, const volatile void *src,
+                  volatile void *dst, uint32_t half_bytes)
+{
+    dma0_init(trigger, src, dst, 2u * half_bytes);
+}
+
+void dma0_pp_set_dst(uint32_t ch, volatile void *dst)
+{
+    (void)ch;
+    (void)dst;
+}
+
 uint32_t dma0_remaining(void)
 {
     return 2u * sim_half_len;             /* always at a block boundary  */
@@ -150,14 +165,14 @@ void dma0_regs_visit(reg_visit_t visit)
     visit("sim_half_len", sim_half_len, REG_DEC);
 }
 
-/* Channel 1 (SG.1): the simulator has no DMA and no trigger, so the
+/* Channel 2 (SG.1; channel 1 until 01.10.2026): the simulator has no DMA and no trigger, so the
  * generator's transport only remembers what it was told - enough for
  * siggen.c's bookkeeping and its status reply to run unchanged. */
 static const volatile void *sim1_src = NULL;
 static uint32_t            sim1_n    = 0u;
 static bool                sim1_on   = false;
 
-bool dma1_tx_start(uint32_t trigger, const volatile void *src, uint32_t n,
+bool dma_tx_start(uint32_t trigger, const volatile void *src, uint32_t n,
                    volatile void *dst_sfr, uint32_t size)
 {
     (void)trigger; (void)dst_sfr; (void)size;
@@ -168,13 +183,13 @@ bool dma1_tx_start(uint32_t trigger, const volatile void *src, uint32_t n,
     return true;
 }
 
-void     dma1_tx_stop(void)        { sim1_on = false; }
-uint32_t dma1_tx_status(void)      { return 0u; }
-uint32_t dma1_tx_remaining(void)   { return sim1_n; }
-bool     dma1_tx_enabled(void)     { return sim1_on; }
+void     dma_tx_stop(void)        { sim1_on = false; }
+uint32_t dma_tx_status(void)      { return 0u; }
+uint32_t dma_tx_remaining(void)   { return sim1_n; }
+bool     dma_tx_enabled(void)     { return sim1_on; }
 uint32_t dma_window_gap(void)      { return 0u; }
 
-void dma1_regs_visit(reg_visit_t visit)
+void dma_tx_regs_visit(reg_visit_t visit)
 {
     visit("[regs] dma1 (simulator stand-in, no registers)\r\n", 0u, REG_TITLE);
     visit("sim1_on", sim1_on ? 1u : 0u, REG_DEC);

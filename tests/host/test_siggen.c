@@ -49,17 +49,17 @@ static uint8_t  dac_unit;
 static uint16_t dac_code;
 static uint32_t dac_regs[2];              /* stand-ins for DAC1DAT/DAC2DAT */
 
-bool dma1_tx_start(uint32_t trigger, const volatile void *src, uint32_t n,
+bool dma_tx_start(uint32_t trigger, const volatile void *src, uint32_t n,
                    volatile void *dst_sfr, uint32_t size)
 {
     logc("dma+");
     dma_trig = trigger; dma_src = src; dma_n = n; dma_dst = dst_sfr; dma_size = size;
     return dma_ok;
 }
-void     dma1_tx_stop(void)      { logc("dma-"); }
-uint32_t dma1_tx_status(void)    { return 0u; }
-uint32_t dma1_tx_remaining(void) { return dma_n; }
-bool     dma1_tx_enabled(void)   { return true; }
+void     dma_tx_stop(void)      { logc("dma-"); }
+uint32_t dma_tx_status(void)    { return 0u; }
+uint32_t dma_tx_remaining(void) { return dma_n; }
+bool     dma_tx_enabled(void)   { return true; }
 uint32_t dma_window_gap(void)    { return 0u; }
 
 bool sccp2_start(uint32_t ticks, sccp2_pace_t pace)

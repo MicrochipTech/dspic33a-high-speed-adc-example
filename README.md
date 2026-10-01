@@ -582,6 +582,17 @@ The per-conversion result is `ADxCH0RES[11:0]`. `ADxCH0DATA` is the burst accumu
 
 ### 3. DMA into one buffer with two halves
 
+**Two ping-pong pairs for the triggered stream (since 01.10.2026).** The 8 KB buffer holds
+pair A and pair B, each a ping half and a pong half of up to 1024 samples. `stream on` runs
+two DMA channels as the dsPIC33A's hardware ping-pong pair (DS70005591D 13.4.11): channel 0
+fills the ping half, channel 1 the pong half, and the hardware hands over between them
+without a lost sample (checked on the board with the DAC triangle up to 16 MSPS). For a
+`stream grab` the channel that is waiting is pointed at the other pair, so the pair just
+completed stands still and goes to the GUI while acquisition and processing carry on in
+the other pair - nothing stops, the processing never sees a gap in its input. The GUI
+sees snapshots of the signal, one pair at a time. The back-to-back commands (`start`,
+`test`, `blk`, ...) still use one channel on pair A as described below.
+
 ![DMA path](docs/03_dma_path.png)
 
 | Field | Value | Why |
@@ -630,8 +641,8 @@ today). The firmware calls it from the main loop once per completed half - ping 
 alike - while `sigproc on` is set (console, or the GUI's "signal processing" switch; off
 after reset), with the half's samples, its length and which half it is. The result goes
 back into the same half: `stream grab` then sends the processed data to the GUI (the frame
-says `proc=1`), with no second buffer. It has one half period to return (2048 samples at
-8 MSPS: 256 us, 25 CPU cycles per sample); `status` and the chain test's load figures show
+says `proc=1`), with no second buffer. It has one half period to return (1024 samples at
+8 MSPS: 128 us, 25 CPU cycles per sample); `status` and the chain test's load figures show
 what it takes, and `missed` counts the halves it was too slow for. `src/app/sigproc.h` has
 the rules. `chain all` and `test` judge raw samples - switch the processing off for them.
 
@@ -647,8 +658,7 @@ overruns makes the console unresponsive, and why the firmware boots idle. Output
 way through an 8 KB ring buffer that the UART transmit interrupt empties (since
 01.10.2026, `src/drivers/uart.c`): a command writes its reply and returns, so a long
 reply no longer holds the CPU - `help` while streaming used to cost the main loop 550
-halves at 8 MSPS, now none - and `stream grab` halts the stream only for the copy into
-the ring. The measuring commands (`chain`, `test`, `sweep`, `selftest`, `dactest`,
+halves at 8 MSPS, now none. The measuring commands (`chain`, `test`, `sweep`, `selftest`, `dactest`,
 `snap`) still send polled, so nothing transmits while they measure; so do `fail()` and
 the trap handler. Ctrl+C cuts only output that is still being generated, not what is
 already in the ring.
@@ -670,13 +680,13 @@ already in the ring.
 | `start` / `stop` | the burst stream |
 | `input <0…15>` / `samc <0…31>` | analog input and sample time |
 | `core <1…5> [pinsel]` | switch the ADC core |
-| `buf [n]` | samples per buffer half, 16…2048 (1024 until 01.10.2026) |
+| `buf [n]` | samples per buffer half, 16…1024 - the 8 KB hold two ping-pong pairs since 01.10.2026 (2048, one pair, that morning; 1024 before) |
 | `dac <1\|2> <on\|off> [low] [high] [slpdat]` | triangle on DACOUT1 = RA1 or DACOUT2 = RA8, both sharing CLKGEN7 (the last unit to stop switches it off). `slpdat` is the step per DAC clock, so **larger is faster** (default 8; the DAC test itself starts DAC2 at 64, since 8 leaves the triangle almost standing still inside one captured buffer) |
 | `dactest [halves]` | the DAC test on its own, against whichever DAC is active (`dac_active()` picks DAC2 first if both run) |
 | `stats` / `dump [count] [offset]` | the completed half: min/max/mean, or the raw values |
-| `blk [n]` | a contiguous block of up to 4096 samples as binary, with a CRC — `docs/PLAN-BINARY-TRANSFER.md`. The back-to-back capture command; kept for a terminal, no longer used by `tools/adc_gui.py` (25.09.2026 on, the GUI only drives the triggered chain, `stream grab`) |
+| `blk [n]` | a contiguous block of up to 2048 samples (one ping-pong pair) as binary, with a CRC — `docs/PLAN-BINARY-TRANSFER.md`. The back-to-back capture command; kept for a terminal, no longer used by `tools/adc_gui.py` (25.09.2026 on, the GUI only drives the triggered chain, `stream grab`) |
 | `chain all\|<n>\|from <n>\|run <ksps> [s]` | the chain test (`chaintest.c`) — see "The chain test" below |
-| `stream on <ksps>\|off\|grab` | the chain as a standing stream: start it, stop it, or halt/transfer/restart one window for the GUI — see "The chain test" below |
+| `stream on <ksps>\|off\|grab` | the chain as a standing stream: start it, stop it, or send one ping-pong pair to the GUI while the stream carries on in the other pair — see "The chain test" below |
 | `clear` | zero the error counters |
 | `led on\|off\|auto` | LED0 |
 | `reset` | software reset |
@@ -1022,7 +1032,7 @@ which file may call which. The table below is the reading order, not the full li
 | `src/lib/frame.c/.h` | the binary frame writer `blk`/`stream grab` share: header, chunked payload with the CRC folded in, CRC tail |
 | `src/lib/iir1.c/.h`, `goertzel_f.c/.h`, `goertzel_i.c/.h`, `detect.c/.h`, `wavegen.c/.h` | a first-order IIR filter, damped Goertzel in float and in Q16 fixed point, a hysteresis pulse detector, and a signal-generator table — included in every build, cross-checked against a Python reference on the host, and not yet called from anywhere: the building blocks for the multi-channel signal chain planned for N+4 |
 | `src/drivers/sccp.c/.h` | SCCP1 as the chain test's trigger source (clock, mode, event), its timer and compare interrupts as event counters |
-| `src/tests/chaintest.c/.h` | the chain test itself — `chain all`, the `@` log line format, and `chain_stream_grab_begin`/`_end` — one halt/grab/restart cycle for `stream grab`; see "The chain test" below |
+| `src/tests/chaintest.c/.h` | the chain test itself — `chain all`, the `@` log line format, and `chain_stream_grab_begin`/`_end` (in `src/app/acquisition.c` since P9.4) — one freeze/send/release cycle of a ping-pong pair for `stream grab`; see "The chain test" below |
 | `src/tests/bench.c/.h` | the back-to-back test suite (`test ...`, `sweep`, `matrix`), out of `cli.c` |
 | `src/drivers/led.c/.h` | LED0 |
 | `src/diag/diag.c/.h` | stop codes (`fail()`), trap and unhandled-interrupt handler, boot-stage record, reset cause, the register-dump visitor |
@@ -1077,7 +1087,7 @@ the rest of the page stays.
 | `acquisition.core`, `.pinsel`, `.samc` | the custom input: ADC core 1..5, PINSEL 0..15, sample time 0..31 |
 | `acquisition.interval_ms` | pause between two grabs in LIVE |
 | `trigger.on`, `.level`, `.slope`, `.hyst` | the time plot's trigger: on/off, level in ADC counts (2048), `rising`/`falling`, hysteresis in LSB (16) |
-| `buffer.size` | total ping-pong buffer (`buf` = half of it), even, 32..4096 |
+| `buffer.size` | one ping-pong pair (`buf` = half of it), even, 32..the board's maximum (2048 since 01.10.2026) |
 | `dac.1`, `dac.2` | `on`, `low`, `high`, `slpdat` of each DAC's triangle (DAC tiles). A change goes to the board by itself 0.8 s after the last one. DAC2's `on` can also be `"auto"` (standard): with the test input, `auto` is the firmware's own triangle (slope chosen per rate), `true` the card's triangle on RA8, `false` DAC2 off - a quiet channel; the card's state is resent after every `stream on` |
 | `siggen` | the signal generator card: `on`, `dac`, `n`, `play_hz`, `f0`, `h2`..`h7`, `decay`, `amp`, `lo`, `hi`, `snap`, `force` (also in `tools/adc_gui_defaults.json`) |
 | `fake.source` | what the stand-in plays in `--fake`, on either input: `dac2` (the test input: what RA8 carries; standard), `sine` or `dac1`. Switching the input picks `dac2` (test) or `sine` (custom); it can be changed after |
@@ -1096,9 +1106,10 @@ signal (core 5, PINSEL 3 = RA8, the firmware's own DAC2 triangle, `stream on <ks
 a custom core/PINSEL/SAMC (`stream on <ksps> <core> <pinsel> <samc>`, the DAC left
 alone - switch a DAC on in its own card if it should drive that pin). **live** starts the
 chain if it is not already running at that rate/input (a change while live is picked up
-before the next grab) and then repeats `stream grab` at the interval shown - halt the
-trigger just long enough to send the half that stood still as one binary frame, restart
-it, plot the time signal and its spectrum (Hann window, dBFS, frequency axis from the
+before the next grab) and then repeats `stream grab` at the interval shown - since
+01.10.2026 without stopping anything: the stream moves on to the other of the buffer's two
+ping-pong pairs, and the pair just completed (ping and pong, 2048 samples at the default)
+goes out as one binary frame while acquisition and processing carry on - plot the time signal and its spectrum (Hann window, dBFS, frequency axis from the
 frame's own actual rate), evaluate, repeat - until **stop**, which sends `stream off`
 and restores the boot configuration. **single** does the same for one grab: if the chain
 is not already streaming it starts it, grabs once, and stops it again; it is disabled

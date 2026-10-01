@@ -601,15 +601,27 @@ def _r4_gui(target, log, sub, label, fail_frames):
     if ok_on:
         ok_d, _ = send(target, log, sub, R4_GUI_DAC, timeout=TIMEOUT_CMD)
         grabs, ok_g = _stream_grabs(target, log, sub, label, R4_GUI_GRABS, False, fail_frames)
+    # "buf" asked again while the stream still runs: the pre-955c473 fault
+    # showed here (the "stream on" had put the half back to the full length).
+    # Needed since 01.10.2026, when a grab became a whole ping-pong pair -
+    # two halves - so that "buf 512" legitimately gives 1024-sample grabs,
+    # the same length that fault produced.
+    _, q2_lines = send(target, log, sub, "buf", timeout=TIMEOUT_CMD) if ok_on else (False, [])
+    m2 = next((_BUF_HALF_RE.search(l) for l in q2_lines if _BUF_HALF_RE.search(l)), None)
+    half_now = int(m2.group(1)) if m2 else None
     ok_doff, _ = send(target, log, sub, "dac 2 off", timeout=TIMEOUT_CMD)
     ok_off, _ = send(target, log, sub, "stream off", timeout=TIMEOUT_CMD)
     ok_r = True
     if orig is not None:
         ok_r, _ = send(target, log, sub, f"buf {orig}", timeout=TIMEOUT_CMD)
-    ok_n = bool(grabs) and all(g["n"] == R4_GUI_BUF for g in grabs if g["ok"])
+    # a grab is one half up to the firmware of 01.10.2026, a whole ping-pong
+    # pair (two halves) from the pair change on - either is "buf in effect",
+    # provided the half reported while streaming is still the one set
+    ok_n = (bool(grabs) and half_now == R4_GUI_BUF
+            and all(g["n"] in (R4_GUI_BUF, 2 * R4_GUI_BUF) for g in grabs if g["ok"]))
     if grabs and not ok_n:
         log.ev(sub, f"buf {R4_GUI_BUF} not in effect: grab lengths "
-                    f"{sorted({g['n'] for g in grabs if g['ok']})}")
+                    f"{sorted({g['n'] for g in grabs if g['ok']})}, half while streaming {half_now}")
     ok = all((ok_q, orig is not None, ok_b, ok_on, ok_d, ok_g, ok_n, ok_doff, ok_off, ok_r))
     return ok, dict(ksps=R4_GUI_KSPS, gui=True, buf=R4_GUI_BUF, buf_restored=orig,
                     on_ok=ok_on, dac_ok=ok_d, grabs=grabs, off_ok=ok_off, buf_in_effect=ok_n)
@@ -1504,6 +1516,8 @@ class ReplayTarget:
             self.chain_ksps = int(rest[0])
             self.chain_test = len(rest) <= 1
             self._grab_i[self.chain_ksps] = 0
+            if not self.buf_follows:
+                self.half_len = 1024          # the pre-955c473 fault: "stream on" undid "buf"
             return True, [f"stream: on - {self.chain_ksps} ksps"]
         if args and args[0] == "off":
             self.chain_on = False

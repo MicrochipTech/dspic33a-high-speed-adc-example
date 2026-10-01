@@ -64,7 +64,7 @@ int main(void)
      * 0xNNN" in the trace - tests/trace/README.md's open point on
      * capture.c's static dma_buffer, closed via the public capture_buffer()
      * accessor rather than a linker-script symbol into a private section. */
-    trace_region(capture_buffer(), SAMPLES_PER_BUF_MAX * sizeof(uint16_t), "dma_buffer");
+    trace_region(capture_buffer(), SAMPLES_PER_ALLOC * sizeof(uint16_t), "dma_buffer");   /* both ping-pong pairs */
 
     hwmodel_start(rules, sizeof rules / sizeof rules[0], 0u);
 

@@ -26,11 +26,18 @@
 
 /* The buffer is allocated at this maximum; the length in use is set at
  * run time (capture_set_half_len, "buf" command) and defaults to the
- * maximum, so nothing changes unless someone asks. 2048 since 01.10.2026
- * (1024 before): 8 KB for the buffer, and dactest.c's store[] grows with
- * it - 8 KB more RAM in all, about 25 KB of stack left (64 KB data). */
-#define SAMPLES_PER_HALF_MAX  2048u
+ * maximum, so nothing changes unless someone asks.
+ *
+ * Two ping-pong pairs since 01.10.2026 (2 x 2048 = one pair the same
+ * morning, 2 x 1024 before): the 8 KB hold pair A (samples 0..2H-1) and
+ * pair B (2H..4H-1), H = the half length in use. The triggered stream
+ * runs on one pair; for a "stream grab" it moves on to the other without
+ * stopping and the first is sent (capture_pair_freeze(), dma.c's pair
+ * mode). SAMPLES_PER_BUF_MAX is one pair - the most a block, a burst, a
+ * grab or "blk" covers; SAMPLES_PER_ALLOC is what the buffer holds. */
+#define SAMPLES_PER_HALF_MAX  1024u
 #define SAMPLES_PER_BUF_MAX   (2u * SAMPLES_PER_HALF_MAX)
+#define SAMPLES_PER_ALLOC     (2u * SAMPLES_PER_BUF_MAX)
 #define SAMPLES_PER_HALF_MIN  16u
 
 /* ---- Measurement state (defined in capture.c) ---- */
@@ -147,7 +154,8 @@ const struct pll_step *capture_sweep_steps(uint32_t *count);
 
 /* Process the completed half if a new one arrived; returns true if it did.
  * Called from the main loop, from the bench's and the chain test's own
- * streaming loops, and from "stream grab" (capture_sigproc_catch_up()).
+ * streaming loops, and from "stream grab" while it waits for the pair
+ * move (capture_pair_freeze()).
  * NOT from the console's yield hook, as this comment said until
  * 01.10.2026 - console_yield() (cli.c) only watches for Ctrl+C. While a
  * console command runs (inside the receive interrupt) the main loop does
@@ -158,13 +166,10 @@ bool capture_service(void);
 /* The signal processing (sigproc.c, sigproc.h): sigproc_block() is called
  * for each completed half only while it is switched on - console command
  * "sigproc on|off", off after reset. busy: capture_service() is running
- * with it on (cli.c's uart_rx_hook() holds bytes back meanwhile).
- * catch_up: "stream grab", after the halt - process the last completed
- * half now if the main loop has not yet. */
+ * with it on (cli.c's uart_rx_hook() holds bytes back meanwhile). */
 void capture_sigproc_enable(bool on);
 bool capture_sigproc_enabled(void);
 bool capture_sigproc_busy(void);
-void capture_sigproc_catch_up(void);
 
 /* capture_oneshot()/capture_oneshot_n(): meter.h (P9.3, 27.09.2026). */
 /* Timer1 ticks of the last one-shot, the BURST ALONE - the DMA channel
@@ -231,6 +236,14 @@ void     capture_fill(uint16_t v);
  * half torn down. */
 bool capture_chain_halt(void);
 bool capture_chain_resume(void);
+/* "stream grab" since 01.10.2026: the triggered stream moves on to the
+ * other ping-pong pair and the pair just completed (ping then pong,
+ * 2 * half_len samples from *from) stands still until released - the
+ * stream never stops (capture.c). Waits at most max_ticks (timebase),
+ * keeping capture_service() going meanwhile. */
+bool capture_pair_freeze(uint32_t max_ticks, const volatile uint16_t **win,
+                         uint32_t *n, uint32_t *from);
+void capture_pair_release(void);
 /* capture_process_bench(): meter.h (P9.3, 27.09.2026). */
 /* Processing cost of a half in Timer1 ticks, since counters_clear(). */
 extern volatile uint32_t proc_ticks_max;

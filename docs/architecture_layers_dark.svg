@@ -134,9 +134,9 @@ svg{--bg:#11161c;--ink:#e3e8ee;--muted:#9aa6b4;--line:#3a4552;
 <text class="t" x="884" y="403">port_impl.c</text>
 <text class="s" x="884" y="417">port_* → console / fail(), clock_fail_hook()</text>
 <rect class="bx s-app" x="170" y="440" width="970" height="44" rx="4"/>
-<circle class="st-tested" cx="1129" cy="451" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session); open: SG.8 board_run.py block R8; intermittent fail 8 after stream off with the generator on (HARDWARE-LOG 2026-09-29)</title></circle>
+<circle class="st-pending" cx="1129" cy="451" r="5"><title>not tested with this version yet (changed since it was tested at 7b16260); open: SG.8 board_run.py block R8; intermittent fail 8 after stream off with the generator on (HARDWARE-LOG 2026-09-29)</title></circle>
 <text class="t" x="180" y="459">siggen.c</text>
-<text class="s" x="180" y="473">src/siggen/ · wavegen table (8192 x 16 bit, .dma_buffer) → dma.c ch. 1 → dac.c, paced by sccp.c (SCCP2); claim in routing.c; no register</text>
+<text class="s" x="180" y="473">src/siggen/ · wavegen table (8192 x 16 bit, .dma_buffer) → dma.c ch. 2 → dac.c, paced by sccp.c (SCCP2); claim in routing.c; no register</text>
 <rect class="b-lib" x="10" y="508" width="1140" height="86" rx="6"/>
 <text class="ln" x="24" y="532">Libraries</text>
 <text class="lf" x="24" y="548">src/lib/</text>
@@ -202,16 +202,16 @@ svg{--bg:#11161c;--ink:#e3e8ee;--muted:#9aa6b4;--line:#3a4552;
 <text class="s" x="302" y="825">core 5, AD5AN3</text>
 <text class="s" x="302" y="839">(pin RA8)</text>
 <rect class="bx s-drv" x="414" y="688" width="110" height="62" rx="4"/>
-<circle class="st-tested" cx="513" cy="699" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session)</title></circle>
+<circle class="st-pending" cx="513" cy="699" r="5"><title>not tested with this version yet (changed since it was tested at 7b16260)</title></circle>
 <text class="t" x="424" y="709">dma.c</text>
-<text class="s" x="424" y="723">ch. 0 + ISR, ch. 1 tx</text>
-<text class="s" x="424" y="737">sim: sim_dma.c</text>
+<text class="s" x="424" y="723">ch. 0+1 ping-pong,</text>
+<text class="s" x="424" y="737">ch. 2 tx; sim_dma.c</text>
 <path class="ln1" d="M469 750 V790"/>
 <rect class="bx s-hw" x="414" y="790" width="110" height="62" rx="4"/>
 
-<text class="t" x="424" y="811">DMA0 · DMA1</text>
-<text class="s" x="424" y="825">ch. 0: ADC → RAM</text>
-<text class="s" x="424" y="839">ch. 1: RAM → DAC</text>
+<text class="t" x="424" y="811">DMA0/1 · DMA2</text>
+<text class="s" x="424" y="825">0+1: ADC → A/B</text>
+<text class="s" x="424" y="839">2: RAM → DAC</text>
 <rect class="bx s-drv" x="536" y="688" width="110" height="62" rx="4"/>
 <circle class="st-tested" cx="635" cy="699" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session)</title></circle>
 <text class="t" x="546" y="709">sccp.c</text>
@@ -238,7 +238,7 @@ svg{--bg:#11161c;--ink:#e3e8ee;--muted:#9aa6b4;--line:#3a4552;
 <circle class="st-pending" cx="879" cy="699" r="5"><title>not tested with this version yet (changed since it was tested at 7b16260)</title></circle>
 <text class="t" x="790" y="709">uart.c</text>
 <text class="s" x="790" y="723">UART2, PPS</text>
-<text class="s" x="790" y="737">RX ISR, TX ring + ISR</text>
+<text class="s" x="790" y="737">RX ISR, TX ring</text>
 <path class="ln1" d="M835 750 V790"/>
 <rect class="bx s-hw" x="780" y="790" width="110" height="62" rx="4"/>
 

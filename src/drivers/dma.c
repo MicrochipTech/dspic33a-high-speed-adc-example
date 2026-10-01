@@ -87,9 +87,9 @@
  * p826), and the check covers every SRAM access - Figure 13-3 (p828)
  * draws the window around both the source and the destination; only
  * "the memory-mapped SFR range is always accessible by DMA" (same
- * section; DMALOW/DMAHIGH notes p809/810). So with channel 1 reading a
+ * section; DMALOW/DMAHIGH notes p809/810). So with channel 2 reading a
  * generator table from RAM, the window must cover channel 0's buffer
- * AND that table, or channel 1 would stop with ADRERR on its first
+ * AND that table, or channel 2 would stop with ADRERR on its first
  * read. dma.c keeps both regions and writes the smallest window over
  * them; siggen.c places its table in the same ".dma_buffer" section as
  * capture.c's buffer, so the window holds those two objects and nothing
@@ -99,7 +99,10 @@
  * The buffer's guard words stay.
  * ------------------------------------------------------------------ */
 static uint32_t win0_first = 0u, win0_last = 0u;   /* channel 0's buffer */
-static uint32_t win1_first = 0u, win1_last = 0u;   /* channel 1's table  */
+/* Pair mode (dma0_pp_init()): channels 0 and 1 in hardware ping-pong. */
+static volatile bool     pp_mode = false;
+static volatile uint32_t pp_half = 0u;              /* transactions per half */
+static uint32_t win1_first = 0u, win1_last = 0u;   /* channel 2's table  */
 
 static void window_write(void)
 {
@@ -122,18 +125,21 @@ uint32_t dma_window_gap(void)
 
 /* DMACON.ON = 0 "resets all state machines, resulting in immediate
  * termination of all active DMA operation(s)" (p807) - every channel,
- * not one. While channel 1 plays a table, channel 0's set-up and
+ * not one. While channel 2 plays a table, channel 0's set-up and
  * tear-down leave the module on and work through CHEN alone. */
-static bool ch1_busy(void)
+static bool tx_busy(void)
 {
-    return DMA1CHbits.CHEN != 0u;
+    return DMA2CHbits.CHEN != 0u;
 }
 
 void dma0_init(uint32_t trigger, const volatile void *src,
                volatile void *dst, uint32_t dst_bytes)
 {
-    if (!ch1_busy()) { DMACONbits.ON = 0; }
+    if (!tx_busy()) { DMACONbits.ON = 0; }
     DMA0CHbits.CHEN = 0;
+    DMA1CH = 0u;                            /* pair mode's partner off  */
+    IEC2bits.DMA1IE = 0;
+    pp_mode = false;
 
     /* Everything about the destination comes from the buffer object the
      * caller passes (its address and its sizeof), nothing from a
@@ -189,6 +195,10 @@ void dma0_init(uint32_t trigger, const volatile void *src,
 
 uint32_t dma0_remaining(void)
 {
+    if (pp_mode) {
+        /* the pong channel runs while its PCHEN is set (13.4.11) */
+        return ((DMA1CH >> 28) & 1u) ? DMA1CNT : DMA0CNT + pp_half;
+    }
     return DMA0CNT;                   /* transactions left in the block */
 }
 
@@ -200,17 +210,24 @@ bool dma0_enabled(void)
 void dma0_deinit(void)
 {
     IEC2bits.DMA0IE = 0;
+    IEC2bits.DMA1IE = 0;
     DMA0CHbits.CHEN = 0;
+    DMA1CH = 0u;                            /* pair mode's partner      */
+    pp_mode = false;
     DMA0STAT = 0u;                          /* all flags cleared (R/C)  */
+    DMA1STAT = 0u;
     IFS2bits.DMA0IF = 0;
-    if (!ch1_busy()) { DMACONbits.ON = 0; }  /* p807: ON = 0 stops channel 1 too */
+    IFS2bits.DMA1IF = 0;
+    if (!tx_busy()) { DMACONbits.ON = 0; }  /* p807: ON = 0 stops channel 2 too */
 }
 
 /* Interrupt masked, channel disabled. Nothing restarts after this. */
 void dma0_halt(void)
 {
     IEC2bits.DMA0IE = 0;
+    IEC2bits.DMA1IE = 0;
     DMA0CHbits.CHEN = 0;
+    DMA1CHbits.CHEN = 0;
 }
 
 /* DMAxSTAT flags are "R/C/HS": a flag is cleared by writing 0 to it
@@ -230,6 +247,7 @@ void dma0_halt(void)
  * OVERRUN, HALF and DONE arrive independently. */
 void dma0_clear(uint32_t flags)
 {
+    if (pp_mode) { return; }          /* pp_service() cleared both channels */
     DMA0STAT = ~flags;
 }
 
@@ -250,10 +268,123 @@ void dma0_clear(uint32_t flags)
  * restarted, the stream stopped (fail 6 with DONE still set in the
  * register dump).
  * ------------------------------------------------------------------ */
+/* Pair mode: one routine for both channels' interrupts. It takes and
+ * clears BOTH status words in one go (each flag written 0 only where it
+ * was seen, dma0_clear()'s rule) and hands dma0_event() what the
+ * single-channel layout would have shown: channel 0's DONE - the ping
+ * half complete - as DMA0_HALF, channel 1's DONE - the pong half - as
+ * DMA0_DONE, the error flags of either as they are. The HALF flags the
+ * channels set at their own half-way points (set even with HALFEN = 0,
+ * board 01.10.2026) mean nothing here and are dropped. Taking both words
+ * every time keeps the order and the late case as before: an event of
+ * the other channel still pending is served now, and its own interrupt,
+ * coming right after, finds nothing left (dma0_event() with 0 - counted
+ * in isr_entries, nothing else). */
+static void pp_service(void)
+{
+    const uint32_t s0 = DMA0STAT, s1 = DMA1STAT;
+    DMA0STAT = ~s0;
+    DMA1STAT = ~s1;
+    uint32_t st = (s0 | s1) & ~(uint32_t)(DMA0_HALF | DMA0_DONE);
+    if (s0 & DMA0_DONE) { st |= DMA0_HALF; }
+    if (s1 & DMA0_DONE) { st |= DMA0_DONE; }
+    dma0_event(st);
+}
+
 void __attribute__((interrupt, no_auto_psv)) _DMA0Interrupt(void)
 {
     IFS2bits.DMA0IF = 0;              /* first, see above               */
+    if (pp_mode) { pp_service(); return; }
     dma0_event(DMA0STAT);
+}
+
+/* IRQ 78 (ATDF), IEC2/IFS2 bit 14, priority IPC9 - pair mode only. */
+void __attribute__((interrupt, no_auto_psv)) _DMA1Interrupt(void)
+{
+    IFS2bits.DMA1IF = 0;              /* first, as for channel 0        */
+    pp_service();
+}
+
+/* ------------------------------------------------------------------ *
+ * Pair mode: channels 0 and 1 as a hardware ping-pong pair (01.10.2026)
+ *
+ * "When one DMA channel completes its operation, it triggers the other
+ * active channel's hardware enable input. This action sets the other
+ * channel's PCHEN bit high. Whenever both PCHEN and CHEN are high (and
+ * PPEN = 1), the DMA channel is enabled" (13.4.11, p841). Both channels
+ * Repeated One-Shot with RELOADD/RELOADC, as channel 0 alone: one ADC
+ * result, one transfer; at the end of its block a channel reloads its
+ * address and count at once, stays enabled with PCHEN = 0 and waits -
+ * the two alternate with no software at all (board, 01.10.2026, traced
+ * at 10 kSPS). Same trigger and source for both, one half each.
+ * Measured on the board with the DAC triangle: no lost or repeated
+ * sample at the hand-over at 1/4/8/10/16 MSPS, also when the waiting
+ * channel's DMAxDST was moved to the other pair in the meantime - which
+ * is what dma0_pp_set_dst() is for (docs/HARDWARE-LOG.md, 01.10.2026).
+ * ------------------------------------------------------------------ */
+void dma0_pp_init(uint32_t trigger, const volatile void *src,
+                  volatile void *dst, uint32_t half_bytes)
+{
+    if (!tx_busy()) { DMACONbits.ON = 0; }
+    IEC2bits.DMA0IE = 0;
+    IEC2bits.DMA1IE = 0;
+    DMA0CH = 0u;
+    DMA1CH = 0u;
+
+    /* The window: both pairs, A and B, four halves from dst - the same
+     * checks as dma0_init() over that whole range. */
+    const uint32_t count = half_bytes / 2u;
+    const uint32_t first = (uint32_t)dst;
+    const uint32_t last  = first + 4u * half_bytes - 1u;
+    if ((first < RAM_FIRST) || (last > RAM_LAST) || (last < first) ||
+        (half_bytes % 4u != 0u) || (count > 0xFFFFu) || (first % 4u != 0u)) {
+        port_log_kv("[dma] unusable pair buffer, first", first, true);
+        port_log_kv("[dma] unusable pair buffer, last", last, true);
+        port_panic(8u);
+    }
+    win0_first = first;
+    win0_last  = last;
+    window_write();
+    pp_half = count;
+
+    DMA0SEL = trigger;  DMA1SEL = trigger;
+    DMA0SRC = (uint32_t)src;  DMA1SRC = (uint32_t)src;
+    DMA0DST = first;                        /* ping: pair A, first half */
+    DMA1DST = first + half_bytes;           /* pong: pair A, second half*/
+    DMA0CNT = count;    DMA1CNT = count;
+    DMA0STAT = 0u;      DMA1STAT = 0u;
+
+    DMA0CHbits.SIZE = 1u;     DMA1CHbits.SIZE = 1u;        /* 16 bit         */
+    DMA0CHbits.SAMODE = 0u;   DMA1CHbits.SAMODE = 0u;      /* source fixed   */
+    DMA0CHbits.DAMODE = 1u;   DMA1CHbits.DAMODE = 1u;      /* dest. incremented */
+    DMA0CHbits.TRMODE = 1u;   DMA1CHbits.TRMODE = 1u;      /* repeated one-shot */
+    DMA0CHbits.RELOADD = 1u;  DMA1CHbits.RELOADD = 1u;
+    DMA0CHbits.RELOADC = 1u;  DMA1CHbits.RELOADC = 1u;
+    DMA0CHbits.DONEEN = 1u;   DMA1CHbits.DONEEN = 1u;      /* one IRQ per half */
+    DMA0CHbits.RETEN = 0u;    DMA1CHbits.RETEN = 0u;       /* capture.c note 1 */
+    DMA0CHbits.PPEN = 1u;     DMA1CHbits.PPEN = 1u;        /* 13.4.11          */
+    DMACONbits.PRIORITY = 1u;
+    DMACONbits.ON = 1;
+
+    pp_mode = true;
+    DMA1CHbits.CHEN = 1u;                   /* armed, waits for its PCHEN */
+    DMA0CHbits.PCHEN = 1u;                  /* channel 0 starts the pair  */
+    DMA0CHbits.CHEN = 1u;
+
+    IPC9bits.DMA1IP = IPC9bits.DMA0IP;      /* the same priority (4)      */
+    IFS2bits.DMA0IF = 0;
+    IFS2bits.DMA1IF = 0;
+    IEC2bits.DMA0IE = 1;
+    IEC2bits.DMA1IE = 1;
+    port_trace("[dma] channels 0+1 armed as a ping-pong pair; window = pairs A and B:\r\n");
+    port_trace_kv("[dma] DMALOW", DMALOW, true);
+    port_trace_kv("[dma] DMAHIGH", DMAHIGH, true);
+}
+
+void dma0_pp_set_dst(uint32_t ch, volatile void *dst)
+{
+    if (ch == 0u) { DMA0DST = (uint32_t)dst; }
+    else          { DMA1DST = (uint32_t)dst; }
 }
 
 void dma0_regs_visit(reg_visit_t visit)
@@ -274,8 +405,10 @@ void dma0_regs_visit(reg_visit_t visit)
 }
 
 /* ------------------------------------------------------------------ *
- * DMA channel 1: a table in RAM -> one SFR, the signal generator's
- * transport (SG.1, 29.09.2026; docs/IMPLEMENTATION-PLAN.md section SG)
+ * DMA channel 2: a table in RAM -> one SFR, the signal generator's
+ * transport (SG.1, 29.09.2026; docs/IMPLEMENTATION-PLAN.md section SG).
+ * Channel 1 until 01.10.2026; it moved so that channels 0 and 1 - a fixed
+ * hardware ping-pong pair (13.4.11, p841) - can carry the ADC stream.
  *
  * One table entry per trigger: TRMODE = 01, Repeated One-Shot, as for
  * channel 0 and for the same reason (13.4.8.3, p832) - NOT the "Repeated
@@ -286,13 +419,13 @@ void dma0_regs_visit(reg_visit_t visit)
  * 24/26, p811-812; CNT reloads in every repeated mode anyway, note 3), so
  * the table plays cyclically with no CPU involvement at all.
  * No interrupt (HALFEN = DONEEN = 0, SG decision 3): errors are read back
- * through dma1_tx_status(), _DMA0Interrupt stays as it is.
+ * through dma_tx_status(); the ADC channels' interrupts stay as they are.
  * SIZE comes from the caller: 01 = one 16-bit word per transfer, 10 = 32
  * bits (DMAxCH SIZE[1:0], p812). A 16-bit transfer needs a 16-bit
  * aligned address on both sides (13.4.2, p825: "bit 0 is always 0"); the
  * SFR window rule above lets the destination be any SFR.
  * ------------------------------------------------------------------ */
-bool dma1_tx_start(uint32_t trigger, const volatile void *src, uint32_t n,
+bool dma_tx_start(uint32_t trigger, const volatile void *src, uint32_t n,
                    volatile void *dst_sfr, uint32_t size)
 {
     const uint32_t bytes = (size == DMA_SIZE_32) ? 4u : 2u;
@@ -303,55 +436,55 @@ bool dma1_tx_start(uint32_t trigger, const volatile void *src, uint32_t n,
         (first % bytes != 0u) || ((uint32_t)dst_sfr % bytes != 0u)) {
         return false;
     }
-    DMA1CHbits.CHEN = 0;
+    DMA2CHbits.CHEN = 0;
     win1_first = first;
     win1_last  = last;
     window_write();
 
-    DMA1SEL  = trigger;                     /* e.g. SCCP2, 0x19 (Table 13-2 p797) */
-    DMA1SRC  = first;                       /* the table                */
-    DMA1DST  = (uint32_t)dst_sfr;           /* e.g. &DAC2DAT + 2        */
-    DMA1CNT  = n;                           /* transfers per block      */
-    DMA1STAT = 0u;                          /* stale flags cleared (R/C)*/
+    DMA2SEL  = trigger;                     /* e.g. SCCP2, 0x19 (Table 13-2 p797) */
+    DMA2SRC  = first;                       /* the table                */
+    DMA2DST  = (uint32_t)dst_sfr;           /* e.g. &DAC2DAT + 2        */
+    DMA2CNT  = n;                           /* transfers per block      */
+    DMA2STAT = 0u;                          /* stale flags cleared (R/C)*/
 
-    DMA1CH = 0u;
-    DMA1CHbits.SIZE    = size;
-    DMA1CHbits.SAMODE  = 1u;          /* source incremented             */
-    DMA1CHbits.DAMODE  = 0u;          /* destination unchanged          */
-    DMA1CHbits.TRMODE  = 1u;          /* repeated one-shot: 1 per trigger (p832) */
-    DMA1CHbits.RELOADS = 1u;          /* table start again each block   */
-    DMA1CHbits.RELOADC = 1u;          /* count again each block         */
-    DMA1CHbits.RETEN   = 0u;          /* as channel 0 (capture.c note 1) */
+    DMA2CH = 0u;
+    DMA2CHbits.SIZE    = size;
+    DMA2CHbits.SAMODE  = 1u;          /* source incremented             */
+    DMA2CHbits.DAMODE  = 0u;          /* destination unchanged          */
+    DMA2CHbits.TRMODE  = 1u;          /* repeated one-shot: 1 per trigger (p832) */
+    DMA2CHbits.RELOADS = 1u;          /* table start again each block   */
+    DMA2CHbits.RELOADC = 1u;          /* count again each block         */
+    DMA2CHbits.RETEN   = 0u;          /* as channel 0 (capture.c note 1) */
 
     DMACONbits.PRIORITY = 1u;         /* round robin, as dma0_init()    */
     DMACONbits.ON   = 1;
-    DMA1CHbits.CHEN = 1;
-    return DMA1CHbits.CHEN != 0u;
+    DMA2CHbits.CHEN = 1;
+    return DMA2CHbits.CHEN != 0u;
 }
 
-void dma1_tx_stop(void)
+void dma_tx_stop(void)
 {
-    DMA1CHbits.CHEN = 0;
-    DMA1STAT = 0u;
+    DMA2CHbits.CHEN = 0;
+    DMA2STAT = 0u;
     win1_first = 0u;
     win1_last  = 0u;
     if (win0_last != 0u) { window_write(); }
 }
 
-uint32_t dma1_tx_status(void)    { return DMA1STAT; }
-uint32_t dma1_tx_remaining(void) { return DMA1CNT; }
-bool     dma1_tx_enabled(void)   { return DMA1CHbits.CHEN != 0u; }
+uint32_t dma_tx_status(void)    { return DMA2STAT; }
+uint32_t dma_tx_remaining(void) { return DMA2CNT; }
+bool     dma_tx_enabled(void)   { return DMA2CHbits.CHEN != 0u; }
 
-void dma1_regs_visit(reg_visit_t visit)
+void dma_tx_regs_visit(reg_visit_t visit)
 {
-    visit("[regs] dma1\r\n", 0u, REG_TITLE);
+    visit("[regs] dma2 (signal generator)\r\n", 0u, REG_TITLE);
     visit("DMACON", DMACON, REG_HEX);
     visit("DMALOW", DMALOW, REG_HEX);
     visit("DMAHIGH", DMAHIGH, REG_HEX);
-    visit("DMA1CH", DMA1CH, REG_HEX);
-    visit("DMA1SEL", DMA1SEL, REG_HEX);
-    visit("DMA1STAT", DMA1STAT, REG_HEX);
-    visit("DMA1SRC", DMA1SRC, REG_HEX);
-    visit("DMA1DST", DMA1DST, REG_HEX);
-    visit("DMA1CNT", DMA1CNT, REG_HEX);
+    visit("DMA2CH", DMA2CH, REG_HEX);
+    visit("DMA2SEL", DMA2SEL, REG_HEX);
+    visit("DMA2STAT", DMA2STAT, REG_HEX);
+    visit("DMA2SRC", DMA2SRC, REG_HEX);
+    visit("DMA2DST", DMA2DST, REG_HEX);
+    visit("DMA2CNT", DMA2CNT, REG_HEX);
 }

@@ -14,7 +14,7 @@
  *   sccp2_start(1, TMR16)        refused before any write
  *
  * DMA channel 1 and the shared window are not in this scenario:
- * dma1_tx_start() checks its table against the device's RAM range, which
+ * dma_tx_start() checks its table against the device's RAM range, which
  * a host array does not lie in. The `stream_on` goldens (unchanged by SG.1)
  * cover dma0_init()'s side with channel 1 idle, the board run the rest.
  */

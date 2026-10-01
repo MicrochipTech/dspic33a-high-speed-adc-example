@@ -80,9 +80,9 @@
  * signal-generator tables. Both are runtime checks (decision of 26.09.2026,
  * docs/DESIGN-MULTICHANNEL.md 4.4/section 7), not `_Static_assert` yet: a
  * route's cost is only known once it is added, not at compile time. */
-#define ROUTE_HALF_SAMPLES      2048u   /* capture.h's SAMPLES_PER_HALF_MAX since 01.10.2026 */
+#define ROUTE_HALF_SAMPLES      1024u   /* capture.h's SAMPLES_PER_HALF_MAX, two pairs since 01.10.2026 */
 #define ROUTE_SAMPLE_BYTES      2u
-#define ROUTE_CHANNEL_BYTES     (2u * ROUTE_HALF_SAMPLES * ROUTE_SAMPLE_BYTES)
+#define ROUTE_CHANNEL_BYTES     (4u * ROUTE_HALF_SAMPLES * ROUTE_SAMPLE_BYTES)   /* pairs A and B */
 #define ROUTE_RAM_BUDGET_BYTES  (56u * 1024u)
 
 /* Two PINSEL values are not package pins but internal channels every core

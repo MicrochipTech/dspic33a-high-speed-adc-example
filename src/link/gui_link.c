@@ -183,6 +183,18 @@ void link_register(void)
  * Ctrl+C or a disconnect: a short block is for the client to report, not
  * a reason to leave the chain half-configured (docs/PLAN-BINARY-TRANSFER.md's
  * Ctrl+C risk, the same one "blk" already has to live with). */
+/* Polled by frame_send() between two payload chunks of a "stream grab"
+ * (64 bytes each): the main loop's work goes on while the frame is
+ * built - the stream does not stop for a grab any more (01.10.2026), and
+ * the CRC and the copy of a 4 KB pair into the transmit ring take 2-3 ms
+ * of this command, 25 halves at 8 MSPS (board, 01.10.2026). Then the
+ * Ctrl+C check that frame_send()'s callback always was. */
+static bool grab_poll(void)
+{
+    (void)capture_service();
+    return cmd_parser_aborted();
+}
+
 void gui_link_stream_grab(void)
 {
     chain_grab_t g;
@@ -216,7 +228,7 @@ void gui_link_stream_grab(void)
     }
 
     const uint32_t n = g.win_len;
-    const uint32_t sent = frame_send(console_write_raw, cmd_parser_aborted,
+    const uint32_t sent = frame_send(console_write_raw, grab_poll,
                                       head, head_len, g.win, n);
 
     /* Restart unconditionally - see the comment above. */

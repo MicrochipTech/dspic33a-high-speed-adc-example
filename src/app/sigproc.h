@@ -7,17 +7,20 @@
  * and only while the processing is switched on: console command
  * "sigproc on|off" (the GUI's "signal processing" switch), off after reset.
  * The DMA is then writing the OTHER half, so the block handed over stays
- * still for one half period: n / sample rate, e.g. 2048 samples at
- * 8 MSPS = 256 us = 51 200 CPU cycles at 200 MHz, 25 cycles per sample.
+ * still for one half period: n / sample rate, e.g. 1024 samples at
+ * 8 MSPS = 128 us = 25 600 CPU cycles at 200 MHz, 25 cycles per sample.
  *
  * In place: the result goes back into x[0..n-1], the same half. "stream
- * grab" then sends exactly that half to the GUI, so the GUI shows the
- * processed data with no second buffer (its GRAB header says proc=1). The
- * grab makes sure of it: after halting the trigger it processes the last
- * completed half if the main loop has not yet, and a console command can
- * never interrupt this function half-way (cli.c's uart_rx_hook() holds
- * received bytes back while it runs and hands them to the parser right
- * after) - so the GUI never sees a half-processed block.
+ * grab" sends a whole ping-pong pair - ping then pong - and the stream
+ * does not stop for it (since 01.10.2026): it moves on to the other pair,
+ * and the pair just completed stands still while it is sent, so the GUI
+ * shows the processed data with no second buffer (its GRAB header says
+ * proc=1), and the processing never sees a gap in its input. Both halves
+ * of that pair went through this function on the way (capture_service()
+ * keeps running while the grab waits for the move), and a console command
+ * can never interrupt this function half-way (cli.c's uart_rx_hook()
+ * holds received bytes back while it runs and hands them to the parser
+ * right after) - so the GUI never sees a half-processed block.
  *
  * The rules that follow:
  *   - return within one half period. Longer, and the main loop misses the

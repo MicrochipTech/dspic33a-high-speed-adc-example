@@ -2018,3 +2018,91 @@ grab, 20 grabs; `sigproc on/off` with a grab each; Ctrl+C 30 ms into `help`.
   fail 8 after stream off, not reproduced"); the ring only made it more likely.
 
 Not run: the GUI against this image, the Nano, `test all`, `blk` of 4096 samples.
+
+## 2026-10-01, DMA experiments for a seamless switch between two ping-pong pairs - e349300 + a throwaway test file, local (COM26)
+
+Question: the 8 KB sample buffer as two ping-pong pairs (A, B); the stream runs on one,
+and for a GUI transfer it carries on, without a gap, on the other while the first is
+sent. Can the DMA move from A to B at a block boundary without losing a sample? Test
+code (`src/tests/dmaexp.c`, three temporary commands, not committed) on the chain
+stream's trigger (SCCP1 -> ADC core 5) and source; the DAC2 test triangle as signal.
+
+**1. One channel: what a write to `DMA0DST` does while it runs** (Repeated One-Shot,
+`RELOADD = 1`, `buf 512` = 1024-sample block, 10 kSPS, DST and CNT traced every 10 ms).
+The write moves the **live pointer at once** - the next sample landed at the new address,
+none more in the old region - **and becomes the reload value**: at the end of the block
+the pointer went to the written address, not back to the old start. `DMA0CNT` is not
+touched (the block's HALF/DONE timing stays). The channel has no separate reload
+register (CH, SEL, STAT, SRC, DST, CNT, CLR, SET, INV, MSK, PAT - DS70005591D 13.3). So
+one channel switches cleanly only if the write falls between the last transfer of a
+block and the first of the next: 100 us at 10 kSPS, 125 ns at 8 MSPS - not from an
+interrupt.
+
+**2. Two channels in hardware ping-pong** (13.4.11, `PPEN = 1` on both, `PCHEN = 1` on
+the initiator; channels 2/3, so that 0 (stream) and 1 (signal generator) stay as they
+are; 256-sample blocks at 10 kSPS, traced every 2 ms):
+- `TRMODE = 0` (One-Shot): the channel that finishes clears its own CHEN and PCHEN and
+  sets the partner's PCHEN - the partner starts at once. Without software it stops
+  after two blocks; with CHEN set again by software, the waiting channel reloads DST
+  and CNT when its PCHEN comes and runs - alternating for as long as software re-arms.
+- `TRMODE = 1` (Repeated One-Shot): the finishing channel reloads at once, stays enabled
+  with PCHEN = 0 and waits; it alternates **with no software at all**.
+
+**3. The pair switch at speed** (`TRMODE = 1`, 1024-sample blocks, ch2 = ping, ch3 =
+pong, A = samples 0..2047, B = 2048..4095, buffer pre-filled with 0xFFFF): 20 rounds
+on A, then the **waiting** channel's DST set to B (ch2 while ch3 writes A's pong, then
+ch3 while ch2 writes B's ping), stopped after B's pong - four consecutive blocks in the
+buffer, three hand-overs, one of them the A -> B switch. Dumped and judged on the host
+with `eval_chain.tri_eval`/`grid_ok`:
+- 1 / 4 / 8 (five runs) / 10 / 16 MSPS: no 0xFFFF left, `grid_ok` True, zero 0, dbl 0,
+  the sample-to-sample steps across all three hand-overs within the triangle's normal
+  slope (8 MSPS: -23..-28 LSB, median 22), both channels' STAT 0x30 (HALF|DONE, no
+  OVERRUN).
+- 100 kSPS: the same steps across the hand-overs, but `grid_ok` False with
+  `overflow` True, `tps` 160 - the evaluator's TP_MAX limit on a 4096-sample window of
+  the steep 100 kSPS triangle (the open question of the 2026-10-01 buffer entry), not
+  a lost sample.
+
+Result: **the two-channel hardware ping-pong hands over without a lost or repeated sample
+up to 16 MSPS, and a waiting channel's DST can be moved to the other pair at any time
+during its partner's block** - the basis for the two-pair design. Not tested: longer
+runs, switching back and forth repeatedly, the interrupts (HALF/DONE per channel) the
+real design needs, and running it alongside the signal generator on channel 1.
+
+## 2026-10-02, two ping-pong pairs, DMA channels 0+1 in hardware ping-pong, grab without stopping - e349300 + local changes, local (COM26)
+
+The change built on the experiment above: the 8 KB buffer as two ping-pong pairs A/B
+(`SAMPLES_PER_HALF_MAX` 1024), the triggered stream on DMA channels 0 (ping) + 1 (pong)
+in hardware ping-pong (`dma0_pp_init()`), the signal generator moved to DMA channel 2,
+and `stream grab` freezing the pair just completed - the waiting channel moved to the
+other pair - instead of halting the trigger. All flashed by ipecmd, `git e349300+local
+changes` in the banner.
+
+- **Grabs** (`stream on` 1/4/8/10 MSPS, 12 grabs each, the DAC2 test triangle): every
+  frame 2048 samples, `from` alternating 2048/0/2048..., the triangle contiguous in every
+  frame (`eval_chain.tri_eval`/`grid_ok`: zero 0, dbl 0), overrun/late/missed 0, ~440 ms
+  per grab; the stream never stops - about 3400 halves between two grabs at 8 MSPS.
+- Two fixes were needed on the way, both found on the board: (1) the frame's CRC and
+  copy into the transmit ring took 2-3 ms of the command - `missed` 2/12/25 per grab at
+  1/4/8 MSPS - now `grab_poll()` runs `capture_service()` between frame chunks; (2) with
+  sigproc off a grab's own `capture_service()` could land inside the main loop's
+  (`missed` -2 in one grab) - now `uart_rx_hook()` holds commands back during every
+  `capture_service()`, not only with sigproc on. After both: 72 grabs, all 0.
+- **16 / 20 MSPS:** 12 grabs at 16 MSPS, 7 DMA overruns, data contiguous, missed 0; at
+  20 MSPS 56 overruns and 59 missed halves, triangle still contiguous. In `chain all`
+  S4.13/S4.14 (20 MSPS) FAIL with overrun 487 while the transfer count is exact
+  (1000010 of 1000010) - the flag fires without a lost sample; S6.7 SKIP follows from it.
+  Single-channel (e349300) had 0 there. Open: whether the hand-over itself raises the
+  OVERRUN flag at these rates, and why 20 MSPS then misses halves.
+- **`chain all` against e349300:** every other verdict identical; S3.2 and S5.1 now PASS
+  (were FAIL) - their window is the whole buffer, 2048 samples now instead of 4096, and
+  S5.1's 4096-sample window had overflowed the evaluator's 160 turning points.
+- **Transmit path unchanged:** `help` while streaming missed 0/0/0, `sigproc on/off` ->
+  `proc=1/0`, Ctrl+C prompt back.
+- **Signal generator on DMA channel 2:** `siggen on 2 100 100000` - 100000 transfers/s,
+  `dma2_stat` 0x30, the generator's signal seen on RA8 through the custom input (core 5,
+  PINSEL 3).
+- ISR sizes (fncmp): `_DMA0Interrupt` 46/0 (42 before), `_DMA1Interrupt` 41/0 (new).
+
+Not run: `test all`, the GUI against this image (gui_ui_test only with --fake), the
+Nano, longer runs at 16-20 MSPS.

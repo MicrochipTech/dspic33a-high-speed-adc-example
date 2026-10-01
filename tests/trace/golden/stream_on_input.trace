@@ -5,28 +5,37 @@ W VCO1DIV      0x00000000 -> 0x00020000
 # preset: PLL1DIV/VCO1DIV as clock_init() leaves them at boot
 W AD2CON       0x80480000 -> 0x80488000
 W AD2CH0CON1   0x00000000 -> 0x07010281
-W AD2CH0CNT    0x00000000 -> 0x00001000
+W AD2CH0CNT    0x00000000 -> 0x00000800
 W T1CON        0x00000000 -> 0x00008010
 W CLK13CON     0x80000101 -> 0x80029500
 W CLK13DIV     0x00000000 -> 0x00010000
 C [adc] core ready, Integration mode, back-to-back
-C [adc] cnt: 4096
+C [adc] cnt: 2048
 C [adc] pinsel: 7
 C [adc] samc: 1
 W IEC2         0x00000000 -> 0x00002000
 W DMACON       0x00000000 -> 0x00008001
 W DMALOW       0x00000000 -> &dma_buffer+0x0
-W DMAHIGH      0x00000000 -> &dma_buffer+0x1FFF
+W DMAHIGH      0x00000000 -> &dma_buffer+0xFFF
 W DMA0CH       0x00000000 -> 0x0600144B
 W DMA0SEL      0x00000000 -> 0x00000035
 W DMA0SRC      0x00000000 -> &AD2CH0RES(0x000A24)
 W DMA0DST      0x00000000 -> &dma_buffer+0x0
-W DMA0CNT      0x00000001 -> 0x00001000
+W DMA0CNT      0x00000001 -> 0x00000800
 C [dma] channel 0 armed, IRQ on; address window = the buffer:
 C [dma] DMALOW: &dma_buffer+0x0
-C [dma] DMAHIGH: &dma_buffer+0x1FFF
+C [dma] DMAHIGH: &dma_buffer+0xFFF
+W IEC2         0x00002000 -> 0x00006000
 W AD2CH0CON1   0x07010281 -> 0x07010020
-C [dma] channel 0 armed, IRQ on; address window = the buffer:
+W DMAHIGH      &dma_buffer+0xFFF -> &dma_buffer+0x1FFF
+W DMA0CH       0x0600144B -> 0x36001449
+W DMA0CNT      0x00000800 -> 0x00000400
+W DMA1CH       0x00000000 -> 0x26001449
+W DMA1SEL      0x00000000 -> 0x00000035
+W DMA1SRC      0x00000000 -> &AD2CH0RES(0x000A24)
+W DMA1DST      0x00000000 -> &dma_buffer+0x800
+W DMA1CNT      0x00000001 -> 0x00000400
+C [dma] channels 0+1 armed as a ping-pong pair; window = pairs A and B:
 C [dma] DMALOW: &dma_buffer+0x0
 C [dma] DMAHIGH: &dma_buffer+0x1FFF
 W CCP1CON1     0x00000000 -> 0x00008120
@@ -35,26 +44,29 @@ W CCP1PR       0xFFFFFFFF -> 0x0000009F
 W CCP1RB       0x00000000 -> 0x00000050
 # chain_stream_on_input(1000, core=2, pinsel=7, samc=1, test_signal=false) -> 1
 # chain_stream_on_input(1000, 2, 7, 1, false)
-W IEC2         0x00002000 -> 0x00000000
+W IEC2         0x00006000 -> 0x00000000
 W AD2CON       0x80488000 -> 0x80480000
 W AD3CON       0x80480000 -> 0x80488000
 W AD3CH0CON1   0x00000000 -> 0x05000281
-W AD3CH0CNT    0x00000000 -> 0x00001000
+W AD3CH0CNT    0x00000000 -> 0x00000800
 W CCP1CON1     0x00008120 -> 0x00000120
 W DMACON       0x00008001 -> 0x00000001
-W DMA0CH       0x0600144B -> 0x0600144A
+W DMA0CH       0x36001449 -> 0x36001448
+W DMA1CH       0x26001449 -> 0x00000000
 C [adc] core ready, Integration mode, back-to-back
-C [adc] cnt: 4096
+C [adc] cnt: 2048
 C [adc] pinsel: 5
 C [adc] samc: 0
 W IEC2         0x00000000 -> 0x00002000
 W DMACON       0x00000001 -> 0x00008001
-W DMA0CH       0x0600144A -> 0x0600144B
+W DMAHIGH      &dma_buffer+0x1FFF -> &dma_buffer+0xFFF
+W DMA0CH       0x36001448 -> 0x0600144B
 W DMA0SEL      0x00000035 -> 0x0000003B
 W DMA0SRC      &AD2CH0RES(0x000A24) -> &AD3CH0RES(0x000B64)
+W DMA0CNT      0x00000400 -> 0x00000800
 C [dma] channel 0 armed, IRQ on; address window = the buffer:
 C [dma] DMALOW: &dma_buffer+0x0
-C [dma] DMAHIGH: &dma_buffer+0x1FFF
+C [dma] DMAHIGH: &dma_buffer+0xFFF
 W IEC2         0x00002000 -> 0x00000000
 W DMACON       0x00008001 -> 0x00000001
 W DMA0CH       0x0600144B -> 0x0600144A

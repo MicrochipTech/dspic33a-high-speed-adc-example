@@ -251,7 +251,7 @@ def layers():
     d.append(box(482, 384, 128, 44, "sigproc.c", ["per half, in place"], "app"))
     d.append(box(622, 384, 240, 44, "pingpong.c", ["completed half, missed, block count"], "app"))
     d.append(box(874, 384, 266, 44, "port_impl.c", ["port_* → console / fail(), clock_fail_hook()"], "app"))
-    d.append(box(170, 440, 970, 44, "siggen.c", ["src/siggen/ · wavegen table (8192 x 16 bit, .dma_buffer) → dma.c ch. 1 → dac.c, paced by sccp.c (SCCP2); claim in routing.c; no register"], "app"))
+    d.append(box(170, 440, 970, 44, "siggen.c", ["src/siggen/ · wavegen table (8192 x 16 bit, .dma_buffer) → dma.c ch. 2 → dac.c, paced by sccp.c (SCCP2); claim in routing.c; no register"], "app"))
 
     d.append(band(508, 86, "lib", "Libraries", ["src/lib/", "src/diag/"]))
     d.append(box(170, 520, 380, 62, "frame · crc16 · fmt · stats · tri_eval", ["hardware-free, tested on the host", "(tests/host, Python cross-checks)"], "lib"))
@@ -265,11 +265,11 @@ def layers():
 
     d.append(band(676, 86, "drv", "Drivers", ["src/drivers/", "src/sim/"]))
     drv = [("clock.c", ["PLL1, PLL2", "CLKGEN6/7/13"]), ("adc.c", ["core 5, burst", "trigger, calib."]),
-           ("dma.c", ["ch. 0 + ISR, ch. 1 tx", "sim: sim_dma.c"]), ("sccp.c", ["SCCP1 trigger,", "SCCP2 play clock"]),
-           ("dac.c", ["DAC1/2 triangle", "UREF route"]), ("uart.c", ["UART2, PPS", "RX ISR, TX ring + ISR"]),
+           ("dma.c", ["ch. 0+1 ping-pong,", "ch. 2 tx; sim_dma.c"]), ("sccp.c", ["SCCP1 trigger,", "SCCP2 play clock"]),
+           ("dac.c", ["DAC1/2 triangle", "UREF route"]), ("uart.c", ["UART2, PPS", "RX ISR, TX ring"]),
            ("timebase.c", ["Timer1", "stopwatch"]), ("led.c", ["LED0"])]
     hw = [("PLL1 / PLL2", ["PLL1 → ADC path", "PLL2 → CPU"]), ("ADC", ["core 5, AD5AN3", "(pin RA8)"]),
-          ("DMA0 · DMA1", ["ch. 0: ADC → RAM", "ch. 1: RAM → DAC"]), ("SCCP1 · SCCP2", ["CLKGEN13 160 MHz,", "peripheral 100 MHz"]),
+          ("DMA0/1 · DMA2", ["0+1: ADC → A/B", "2: RAM → DAC"]), ("SCCP1 · SCCP2", ["CLKGEN13 160 MHz,", "peripheral 100 MHz"]),
           ("DAC2", ["on CLKGEN7", "400 MHz → RA8"]), ("UART2", ["console", "(COM port)"]),
           ("Timer1", ["12.5 MHz", "on PLL2"]), ("LED0", ["heartbeat"])]
     d.append(band(778, 86, "hw", "Silicon", ["dsPIC33AK512", "MPS512"]))
@@ -310,11 +310,11 @@ def datapath():
     g.append('<text class="an" x="738" y="114">result</text>')
     g.append(box(200, 290, 200, 56, "cli.c", ["stream on <ksps> [core pinsel]"], "cli"))
     g.append(box(450, 290, 280, 56, "routing_apply()", ["→ acq_chain_setup_input()", "DMA off, cores off, clock, cores on, DMA anew"], "app"))
-    g.append(box(780, 290, 150, 56, "_DMA0Interrupt", ["dma.c · 42 instr."], "drv"))
+    g.append(box(780, 290, 150, 56, "_DMA0Interrupt", ["dma.c · + _DMA1Interrupt", "46 / 41 instr."], "drv"))
     g.append(box(980, 290, 170, 56, "dma0_event()", ["capture.c", "→ pingpong_on_half()"], "app"))
     g.append(box(200, 390, 200, 56, "adc_gui.py (host)", ["time signal, FFT, tri_eval"], "host", True))
     g.append(box(450, 390, 200, 56, "uart.c · UART2", ["GRAB header, data, CRC"], "drv"))
-    g.append(box(700, 390, 250, 56, "gui_link_stream_grab()", ["halt → completed half → frame_send()", "(sigproc on: processed first) → resume"], "cli"))
+    g.append(box(700, 390, 250, 56, "gui_link_stream_grab()", ["freeze a pair → frame_send()", "→ release; the stream runs on"], "cli"))
     g.append(box(980, 390, 170, 56, "capture_service()", ["main loop:", "sigproc_block() if on"], "app"))
     for p in ["M400 318 H450", "M855 164 V290", "M930 318 H980", "M1065 346 V390", "M980 418 H950",
               "M700 418 H650", "M450 418 H400", "M300 390 V346"]:

@@ -864,9 +864,11 @@ def board_svg(board_key, core, pinsel, dac_unit=0, dac_on=False):
 # clock_dac_hz() returns ADC_CLK_HZ outright) -- unlike CLKGEN6, so no
 # separate GUI control is needed for it.
 # ---------------------------------------------------------------------------
-# capture.h's SAMPLES_PER_HALF_MAX ('buf' takes 16..this, even); 1024 until
-# 01.10.2026
-BUF_HALF_MAX = 2048
+# capture.h's SAMPLES_PER_HALF_MAX ('buf' takes 16..this, even): 1024 - two
+# ping-pong pairs in the 8 KB since 01.10.2026 (2048 for one pair the same
+# morning). Only the default before connecting: the field takes the board's
+# own maximum from 'buf' then.
+BUF_HALF_MAX = 1024
 CPU_HZ = 200e6       # CLKGEN1 on PLL2 (clock.h), the CPU's clock once clock_init() ran
 DAC_CLK_HZ = 400e6   # CLKGEN7 on the PLL1 VCO divider (clock.c, 25.09.2026; was 320e6, below the DAC's spec)
 
@@ -1187,7 +1189,7 @@ class FakeTarget:
                 f"snap: {int(self.sg_snap)}", f"force: {int(self.sg_force)}",
                 f"table_min: {min(self.sg_table) if self.sg_on else 0}",
                 f"table_max: {max(self.sg_table) if self.sg_on else 0}",
-                f"dma1_stat: 0x{0x30 if self.sg_on else 0:08X}", f"dma1_on: {int(self.sg_on)}",
+                f"dma2_stat: 0x{0x30 if self.sg_on else 0:08X}", f"dma2_on: {int(self.sg_on)}",
                 f"transfers_per_s: {self.sg_play_actual if self.sg_on else 0}",
                 f"sccp2_flags: {3 if self.sg_on else 0}", "window_gap: 0"]
 
@@ -1422,7 +1424,10 @@ class FakeTarget:
             return parse_grab_frame(header_line, b"", tail)
 
         self.chain_grabs += 1
-        n = self.buf_size // 2
+        # since 01.10.2026 a grab is a whole ping-pong pair (ping + pong,
+        # buf_size samples), pairs A and B in turn - the stream moves on to
+        # the other pair instead of halting (capture.c, capture_pair_freeze())
+        n = self.buf_size
         frm = self.chain_ready_half * n
         self.chain_ready_half ^= 1
         ov, missed = self._board_limit_counters()
@@ -1540,7 +1545,7 @@ def selftest() -> int:
     assert ok, ("stream on", lines)
     ok, samples, meta = t.grab()
     r = chain_tri_eval([int(v) for v in samples])
-    ok_grab = (ok and len(samples) == t.buf_size // 2 and meta["from_"] == 0
+    ok_grab = (ok and len(samples) == t.buf_size and meta["from_"] == 0
               and meta["slpdat"] > 0 and chain_grid_ok(r))
     ok_all &= ok_grab
     print(f"grab (test triangle): {len(samples)} samples, from {meta['from_']}, "
@@ -1555,12 +1560,12 @@ def selftest() -> int:
     print(f"grab actual rate: {meta['ksps']} ksps (asked for 8000), used as FFT fs ->",
           "PASS" if ok_fs else "FAIL")
 
-    # The buffer alternates halves like ready_half does in capture.c - the
-    # second grab must land at the OTHER half (from > 0), not the same one.
+    # The grabs alternate between the two ping-pong pairs like capture.c's
+    # pair moves - the second grab must be the OTHER pair (from = one pair).
     ok2, samples2, meta2 = t.grab()
-    ok_from = ok2 and meta2["from_"] == t.buf_size // 2 and meta2["from_"] > 0
+    ok_from = ok2 and meta2["from_"] == t.buf_size and meta2["from_"] > 0
     ok_all &= ok_from
-    print(f"grab #2 from={meta2['from_']} (> 0, the other half):", "PASS" if ok_from else "FAIL")
+    print(f"grab #2 from={meta2['from_']} (> 0, the other pair):", "PASS" if ok_from else "FAIL")
 
     # A lost/repeated sample must fail the SAME grid check the firmware's
     # own tri_eval() uses - the fake target injects exactly what
@@ -1631,15 +1636,17 @@ def selftest() -> int:
     ok_b2, ln_b2 = t.cmd("buf 64")
     t.cmd("stream on 8000")
     okg, sg, _m = t.grab()
-    ok_buf = (not ok_b1 and ok_b2 and _parse_buf(ln_b2) == 128 and okg and len(sg) == 64)
+    # a grab is a whole ping-pong pair since 01.10.2026: both halves, 128
+    ok_buf = (not ok_b1 and ok_b2 and _parse_buf(ln_b2) == 128 and okg and len(sg) == 128)
     ok_all &= ok_buf
-    # the board's own maximum is read from 'buf': an older image (1024 per
-    # half) is not offered more, the current one 2048
+    # the board's own maximum is read from 'buf': an image with another
+    # maximum (2048 per half, the one-pair image of 01.10.2026 morning) is
+    # offered exactly that, the current one BUF_HALF_MAX
     t_old = FakeTarget(noise_std=3.0)
-    t_old.buf_half_max, t_old.buf_size = 1024, 2048
-    ok_max = query_buf_max(t_old) == 1024 and query_buf_max(FakeTarget()) == BUF_HALF_MAX
+    t_old.buf_half_max, t_old.buf_size = 2048, 4096
+    ok_max = query_buf_max(t_old) == 2048 and query_buf_max(FakeTarget()) == BUF_HALF_MAX
     ok_all &= ok_max
-    print(f"buf maximum read from the board (old image 1024, current {BUF_HALF_MAX}):",
+    print(f"buf maximum read from the board (other image 2048, current {BUF_HALF_MAX}):",
           "PASS" if ok_max else "FAIL")
     print(f"buf 64: refused while streaming, taken after stop -> total {_parse_buf(ln_b2)}, "
           f"grab n={len(sg) if okg else '-'}:", "PASS" if ok_buf else "FAIL")
@@ -1650,7 +1657,7 @@ def selftest() -> int:
     ok, lines = t.cmd("stream on 5000 3 5 0")
     assert ok, ("stream on (custom input)", lines)
     ok, samples, meta = t.grab()
-    ok_custom = ok and meta["slpdat"] == 0 and len(samples) == t.buf_size // 2
+    ok_custom = ok and meta["slpdat"] == 0 and len(samples) == t.buf_size
     ok_all &= ok_custom
     print(f"grab (custom input, core 3 pin 5): slp={meta['slpdat']} (expect 0) ->",
           "PASS" if ok_custom else "FAIL")
@@ -2383,7 +2390,7 @@ def main_gui(args):
             # ---- the signal generator (SG.6): siggen.c plays a wavegen
             # table through DMA channel 1 into a DAC, paced by SCCP2 ----
             with ui.card().classes("tile w-full rounded-xl p-4 gap-2"):
-                ui.label("signal generator · table -> DMA1 -> DAC").classes("card-title")
+                ui.label("signal generator · table -> DMA2 -> DAC").classes("card-title")
                 with ui.row().classes("w-full gap-2"):
                     sg_on_sel = ui.select({True: "on", False: "off"}, value=False,
                                           label="generator").props("dense outlined").classes("flex-grow")

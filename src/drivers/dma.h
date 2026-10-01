@@ -28,9 +28,32 @@
 void dma0_init(uint32_t trigger, const volatile void *src,
                volatile void *dst, uint32_t dst_bytes);
 
+/* Pair mode (01.10.2026): channels 0 and 1 as the hardware ping-pong pair
+ * (DS70005591D 13.4.11, p841) - channel 0 fills the ping half at `dst`,
+ * channel 1 the pong half right behind it, each `half_bytes` long, the
+ * hardware handing over between them without a lost sample (board,
+ * HARDWARE-LOG 01.10.2026: up to 16 MSPS). The address window covers
+ * FOUR halves from `dst` - the two ping-pong pairs A and B - so that
+ * dma0_pp_set_dst() can move a channel to the other pair. Each channel's
+ * DONE is handed to dma0_event() as DMA0_HALF (ping complete, channel 0)
+ * or DMA0_DONE (pong complete, channel 1), so the owner keeps one event
+ * routine for both modes. dma0_init() puts single-channel mode back. */
+void dma0_pp_init(uint32_t trigger, const volatile void *src,
+                  volatile void *dst, uint32_t half_bytes);
+
+/* Pair mode: point channel `ch` (0 = ping, 1 = pong) at `dst` for its
+ * next block. Only for the channel that is WAITING - channel 0 while
+ * channel 1 writes, i.e. from the ping-complete event to the
+ * pong-complete one, and channel 1 the other way round: a write to a
+ * running channel's DMAxDST moves its live pointer at once (board,
+ * 01.10.2026), a waiting channel simply starts there. */
+void dma0_pp_set_dst(uint32_t ch, volatile void *dst);
+
 /* Transactions left in the current block (DMA0CNT counts down and is
  * reloaded at the end of the block, RELOADC). With the block count this
- * gives the exact number of transfers so far. */
+ * gives the exact number of transfers so far. In pair mode the "block"
+ * is still the ping-pong pair: the pong channel's count while it runs,
+ * else the ping channel's plus a whole half. */
 uint32_t dma0_remaining(void);
 
 /* False once the channel switched itself off (address fault). */
@@ -58,7 +81,7 @@ void dma0_event(uint32_t status);
  * visits its three stand-in variables instead. */
 void dma0_regs_visit(reg_visit_t visit);
 
-/* ---- channel 1: the signal generator's transport (SG.1) - dma_tx.h ---- */
+/* ---- channel 2: the signal generator's transport (SG.1) - dma_tx.h ---- */
 #include "dma_tx.h"
 
 #endif /* DMA_H */

@@ -3,7 +3,7 @@
  * section SG, SG.3, 29.09.2026)
  *
  * Owns the table, the parameters and the running state. Touches no
- * register: lib/wavegen computes, dma.c (channel 1) transports, sccp.c
+ * register: lib/wavegen computes, dma.c (channel 2) transports, sccp.c
  * (SCCP2) paces, dac.c outputs, routing.c books the resources, timebase.c
  * times the status report's transfer-rate measurement.
  */
@@ -87,7 +87,7 @@ void siggen_stop(void)
 {
     if (!s_on) { return; }
     sccp2_stop();                     /* no trigger first ...            */
-    dma1_tx_stop();                   /* ... then the transport ...      */
+    dma_tx_stop();                   /* ... then the transport ...      */
     dac_off(s_dac);                   /* ... then the output             */
     routing_gen_release();
     s_on  = false;
@@ -148,13 +148,13 @@ siggen_result_t siggen_start(uint8_t dac, uint32_t n, uint32_t play_hz,
     if (first < SIGGEN_LO_DEFAULT) { first = SIGGEN_LO_DEFAULT; }
     if (first > SIGGEN_HI_DEFAULT) { first = SIGGEN_HI_DEFAULT; }
     if (!dac_level_start(dac, first)) { return SIGGEN_E_DAC_START; }
-    if (!dma1_tx_start(DMA_TRIG_SCCP2, table, n, dac_dma_target(dac), DMA_SIZE_16)) {
+    if (!dma_tx_start(DMA_TRIG_SCCP2, table, n, dac_dma_target(dac), DMA_SIZE_16)) {
         dac_off(dac);
         return SIGGEN_E_DMA;
     }
     if (!sccp2_start(ticks, (sccp2_pace_t)pace)) {
         sccp2_stop();
-        dma1_tx_stop();
+        dma_tx_stop();
         dac_off(dac);
         return SIGGEN_E_CLOCK;
     }
@@ -190,13 +190,13 @@ const char *siggen_result_name(siggen_result_t r)
     case SIGGEN_E_WAVEGEN:   return "wavegen refused the parameters";
     case SIGGEN_E_ROUTE:     return "routing refused: resource or DAC in use";
     case SIGGEN_E_DAC_START: return "DAC did not start";
-    case SIGGEN_E_DMA:       return "DMA channel 1 refused";
+    case SIGGEN_E_DMA:       return "DMA channel 2 refused";
     case SIGGEN_E_CLOCK:     return "SCCP2 refused the period";
     }
     return "?";
 }
 
-/* Transfers per second, measured: DMA1CNT counts down once per transfer
+/* Transfers per second, measured: DMA2CNT counts down once per transfer
  * and reloads at the end of the table, so two reads a known time apart
  * give the count between them - as long as fewer than n transfers fall
  * in the window, which is sized to about half a table (at least 50 us,
@@ -214,10 +214,10 @@ static uint32_t measure_tps(void)
     if (win > TIMEBASE_HZ / 100u)   { win = TIMEBASE_HZ / 100u; }
     sccp2_flags_clear();
     const uint32_t t0 = timebase_ticks();
-    const uint32_t c0 = dma1_tx_remaining();
+    const uint32_t c0 = dma_tx_remaining();
     uint32_t t1;
     do { t1 = timebase_ticks(); } while ((uint32_t)(t1 - t0) < (uint32_t)win);
-    const uint32_t c1 = dma1_tx_remaining();
+    const uint32_t c1 = dma_tx_remaining();
     s_flags = sccp2_flags_read();
     const uint32_t moved = (c0 >= c1) ? (c0 - c1) : (c0 + s_n - c1);
     return (uint32_t)(((uint64_t)moved * TIMEBASE_HZ) / (uint32_t)(t1 - t0));
@@ -243,8 +243,8 @@ void siggen_visit(siggen_visit_t visit)
     visit("force", s_force ? 1 : 0, SIGGEN_VIS_NUM);
     visit("table_min", s_on ? s_min : 0, SIGGEN_VIS_NUM);
     visit("table_max", s_on ? s_max : 0, SIGGEN_VIS_NUM);
-    visit("dma1_stat", dma1_tx_status(), SIGGEN_VIS_HEX);
-    visit("dma1_on", dma1_tx_enabled() ? 1 : 0, SIGGEN_VIS_NUM);
+    visit("dma2_stat", dma_tx_status(), SIGGEN_VIS_HEX);
+    visit("dma2_on", dma_tx_enabled() ? 1 : 0, SIGGEN_VIS_NUM);
     visit("transfers_per_s", measure_tps(), SIGGEN_VIS_NUM);
     /* Which SCCP2 event fired in that window - bit 0 the timer (CCT2IF),
      * bit 1 the IC/OC event (CCP2IF, the DMA's trigger, Table 13-2): the

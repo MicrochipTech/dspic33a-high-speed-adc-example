@@ -47,7 +47,7 @@ int main(void)
      * address; registering it turns that into the same "&dma_buffer+0x0"
      * form every other scenario uses (tests/trace/README.md's open point
      * on capture.c's static dma_buffer, closed the same way as `boot`'s). */
-    trace_region(capture_buffer(), SAMPLES_PER_BUF_MAX * sizeof(uint16_t), "dma_buffer");
+    trace_region(capture_buffer(), SAMPLES_PER_ALLOC * sizeof(uint16_t), "dma_buffer");   /* both ping-pong pairs */
 
     trace_point("before regs_dump()");
     regs_dump();

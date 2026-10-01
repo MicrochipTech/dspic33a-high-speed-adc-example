@@ -1,5 +1,5 @@
 /*
- * siggen.h - the signal generator: a wavegen table played by DMA channel 1
+ * siggen.h - the signal generator: a wavegen table played by DMA channel 2
  * into a DAC, paced by SCCP2, with no CPU involvement while it plays
  * (siggen.c; docs/IMPLEMENTATION-PLAN.md section SG, requirement A2 of
  * docs/DESIGN-MULTICHANNEL.md).
@@ -11,11 +11,11 @@
  * hold all of them at once) and take effect with the next siggen_start().
  *
  * No register and no device header here: the table goes through
- * lib/wavegen, the transport through dma.c (channel 1), the clock through
+ * lib/wavegen, the transport through dma.c (channel 2), the clock through
  * sccp.c (SCCP2), the output through dac.c, the resource claim through
  * routing.c. What a start does, in this order: check the parameters and
  * the claim (nothing touched on a refusal), fill the table, the DAC to a
- * static level at table[0], DMA channel 1 armed on the DAC's data half,
+ * static level at table[0], DMA channel 2 armed on the DAC's data half,
  * SCCP2 started - the first trigger then moves the first entry. Stop is
  * the reverse.
  */
@@ -54,7 +54,7 @@ typedef enum {
     SIGGEN_E_WAVEGEN,    /* wavegen_fill() refused - siggen_wavegen_err() */
     SIGGEN_E_ROUTE,      /* routing refused the claim - siggen_route_err() */
     SIGGEN_E_DAC_START,  /* dac_level_start() refused                   */
-    SIGGEN_E_DMA,        /* dma1_tx_start() refused                     */
+    SIGGEN_E_DMA,        /* dma_tx_start() refused                     */
     SIGGEN_E_CLOCK       /* sccp2_start() refused                       */
 } siggen_result_t;
 
@@ -93,7 +93,7 @@ const char *siggen_result_name(siggen_result_t r);
  *   SIGGEN_VIS_HEX  name = key, v = value (hex)
  * In this order: on, dac, n, play_hz (set), play_hz_actual, pace, f0, f0_used
  * (DEC), h2..h7, decay, amp (DEC), lo, hi, snap, force, table_min,
- * table_max, dma1_stat (HEX), dma1_on, transfers_per_s (measured over a
+ * table_max, dma2_stat (HEX), dma2_on, transfers_per_s (measured over a
  * few ms while running, 0 otherwise), sccp2_flags (bit 0 CCT2IF, bit 1
  * CCP2IF rose in that window), window_gap. */
 typedef enum { SIGGEN_VIS_NUM, SIGGEN_VIS_DEC, SIGGEN_VIS_HEX } siggen_vis_fmt_t;
