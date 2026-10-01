@@ -35,7 +35,8 @@ Modes
   --settings F  settings file, read at start-up and written by "save"
                 (default: adc_gui_settings.json next to this script). Every
                 control on the page is in it, so a session survives a
-                restart; "save as" and "load as" name a different file. An
+                restart; "save as" and the setup list's "from a file ..." name
+                a different file, its other entries are ready-made setups. An
                 older file (from before 25.09.2026, with "pll"/"sweep"/
                 "capture" keys) still loads - those keys are simply not
                 read any more.
@@ -101,7 +102,8 @@ import wavegen_model  # noqa: E402
 #
 # Every control on the page has its value here, so a session can be put
 # down and picked up: the file is read at start-up, "save" writes the
-# controls back to it, "save as" and "load as" name a different one. The
+# controls back to it, "save as" and the setup list's "from a file ..."
+# name a different one. The
 # built-in defaults below are the fallback for a missing file and for
 # any key a file does not carry, so an old or hand-edited file still loads.
 # ---------------------------------------------------------------------------
@@ -182,6 +184,99 @@ SETTINGS_DEFAULTS = {
     "fake": {"source": "dac2", "signal_khz": 100.0, "amplitude": 1500.0,
              "noise": 6.0, "harmonic2": 150.0, "harmonic3": 0.0},
 }
+
+
+# ---------------------------------------------------------------------------
+# Ready-made setups for the "setup" list in the settings card. Each one is a
+# partial settings dict, laid over the page's current state (settings_merge),
+# so it only touches what it names: the input, the rate, the DACs, the
+# signal generator, the trigger and the fake target's source. Every DAC
+# setup reads its own pin through a custom input (DAC1 = RA1 = core 5 /
+# PINSEL 1, DAC2 = RA8 = core 5 / PINSEL 3), except the first, which is the
+# firmware's own test triangle. The triangles start at 0x400, above the
+# ~780 the board's DAC does not follow below. Triangle periods: dac_period_ns_of() -
+# (high - low) x 32 DAC clocks / SLPDAT at 400 MHz. The generator setups stay
+# in 800..3500 (the board's DAC does not follow below about code 780,
+# HARDWARE-LOG 29.09.2026) and at <= 200 000 entries/s (settling 0.75-2 us
+# per step); their shapes come from the harmonic factors h2..h7 alone: the
+# Fourier series of a square (odd, 1/k), a sawtooth (alternating, 1/k), a
+# triangle (odd, alternating, 1/k^2), a pulse train (all equal).
+# ---------------------------------------------------------------------------
+_SG_OFF = {"on": False}
+_DAC_OFF = {"on": False}
+_DAC_PINSEL = {1: 1, 2: 3}       # DACOUT1 = RA1 = AD5AN1, DACOUT2 = RA8 = AD5AN3
+
+
+def _tri_setup(unit, low, high, slp, ksps):
+    """A triangle on one DAC, read on its own pin; the other DAC off."""
+    return {
+        "acquisition": {"mode": "custom", "ksps": ksps, "core": 5, "pinsel": _DAC_PINSEL[unit], "samc": 0},
+        "view": {"dac_source": unit},
+        "siggen": _SG_OFF,
+        "dac": {str(unit): {"on": True, "low": low, "high": high, "slpdat": slp, "force": True},
+                str(3 - unit): {"on": "auto" if unit == 1 else False}},
+        "trigger": {"on": True, "level": (low + high) // 2, "slope": "rising", "hyst": 16},
+        "fake": {"source": f"dac{unit}"},
+    }
+
+
+def _sg_setup(h, f0=2000.0, n=1000, play=200000, decay=0.0, dac=2, ksps=1000, trig=True,
+              trig_level=2150):
+    """The signal generator on one DAC, read on its pin; the DAC cards off
+    ('auto' for DAC2) - an 'on' there would replace the generator."""
+    return {
+        "acquisition": {"mode": "custom", "ksps": ksps, "core": 5, "pinsel": _DAC_PINSEL[dac], "samc": 0},
+        "view": {"dac_source": dac},
+        "siggen": {"on": True, "dac": dac, "n": n, "play_hz": play, "f0": f0,
+                   "h": [float(h.get(k, 0.0)) for k in range(2, 8)],
+                   "decay": decay, "amp": 1.0, "lo": 800, "hi": 3500, "snap": True, "force": True},
+        "dac": {"1": _DAC_OFF, "2": {"on": "auto"}},
+        "trigger": {"on": trig, "level": trig_level, "slope": "rising", "hyst": 32},
+        "fake": {"source": "sine"},
+    }
+
+
+SETUPS = {
+    "tri_test": ("DAC2 triangle - firmware test signal (test input, 8 MSPS)", {
+        "acquisition": {"mode": "test", "ksps": 8000},
+        "siggen": _SG_OFF,
+        "dac": {"1": _DAC_OFF, "2": {"on": "auto"}},
+        "trigger": {"on": False},
+        "fake": {"source": "dac2"},
+    }),
+    "tri_slow": ("DAC2 triangle - slow, 0x400..0xE00, SLPDAT 1, 4.9 kHz (1 MSPS)",
+                 _tri_setup(2, 0x400, 0xE00, 1, 1000)),
+    "tri_35k": ("DAC2 triangle - 0x400..0xF00, SLPDAT 8, 35 kHz (8 MSPS)",
+                _tri_setup(2, 0x400, 0xF00, 8, 8000)),
+    "tri_fast": ("DAC2 triangle - small and fast, 512 codes, SLPDAT 16, 390 kHz (8 MSPS)",
+                 _tri_setup(2, 0x700, 0x900, 16, 8000)),
+    "tri_dac1": ("DAC1 triangle - RA1, 0x400..0xE00, SLPDAT 4, 19.5 kHz (4 MSPS)",
+                 _tri_setup(1, 0x400, 0xE00, 4, 4000)),
+    "sg_sine": ("generator - sine 2 kHz on DAC2 (1 MSPS)", _sg_setup({})),
+    "sg_loop": ("generator - 1 kHz + 3rd harmonic 0.3 (the loop preset)",
+                _sg_setup({3: 0.3}, f0=1000.0, n=1000, play=100000)),
+    "sg_square": ("generator - square-like, odd harmonics 1/k, 2 kHz",
+                  _sg_setup({3: 1 / 3, 5: 1 / 5, 7: 1 / 7})),
+    "sg_saw": ("generator - sawtooth-like, harmonics +-1/k, 2 kHz",
+               _sg_setup({2: -1 / 2, 3: 1 / 3, 4: -1 / 4, 5: 1 / 5, 6: -1 / 6, 7: 1 / 7})),
+    "sg_tri": ("generator - triangle from harmonics, odd +-1/k^2, 2 kHz",
+               _sg_setup({3: -1 / 9, 5: 1 / 25, 7: -1 / 49})),
+    "sg_pulse": ("generator - pulse train, h2..h7 = 1, 2 kHz",
+                 _sg_setup({k: 1.0 for k in range(2, 8)})),
+    "sg_decay": ("generator - damped 2 kHz, decay 300/s, 10 ms table (100 kSPS)",
+                 _sg_setup({}, n=2000, decay=300.0, ksps=100, trig=False)),
+    # 50 kHz, h2..h4, played at the generator's 1 MHz maximum (20 entries a
+    # period, 5 at h4); decay 5000/s leaves 0.7 % after 1 ms, so the first
+    # half of the 2 ms table holds the whole decay and the second is quiet.
+    # 500 kSPS: one grab (1024) spans the table, the triggered window (512
+    # samples = 1 ms) the decay; level 3200 is only crossed near the start.
+    "sg_decay50k": ("generator - 50 kHz + h2/h3/h4, decaying to zero within 1 ms (500 kSPS)",
+                    _sg_setup({2: 0.3, 3: 0.2, 4: 0.1}, f0=50000.0, n=2000, play=1000000,
+                              decay=5000.0, ksps=500, trig_level=3200)),
+    "sg_dac1": ("generator - sine 5 kHz on DAC1 / RA1 (1 MSPS)",
+                _sg_setup({}, f0=5000.0, dac=1)),
+}
+SETUP_FROM_FILE = "__file__"
 
 
 def settings_merge(base, over):
@@ -769,6 +864,7 @@ def board_svg(board_key, core, pinsel, dac_unit=0, dac_on=False):
 # clock_dac_hz() returns ADC_CLK_HZ outright) -- unlike CLKGEN6, so no
 # separate GUI control is needed for it.
 # ---------------------------------------------------------------------------
+CPU_HZ = 200e6       # CLKGEN1 on PLL2 (clock.h), the CPU's clock once clock_init() ran
 DAC_CLK_HZ = 400e6   # CLKGEN7 on the PLL1 VCO divider (clock.c, 25.09.2026; was 320e6, below the DAC's spec)
 
 
@@ -1730,6 +1826,30 @@ def selftest() -> int:
     print("siggen: set/on/off against the stand-in, status parsed:", "PASS" if ok_sg else "FAIL",
           f"- {lines[-1]!r}, play {st.get('play_hz_actual')}, f0_used {st.get('f0_used')}")
 
+    # every ready-made setup: merges onto the standard, its generator lines
+    # fit the console, its triangle has a period, its input reads its DAC
+    ok_su = True
+    for _key, (_name, _ov) in SETUPS.items():
+        _c = settings_merge(SETTINGS_DEFAULTS, _ov)
+        _sg = _c["siggen"]
+        _sp = dict(on=_sg["on"], dac=_sg["dac"], n=_sg["n"], play=_sg["play_hz"], f0=_sg["f0"],
+                   h={k: _sg["h"][k - 2] for k in range(2, 8)}, decay=_sg["decay"], amp=_sg["amp"],
+                   lo=_sg["lo"], hi=_sg["hi"], snap=_sg["snap"], force=_sg["force"])
+        _good = siggen_plan(_sp)[1] is None and 1 <= _c["acquisition"]["ksps"] <= 40000
+        if _c["acquisition"]["mode"] == "custom":
+            _src = _sg["dac"] if _sg["on"] else _c["view"]["dac_source"]
+            _good &= (_c["acquisition"]["core"], _c["acquisition"]["pinsel"]) == (5, _DAC_PINSEL[_src])
+        for _u in ("1", "2"):
+            _d = _c["dac"][_u]
+            if _d["on"] is True:
+                _good &= dac_period_ns_of(_d["low"], _d["high"], _d["slpdat"]) > 0
+                _good &= not (_sg["on"] and str(_sg["dac"]) == _u)
+        if not _good:
+            print(f"  setup {_key!r} inconsistent")
+        ok_su &= _good
+    ok_all &= ok_su
+    print(f"setups: {len(SETUPS)} ready-made setups consistent:", "PASS" if ok_su else "FAIL")
+
     # a line the console cannot hold is refused by the sender, not cut
     long_p = dict(sgp, h={**sgp["h"], 2: 1e60})
     _, bad_long = siggen_plan(long_p)
@@ -1880,6 +2000,13 @@ def main_gui(args):
     # and cleared by 'stream off' or by a failed grab, so the next cycle
     # knows to send 'stream on' again.
     port_lock = asyncio.Lock()
+
+    async def port_cmd(t, line):
+        """t.cmd(line) off the event loop. run.io_bound() returns None, not
+        the (ok, lines) pair, when its task is cancelled or the app is
+        stopping (NiceGUI 3.x) - reported here as not sent."""
+        res = await run.io_bound(t.cmd, line)
+        return res if res is not None else (False, ["not sent (cancelled)"])
     state = dict(target=None, live=False, busy=False, cycles=0, grabs=0,
                  acq_active=None, test_dac2=None, live_t0=None, buf_size=2048,
                  settings_path=args.settings, remote_bench=None)
@@ -2082,8 +2209,9 @@ def main_gui(args):
                 with ui.row().classes("w-full gap-2"):
                     save_btn = ui.button("save", icon="save").props("unelevated dense").classes("flex-grow")
                     save_as_btn = ui.button("save as", icon="save_as").props("outline dense").classes("flex-grow")
-                    load_as_btn = ui.button("load as", icon="folder_open").props("outline dense").classes("flex-grow")
                     std_btn = ui.button("standard", icon="restart_alt").props("outline dense").classes("flex-grow")
+                setup_sel = ui.select({k: v[0] for k, v in SETUPS.items()} | {SETUP_FROM_FILE: "from a file ..."},
+                                      value=None, label="setup").props("dense outlined").classes("w-full")
                 settings_msg_lbl = ui.label().classes("text-xs text-slate-400 mono")
 
             with ui.card().classes("tile w-full rounded-xl p-4 gap-2"):
@@ -2251,9 +2379,11 @@ def main_gui(args):
 
         # ---- right: results ----
         with ui.column().classes("flex-grow gap-4"):
-            with ui.row().classes("w-full items-center gap-2"):
-                cyc_lbl = ui.label("no grab yet").classes("text-slate-300 mono")
-                ui.space()
+            # The grab line on a row of its own, the chips below it: its
+            # length changes from grab to grab, and sharing a row made that
+            # row wrap now and then, moving the charts below up and down.
+            cyc_lbl = ui.label("no grab yet").classes("text-slate-300 mono")
+            with ui.row().classes("w-full items-center gap-2 -mt-3"):
                 COUNTER_TIPS = {
                     "overrun": "DMA overruns since the PREVIOUS grab, not a running total - a "
                                "lower bound, as always: OVERRUN is one bit in DMA0STAT and the "
@@ -2490,8 +2620,11 @@ def main_gui(args):
         (save_btn, "Write every setting on this page back to the settings file named above."),
         (save_as_btn, "Write the settings to a file you name, without changing which file the "
                       "page started from."),
-        (load_as_btn, "Read settings from a file you name and put them on the page. Keys the "
-                      "file does not carry keep their built-in default."),
+        (setup_sel, "A ready-made setup: input, rate, DACs, signal generator and trigger in one "
+                    "choice - the DAC triangles read their own pin through a custom input, the "
+                    "generator setups play their table on DAC2 (or DAC1) into core 5. Applied at "
+                    "once, to the board too when connected; everything else stays. 'from a file "
+                    "...' reads a settings file you name (keys it lacks keep the standard)."),
         (rate_in, "The chain's sample rate: 'stream on <ksps> ...' - the nearest 160 MHz / N "
                   "(CLKGEN13) is what actually runs, and the frame's own 'ksps' (shown as 'actual "
                   "rate' once a grab has come in) is what the charts use as fs. The label "
@@ -2783,7 +2916,35 @@ def main_gui(args):
 
     save_btn.on_click(lambda e: do_save())
     save_as_btn.on_click(lambda e: ask_path("save settings as", do_save, "save"))
-    load_as_btn.on_click(lambda e: ask_path("load settings from", do_load, "load"))
+
+    async def do_setup(e):
+        """The setup list: a ready-made setup laid over the page, or a file."""
+        key = e.value
+        if key is None:
+            return
+        if key == SETUP_FROM_FILE:
+            setup_sel.set_value(None)
+            ask_path("load settings from", do_load, "load")
+            return
+        name, overlay = SETUPS[key]
+        settings_apply(settings_merge(settings_collect(), overlay))
+        # settings_apply() set off the cards' own debounced senders; one
+        # ordered sequence instead: stream off, generator, DACs, a grab
+        for pend in list(dac_pending.values()) + list(sg_pending.values()):
+            if pend and not pend.done():
+                pend.cancel()
+        settings_msg_lbl.text = f"setup: {name}"
+        if not state["target"]:
+            return
+        while state["busy"]:
+            await asyncio.sleep(0.05)
+        await stop_stream()
+        await apply_siggen()
+        for u in sorted(dac_ui):
+            if dac_mode(u) == "off":
+                await send_dac(u)
+        if not state["live"]:              # LIVE starts the new chain itself
+            await do_single()
 
     def do_standard():
         """Every value back to adc_gui_defaults.json - the file path stays,
@@ -3123,7 +3284,7 @@ def main_gui(args):
             slp = int(c["slp"].value or 0)
             cmd = f"dac {unit} on {low} {high} {slp}" + (" force" if c["force"].value else "")
         async with port_lock:
-            ok, lines = await run.io_bound(t.cmd, cmd)
+            ok, lines = await port_cmd(t, cmd)
         if ok and unit == 2 and (state["acq_active"] or {}).get("mode") == "test":
             state["test_dac2"] = (low, high, slp) if dac_mode(2) == "on" else "off"
         c["msg"].text = "   ".join(lines) if lines else (f"dac{unit} applied" if ok else f"dac{unit} refused")
@@ -3171,6 +3332,9 @@ def main_gui(args):
 
         async def later():
             await asyncio.sleep(0.8)
+            # past the wait: off the pending list, so a later change cannot
+            # cancel it halfway through its commands (it queues behind it)
+            dac_pending.pop(unit, None)
             await apply_dac(unit)
         dac_pending[unit] = asyncio.ensure_future(later())
     for _u in sorted(dac_ui):
@@ -3244,7 +3408,7 @@ def main_gui(args):
             state["acq_active"] = None
         async with port_lock:
             for x in lines:
-                ok, reply = await run.io_bound(t.cmd, x)
+                ok, reply = await port_cmd(t, x)
                 if not ok:
                     break
         if not ok:
@@ -3281,6 +3445,7 @@ def main_gui(args):
 
         async def later():
             await asyncio.sleep(0.8)
+            sg_pending.pop("t", None)      # past the wait: see dac_changed()
             await apply_siggen()
         sg_pending["t"] = asyncio.ensure_future(later())
     for _el in [sg_on_sel, sg_dac_sel, sg_n_in, sg_play_in, sg_f0_in, sg_decay_in, sg_amp_in,
@@ -3340,7 +3505,7 @@ def main_gui(args):
             if state["acq_active"] is not None:
                 await run.io_bound(t.cmd, "stream off")
                 state["acq_active"] = None
-            ok, lines = await run.io_bound(t.cmd, f"buf {half}")
+            ok, lines = await port_cmd(t, f"buf {half}")
         got = _parse_buf(lines)
         if ok and got is not None:
             state["buf_size"] = got
@@ -3392,7 +3557,7 @@ def main_gui(args):
         cmd = (f"stream on {cfg['ksps']}" if cfg["mode"] == "test"
                else f"stream on {cfg['ksps']} {cfg['core']} {cfg['pinsel']} {cfg['samc']}")
         async with port_lock:
-            ok, lines = await run.io_bound(t.cmd, cmd)
+            ok, lines = await port_cmd(t, cmd)
         if not ok:
             cycle_failed("stream on refused: " + " ".join(lines))
             return False
@@ -3416,7 +3581,8 @@ def main_gui(args):
             if not await ensure_streaming():
                 return
             async with port_lock:
-                ok, samples, meta = await run.io_bound(t.grab)
+                res = await run.io_bound(t.grab)
+                ok, samples, meta = res if res is not None else (False, None, {"error": "cancelled"})
             if not ok:
                 cycle_failed("grab failed: " + meta.get("error", "unknown"))
                 state["acq_active"] = None        # the board says it is not streaming any more
@@ -3518,8 +3684,12 @@ def main_gui(args):
             if state["live"] and state["grabs"] >= 2 and now > state["live_t0"]:
                 rate_txt = f"   {(state['grabs'] - 1) / (now - state['live_t0']):.2f} grabs/s"
             cyc_lbl.classes(replace="text-slate-300 mono")
+            # the CPU's budget per sample: CLKGEN1 = PLL2 = 200 MHz (clock.h)
+            # over the frame's actual rate
+            cyc_txt = (f"   {CPU_HZ / (meta['ksps'] * 1e3):.1f} CPU cycles/sample"
+                       if meta["ksps"] else "")
             cyc_lbl.text = (f"grab {state['cycles']}   n={len(samples)}   from={meta['from_']}   "
-                            f"{meta['ksps']} kSPS actual{rate_txt}")
+                            f"{meta['ksps']} kSPS actual{cyc_txt}{rate_txt}")
             for k in ("overrun", "late", "missed"):
                 set_chip(k, meta[k])
             rate_chip.text = f"actual rate {meta['ksps']} kSPS"
@@ -3621,6 +3791,7 @@ def main_gui(args):
             single_btn.disable()
             asyncio.create_task(live_loop())
     live_btn.on_click(toggle_live)
+    setup_sel.on_value_change(do_setup)
 
     if args.fake or args.port or args.remote:
         ui.timer(0.5, do_connect, once=True)

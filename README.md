@@ -1011,7 +1011,15 @@ reads **`tools/adc_gui_defaults.json`** - the standard, tracked in git, every ke
 its default - and then **`tools/adc_gui_settings.json`** on top of it, the user's own
 state (git-ignored; "save" writes it, a key it lacks keeps the standard's value).
 **standard** in the settings tile puts every value back to the standard file; "save
-as" / "load as" name another file; `--settings <file>` starts with one.
+as" writes another file, and the **setup** list's last entry, "from a file ...", reads
+one; `--settings <file>` starts with one. The list's other entries are ready-made setups
+(`SETUPS` in `adc_gui.py`), applied at once and to the board when connected: the
+firmware's test triangle; four DAC triangles (DAC2 slow / 35 kHz / 390 kHz small swing,
+DAC1 on RA1), each read on its own pin through a custom input on core 5; and eight
+signal-generator shapes on DAC2 (sine, 1 kHz + h3 as in the loop preset, square-,
+sawtooth- and triangle-like from their harmonic series, pulse train, a damped tone, a 50 kHz tone with h2..h4 that decays to zero within 1 ms) plus
+a sine on DAC1. A setup only sets what it names - input, rate, DACs, generator, trigger -
+the rest of the page stays.
 
 | Key | What it sets |
 |---|---|
