@@ -32,7 +32,11 @@ static void uart2_setup(uint32_t brg)
 static void uart_pins_up(void)
 {
     /* Pins: TX output, RX input (board.h). Peripheral pin select needs
-     * IOLOCK cleared. */
+     * IOLOCK cleared. A board whose RX line can float (board.h) gets
+     * the internal pull-up first. */
+#ifdef CONSOLE_RX_PULLUP
+    CONSOLE_RX_PULLUP = 1u;
+#endif
     CONSOLE_TX_TRIS  = 0u;
     CONSOLE_RX_TRIS  = 1u;
     RPCONbits.IOLOCK = 0u;

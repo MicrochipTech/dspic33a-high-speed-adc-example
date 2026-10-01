@@ -124,6 +124,13 @@
 #define CONSOLE_TX_RPOR   _RP43R
 #define CONSOLE_TX_FN     21u             /* RP43 (RC10) <- U2TX */
 #define CONSOLE_PORT_NAME "UART2 on the debugger's CDC channel (RC10/RC11)"
+/* The debugger drives its CDC TX line (our RX, RC11) only while a
+ * terminal holds the COM port open with DTR, and the board has no pull-up
+ * on it - the user guide recommends the internal one against framing
+ * errors from the floating line (DS70005634A 3.1.3.4). CNPUC bit 11,
+ * DS70005591D 11.3.8, p642. Only this board defines it; uart.c sets it
+ * under #ifdef. */
+#define CONSOLE_RX_PULLUP CNPUCbits.CNPUC11
 /* For the register dump: RPOR10 holds RP41..44 (RP43R in bits 22:16, ATDF),
  * RPINR13 holds U2RXR; both console pins are on port C. */
 #define CONSOLE_TX_TRIS_WORD  TRISC
