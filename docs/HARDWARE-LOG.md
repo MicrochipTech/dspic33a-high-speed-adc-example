@@ -1948,3 +1948,22 @@ streaming, `siggen on 2` is refused (DAC2 busy). Fixed in 86f4753 (a DAC the gen
 plays on is not sent by itself; switching the generator on stops the test stream first).
 After the fix, **loop preset** + **live** showed the generator on the board (user: "geht").
 Firmware unchanged, still 7b16260; not repeated: the fail-8 hunt.
+
+## 2026-10-01, DMA buffer 2 x 2048 samples on the board - siggen 96e528c, local (COM26)
+
+Flashed by `ipecmd -TPPKOB4 -P33AK512MPS512 -M -F build/adc_dma_40msps.hex -OL` (Program
+Succeeded), built clean from 96e528c (94e36d8's `SAMPLES_PER_HALF_MAX` 2048 + the GUI's
+buffer limit read from the board). Trigger for the flash: the GUI offered 4096 while the
+board still ran an image from before 94e36d8 and refused `buf 2000` ("16..1024").
+
+- `version`: `git 96e528c (siggen)`, EV74H48A.
+- `buf`: samples per half 2048, maximum 2048; `buf 2048` accepted.
+- `status`: stack_size 25428, stack_used 444 (98 % free), buf_len 8192, buf_guard_ok 1.
+- `stream on 1000` (test triangle on RA8), three `stream grab`: 2048 samples each, 0.42-0.43 s
+  per grab over 115200 baud, late 0; `missed` 12 in the first grab (275 halves since
+  `stream on`, the 0.5 s before it included), 0 in the next two; the triangle passed the
+  grid check (`eval_chain.grid_ok`) in all three. `stream off` restored.
+
+Not run: rates above 1 MSPS with the larger buffer, `chain all`/`test all` (whether
+`tri_eval`'s TP_MAX = 160 turning points is enough for a 4096-sample window), the GUI's
+LIVE cycle on the new image.
