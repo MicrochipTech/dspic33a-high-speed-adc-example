@@ -97,6 +97,35 @@ is the one place to edit either text - do not duplicate it in board_run.py.
   judges only the data path (CRC, counters, frame shape), never SNR/THD.**
 <!-- BOARD_RUN_CHECKLIST:END -->
 
+## Hardware set-up for the Curiosity Nano (EV17P63A, `--board EV17P63A`)
+
+Run `tools\board_run.bat --board EV17P63A`: it takes `A-EV17P63A-*.hex` /
+`B-EV17P63A-*.hex` from this folder (none committed yet), reads R5 from the
+Nano's own input, and - when the Nano's `CURIOSITY` drive is found - offers to
+program each image by copying it onto that drive and resets the target through
+it after a timeout. None of this has run on a Nano yet.
+
+<!-- BOARD_RUN_CHECKLIST_EV17P63A:BEGIN
+Parsed by tools/board_run.py --board EV17P63A, like the section above.
+-->
+- The EV17P63A (dsPIC33AK512MPS506 Curiosity Nano) is connected to the PC by
+  one USB-C cable - nothing else. It powers the board, programs it (the
+  debugger's `CURIOSITY` drive) and carries the console as "Curiosity Virtual
+  COM Port", 115200 8N1 (DS70005634A 3.1.3, 3.1.4). `board_run.bat --list`
+  marks the likely console port.
+- Target voltage 3.3 V, the factory setting (the debugger allows 3.0 to 3.6 V,
+  DS70005634A 3.2.1) - do not change it in MPLAB X for this run.
+- No MPLAB X debug session on the Nano while the run goes.
+- R2-R4 need NO external wiring: DAC2 drives RA8 = AD5AN3 (edge connector,
+  right row, position 10) and the chain reads it back there. Leave RA8
+  unconnected.
+- R5 reads the Nano's own input, core 1 / `pinsel` 0 = AD1AN0 = RA2 (edge
+  connector, right row, position 8). If you have a signal generator, connect
+  it to RA2 and GND (right row, position 5 or 15), 0 to 3.3 V, and answer the
+  runner's prompt afterwards; without one, leave RA2 open - R5 still checks
+  the data path.
+<!-- BOARD_RUN_CHECKLIST_EV17P63A:END -->
+
 **Not confirmed on the board (to confirm on the board):**
 - Jumper positions: no jumper is documented anywhere in this repository for
   the EV74H48A + MPS512 DIM combination (`README.md`, `docs/HARDWARE-LOG.md`

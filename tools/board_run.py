@@ -127,6 +127,7 @@ import numpy as np  # noqa: E402
 import protocol  # noqa: E402
 import remote  # noqa: E402  (--remote: RemoteBench over bench_client's flash/tunnel requests)
 import eval_board  # noqa: E402  (BR.2: the one place summary.txt's content is built)
+import boards  # noqa: E402  (--board: each board's own default input for R5)
 from eval_chain import tri_eval as chain_tri_eval  # noqa: E402
 from eval_chain import grid_ok as chain_grid_ok  # noqa: E402
 from eval_chain import synth as chain_synth  # noqa: E402
@@ -141,6 +142,70 @@ BOARD_RUN_DIR = os.path.join(REPO_ROOT, "board_run")
 README_PATH = os.path.join(BOARD_RUN_DIR, "README.md")
 CHECKLIST_BEGIN = "BOARD_RUN_CHECKLIST:BEGIN"
 CHECKLIST_END = "BOARD_RUN_CHECKLIST:END"
+
+# ---------------------------------------------------------------------------
+# --board (01.10.2026): which board is attached. EV74H48A stays the default,
+# so every call without --board means what it meant before. The board picks
+# the hex files (A-<board>-*.hex), the checklist section in board_run/
+# README.md and R5's default input (tools/boards.py's own default_core/
+# default_pinsel). EV17P63A (the Curiosity Nano) has no RESET button and no
+# PKOB4: its debugger shows a USB drive, CURIOSITY, which programs a HEX
+# file copied onto it and resets the target on a text file "CMD:RESET"
+# (DS70005634A 3.1.4) - curiosity_drive()/nano_copy()/nano_reset() below.
+# Not yet tried on a Nano.
+# ---------------------------------------------------------------------------
+BOARD_DEFAULT = "EV74H48A"
+BOARDS_KNOWN = ("EV74H48A", "EV17P63A")
+NANO_BOARD = "EV17P63A"
+
+
+def checklist_markers(board):
+    """The EV74H48A keeps the section markers it always had; any other
+    board has its own pair, BOARD_RUN_CHECKLIST_<board>:BEGIN/END."""
+    if board == BOARD_DEFAULT:
+        return CHECKLIST_BEGIN, CHECKLIST_END
+    return f"BOARD_RUN_CHECKLIST_{board}:BEGIN", f"BOARD_RUN_CHECKLIST_{board}:END"
+
+
+def r5_input_for(board):
+    """R5's default (core, pinsel): the board's own measurement input from
+    tools/boards.py - 3/5 (mikroBUS A AN) on the EV74H48A, 1/0 (RA2) on the
+    Nano."""
+    b = boards.BOARDS[board]
+    return b["default_core"], b["default_pinsel"]
+
+
+def curiosity_drive(roots=None):
+    """The root of the Curiosity Nano debugger's USB drive, or None: the
+    drive whose KIT-INFO.TXT names the MPS506 (DS70005634A 3.1.4 - the file
+    carries the board name and device). Anything else - no such drive, a
+    KIT-INFO.TXT of another kit - is None, and the caller falls back to
+    asking a person."""
+    if roots is None:
+        roots = [f"{c}:\\" for c in "DEFGHIJKLMNOPQRSTUVWXYZ"] if os.name == "nt" else []
+    for root in roots:
+        path = os.path.join(root, "KIT-INFO.TXT")
+        try:
+            if os.path.isfile(path):
+                with open(path, encoding="ascii", errors="replace") as f:
+                    if "MPS506" in f.read().upper():
+                        return root
+        except OSError:
+            continue
+    return None
+
+
+def nano_copy(drive, hex_path):
+    """Program the Nano: copy the HEX file onto its CURIOSITY drive."""
+    with open(hex_path, "rb") as src, open(os.path.join(drive, os.path.basename(hex_path)), "wb") as dst:
+        dst.write(src.read())
+
+
+def nano_reset(drive):
+    """Reset the Nano's target: a text file whose content is CMD:RESET
+    (the name does not matter, DS70005634A Table 3-3)."""
+    with open(os.path.join(drive, "RESET.TXT"), "w", encoding="ascii") as f:
+        f.write("CMD:RESET\n")
 
 # ---------------------------------------------------------------------------
 # Per-block timeouts - see the module docstring for the budget arithmetic.
@@ -357,8 +422,15 @@ def handle_timeout(target, log, block, ui, remote=False):
         ui.say(f"{block}: no reply within the timeout - resetting the board through the "
                "programmer (re-flash if that fails)")
         log.ev(block, "reset: remote programmer reset")
+    elif getattr(ui, "board_reset", None) is not None:
+        # --board EV17P63A with its CURIOSITY drive found: no button to ask for
+        ui.say(f"{block}: no reply within the timeout - resetting the target through "
+               "the debugger's drive (CMD:RESET)")
+        ui.board_reset()
+        log.ev(block, "reset: CMD:RESET on the CURIOSITY drive")
     else:
-        ui.say(f"{block}: no reply within the timeout - press RESET on the board, then ENTER")
+        ui.say(f"{block}: no reply within the timeout - "
+               f"{getattr(ui, 'reset_text', 'press RESET on the board')}, then ENTER")
         ui.prompt("")
         log.ev(block, "reset requested")
     banner = read_reset_banner(target, log, block)
@@ -738,16 +810,19 @@ def prepare_hex(path, which, ui):
     return dict(which=which, path=os.path.abspath(path), sha256=digest, sha256_status=status)
 
 
-def find_hex(board_run_dir, prefix):
+def find_hex(board_run_dir, prefix, board=None):
     """One `<prefix>-*.hex` file in board_run_dir (board-run-task.md's naming:
-    A-EV74H48A-<rev>.hex, B-EV74H48A-<rev>.hex). None if there is no such
+    A-EV74H48A-<rev>.hex, B-EV74H48A-<rev>.hex) - with `board`, only
+    `<prefix>-<board>-*.hex`, so a Nano run never picks the EV74H48A's
+    image or the other way round. None if there is no such
     file yet (B, until BR.8 lands); a RuntimeError, not a silent pick, if
     there is more than one - an ambiguous board_run/ should stop the run,
     not guess which revision the colleague meant to send back."""
     if not os.path.isdir(board_run_dir):
         return None
+    start = prefix + "-" + (board + "-" if board else "")
     matches = sorted(f for f in os.listdir(board_run_dir)
-                      if f.startswith(prefix + "-") and f.endswith(".hex"))
+                      if f.startswith(start) and f.endswith(".hex"))
     if not matches:
         return None
     if len(matches) > 1:
@@ -756,9 +831,10 @@ def find_hex(board_run_dir, prefix):
     return os.path.join(board_run_dir, matches[0])
 
 
-def load_checklist(readme_path):
+def load_checklist(readme_path, board=BOARD_DEFAULT):
     """The hardware set-up checklist, parsed from board_run/README.md's
-    marked section (between CHECKLIST_BEGIN/CHECKLIST_END) rather than
+    marked section (checklist_markers(board): the EV74H48A's
+    CHECKLIST_BEGIN/END, any other board its own pair) rather than
     duplicated here - see that file's own comment. A markdown "- " bullet
     starts a new item; an unmarked, non-blank line continues the previous
     one (README.md wraps long bullets across lines). Returns [] if the file
@@ -768,9 +844,10 @@ def load_checklist(readme_path):
         return []
     with open(readme_path, encoding="utf-8") as f:
         text = f.read()
-    if CHECKLIST_BEGIN not in text or CHECKLIST_END not in text:
+    begin, end = checklist_markers(board)
+    if begin not in text or end not in text:
         return []
-    body = text.split(CHECKLIST_BEGIN, 1)[1].split(CHECKLIST_END, 1)[0]
+    body = text.split(begin, 1)[1].split(end, 1)[0]
     if "-->" in body:
         body = body.split("-->", 1)[1]  # drop the opening tag's own comment text
     body = body.rsplit("<!--", 1)[0]    # drop the closing tag's leading "<!--"
@@ -1023,12 +1100,12 @@ def perform_full_run_remote(bench_client, ui, out_dir, hex_a=None, hex_b=None,
     bench_client its FAKE_BENCH_* control variables without touching this
     process's own environment."""
     if hex_a is None:
-        hex_a = find_hex(board_run_dir, "A")
+        hex_a = find_hex(board_run_dir, "A", BOARD_DEFAULT)
     if hex_a is None:
         raise RuntimeError(f"no A-*.hex found in {board_run_dir} - 'git pull' again, or check "
                             f"{os.path.join(board_run_dir, 'SHA256SUMS.txt')} for what should be there")
     if hex_b is None:
-        hex_b = find_hex(board_run_dir, "B")
+        hex_b = find_hex(board_run_dir, "B", BOARD_DEFAULT)
 
     checklist = load_checklist(readme_path)
     if checklist:
@@ -1149,8 +1226,13 @@ def perform_full_run(port, ui, out_dir, hex_a=None, hex_b=None,
                       r5_ksps=R5_DEFAULT_KSPS, r5_core=R5_DEFAULT_CORE,
                       r5_pinsel=R5_DEFAULT_PINSEL, r5_samc=R5_DEFAULT_SAMC,
                       board_run_dir=BOARD_RUN_DIR, readme_path=README_PATH,
-                      repo_root=REPO_ROOT, git_run=subprocess.run, open_target_fn=None):
-    """hex_a/hex_b, when not given explicitly, are found in board_run_dir
+                      repo_root=REPO_ROOT, git_run=subprocess.run, open_target_fn=None,
+                      board=BOARD_DEFAULT, drive_roots=None):
+    """board (--board) picks the hex files, the checklist and, for the
+    Nano, how it is programmed and reset: with its CURIOSITY drive found
+    (curiosity_drive(drive_roots)), each image is copied onto it after a
+    yes/no question, and a timeout resets the target with CMD:RESET instead
+    of asking for a RESET button the Nano does not have. hex_a/hex_b, when not given explicitly, are found in board_run_dir
     itself (BR.4: the colleague never passes a file name - board_run.py
     finds it). hex_b is None until BR.8 adds a B-*.hex file; run_b is then
     skipped outright, not attempted against a file that does not exist -
@@ -1162,14 +1244,36 @@ def perform_full_run(port, ui, out_dir, hex_a=None, hex_b=None,
         open_target_fn = lambda: open_target(port, ui)  # noqa: E731
 
     if hex_a is None:
-        hex_a = find_hex(board_run_dir, "A")
+        hex_a = find_hex(board_run_dir, "A", board)
     if hex_a is None:
-        raise RuntimeError(f"no A-*.hex found in {board_run_dir} - 'git pull' again, or check "
+        raise RuntimeError(f"no A-{board}-*.hex found in {board_run_dir} - 'git pull' again, or check "
                             f"{os.path.join(board_run_dir, 'SHA256SUMS.txt')} for what should be there")
     if hex_b is None:
-        hex_b = find_hex(board_run_dir, "B")
+        hex_b = find_hex(board_run_dir, "B", board)
 
-    checklist = load_checklist(readme_path)
+    drive = curiosity_drive(drive_roots) if board == NANO_BOARD else None
+    if board == NANO_BOARD:
+        if drive:
+            ui.say(f"Curiosity Nano drive found at {drive} - programming and reset go through it.")
+            ui.board_reset = lambda: nano_reset(drive)
+        else:
+            ui.say("WARNING: no CURIOSITY drive with an MPS506 found - program the Nano by hand "
+                   "(MPLAB X, or copy the hex file onto its drive yourself).")
+            ui.reset_text = ("reset the Nano (copy a file containing CMD:RESET onto its "
+                             "CURIOSITY drive, or unplug and replug its USB cable)")
+
+    def program(info, which):
+        if drive:
+            yn = ui.prompt(f"program the {which} firmware by copying {os.path.basename(info['path'])} "
+                           f"onto {drive}? [Y/n] ").strip().lower()
+            if not yn.startswith("n"):
+                nano_copy(drive, info["path"])
+                ui.prompt("copied - press ENTER once the debugger has finished programming "
+                          "(STATUS.TXT on the drive; Windows may show a cached copy): ")
+                return
+        ui.prompt(f"program the {which} firmware ({info['path']}), then press ENTER: ")
+
+    checklist = load_checklist(readme_path, board)
     if checklist:
         ui.say("Hardware set-up - confirm every item, then press ENTER to continue:")
         for item in checklist:
@@ -1196,13 +1300,13 @@ def perform_full_run(port, ui, out_dir, hex_a=None, hex_b=None,
     session = dict(runner_version=RUNNER_VERSION, port=port,
                     pc_time=time.strftime("%Y-%m-%d %H:%M:%S"),
                     python=platform.python_version(), pyserial=pyserial_version,
-                    git=git_info, hex=[])
+                    git=git_info, hex=[], board=board)
 
     target = open_target_fn()
     try:
         info_a = prepare_hex(hex_a, "OLD", ui)
         session["hex"].append(info_a)
-        ui.prompt(f"program the OLD firmware ({info_a['path']}), then press ENTER: ")
+        program(info_a, "OLD")
         log_a, results_a, frames_a = run_session(target, ui, "A", r5_ksps, r5_core, r5_pinsel, r5_samc)
 
         log_b = None
@@ -1210,7 +1314,7 @@ def perform_full_run(port, ui, out_dir, hex_a=None, hex_b=None,
         if hex_b is not None:
             info_b = prepare_hex(hex_b, "NEW", ui)
             session["hex"].append(info_b)
-            ui.prompt(f"program the NEW firmware ({info_b['path']}), then press ENTER: ")
+            program(info_b, "NEW")
             if hasattr(target, "sync"):
                 target.sync(timeout=TIMEOUT_SYNC)  # reprogramming rebooted the board
             log_b, results_b, frames_b = run_session(target, ui, "B", r5_ksps, r5_core, r5_pinsel, r5_samc)
@@ -1575,6 +1679,85 @@ def selftest():
             check("find_hex(): two A-*.hex files raise", True)
 
     # -----------------------------------------------------------------
+    # --board (01.10.2026): per-board hex files, checklist, R5 input, and
+    # the Nano's CURIOSITY drive for programming and reset - a temporary
+    # directory stands in for the drive.
+    # -----------------------------------------------------------------
+    with tempfile.TemporaryDirectory() as tmp:
+        ev_a = os.path.join(tmp, "A-EV74H48A-deadbee.hex")
+        nano_a = os.path.join(tmp, "A-EV17P63A-cafe123.hex")
+        for path in (ev_a, nano_a):
+            with open(path, "wb") as f:
+                f.write(b":10000000FF\n")
+        check("find_hex(board): the EV74H48A's own A image", find_hex(tmp, "A", "EV74H48A") == ev_a)
+        check("find_hex(board): the Nano's own A image", find_hex(tmp, "A", "EV17P63A") == nano_a)
+        check("find_hex(board): no B for the Nano -> None", find_hex(tmp, "B", "EV17P63A") is None)
+
+        check("r5_input_for(): EV74H48A = core 3 / pinsel 5 (the old fixed default)",
+              r5_input_for("EV74H48A") == (R5_DEFAULT_CORE, R5_DEFAULT_PINSEL))
+        check("r5_input_for(): EV17P63A = core 1 / pinsel 0 (RA2)", r5_input_for("EV17P63A") == (1, 0))
+        ev_list = load_checklist(README_PATH, "EV74H48A")
+        nano_list = load_checklist(README_PATH, "EV17P63A")
+        check("load_checklist(): the Nano has its own, non-empty section",
+              nano_list and nano_list != ev_list and any("Nano" in i for i in nano_list))
+        check("load_checklist(): the default is still the EV74H48A's",
+              load_checklist(README_PATH) == ev_list)
+
+        drive = os.path.join(tmp, "drive")
+        other = os.path.join(tmp, "other")
+        os.makedirs(drive)
+        os.makedirs(other)
+        with open(os.path.join(other, "KIT-INFO.TXT"), "w") as f:
+            f.write("Kit: some other Curiosity Nano\nDevice: PIC18F47Q10\n")
+        check("curiosity_drive(): no MPS506 kit -> None", curiosity_drive([other]) is None)
+        with open(os.path.join(drive, "KIT-INFO.TXT"), "w") as f:
+            f.write("Kit: dsPIC33AK512MPS506 Curiosity Nano\nDevice: dsPIC33AK512MPS506\n")
+        check("curiosity_drive(): finds the MPS506 kit's drive", curiosity_drive([other, drive]) == drive)
+
+        def fake_git_ok(cmd, **kw):
+            return SimpleNamespace(returncode=0, stderr="",
+                                    stdout="deadbeefcafefeed\n" if "rev-parse" in cmd else "")
+
+        nano_ui = StubUI(answers=[""])   # the checklist ENTER; then the stub target fails to open
+        try:
+            perform_full_run("COMX", nano_ui, tmp, board_run_dir=tmp, board="EV17P63A",
+                              drive_roots=[drive], git_run=fake_git_ok,
+                              open_target_fn=lambda: (_ for _ in ()).throw(RuntimeError("stop here")))
+        except RuntimeError:
+            pass
+        check("perform_full_run(EV17P63A): the drive is announced and a reset hook is set",
+              any("drive found" in t for t in nano_ui.said) and callable(getattr(nano_ui, "board_reset", None)))
+        check("perform_full_run(EV17P63A): the Nano's checklist was printed",
+              any(t.startswith("  - ") and "EV17P63A" in t for t in nano_ui.said))
+
+        class _T:
+            def sync(self, timeout=None):
+                pass
+        tlog = RunLog()
+        handle_timeout(_T(), tlog, "R2", nano_ui)
+        check("handle_timeout(): with the drive, CMD:RESET is written, nobody is asked",
+              os.path.exists(os.path.join(drive, "RESET.TXT"))
+              and "CMD:RESET" in open(os.path.join(drive, "RESET.TXT")).read()
+              and not any("press RESET" in t for t in nano_ui.said))
+        nano_copy(drive, nano_a)
+        check("nano_copy(): the hex file lands on the drive",
+              os.path.exists(os.path.join(drive, os.path.basename(nano_a))))
+
+        none_ui = StubUI(answers=["", ""])
+        try:
+            perform_full_run("COMX", none_ui, tmp, board_run_dir=tmp, board="EV17P63A",
+                              drive_roots=[other], git_run=fake_git_ok,
+                              open_target_fn=lambda: (_ for _ in ()).throw(RuntimeError("stop here")))
+        except RuntimeError:
+            pass
+        handle_timeout(_T(), RunLog(), "R2", none_ui)
+        check("no drive: a warning, and the timeout prompt says how to reset a Nano",
+              any("no CURIOSITY drive" in t for t in none_ui.said)
+              and any("unplug and replug" in t for t in none_ui.said))
+        check("main(): --remote with --board EV17P63A is refused",
+              main(["--remote", "--board", "EV17P63A"]) == 2)
+
+    # -----------------------------------------------------------------
     # BR.4: git status (get_git_info) - clean, dirty and git-unavailable,
     # with the git call injected so this needs no real git and no real repo.
     # -----------------------------------------------------------------
@@ -1816,8 +1999,12 @@ def main(argv=None):
                                      "runs alone)")
     ap.add_argument("--out-dir", default=".", help="where to write run-*.zip (default: .)")
     ap.add_argument("--r5-ksps", type=int, default=R5_DEFAULT_KSPS)
-    ap.add_argument("--r5-core", type=int, default=R5_DEFAULT_CORE)
-    ap.add_argument("--r5-pinsel", type=int, default=R5_DEFAULT_PINSEL)
+    ap.add_argument("--board", choices=BOARDS_KNOWN, default=BOARD_DEFAULT,
+                     help="the board attached (default EV74H48A): picks A-/B-<board>-*.hex, the "
+                          "checklist and R5's input; EV17P63A is programmed and reset through "
+                          "its CURIOSITY drive")
+    ap.add_argument("--r5-core", type=int, default=None, help="default: the board's own input")
+    ap.add_argument("--r5-pinsel", type=int, default=None, help="default: the board's own input")
     ap.add_argument("--r5-samc", type=int, default=R5_DEFAULT_SAMC)
     ap.add_argument("--remote", action="store_true",
                      help="the colleague's board through bench_client's flash/tunnel requests "
@@ -1839,9 +2026,17 @@ def main(argv=None):
         print_port_list()
         return 0
 
+    core, pinsel = r5_input_for(a.board)
+    if a.r5_core is None:
+        a.r5_core = core
+    if a.r5_pinsel is None:
+        a.r5_pinsel = pinsel
     ui = ConsoleUI()
     skip = tuple(b.strip().upper() for b in a.skip.split(",") if b.strip())
     if a.remote:
+        if a.board != BOARD_DEFAULT:
+            print(f"--remote reaches the colleague's EV74H48A only - not --board {a.board}")
+            return 2
         bench_client = a.bench_client or os.environ.get("BENCH_CLIENT", remote.DEFAULT_BENCH_CLIENT)
         return perform_full_run_remote(bench_client, ui, a.out_dir, a.hex_a, a.hex_b,
                                         a.r5_ksps, a.r5_core, a.r5_pinsel, a.r5_samc, yes=a.yes,
@@ -1849,7 +2044,7 @@ def main(argv=None):
 
     port = pick_port(a.port)
     return perform_full_run(port, ui, a.out_dir, a.hex_a, a.hex_b,
-                             a.r5_ksps, a.r5_core, a.r5_pinsel, a.r5_samc)
+                             a.r5_ksps, a.r5_core, a.r5_pinsel, a.r5_samc, board=a.board)
 
 
 if __name__ == "__main__":
