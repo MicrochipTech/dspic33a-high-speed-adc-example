@@ -292,7 +292,7 @@ the clock tree and the RAM map; the only configuration word that differs is
 | Internal reference ADxAN6 | — | inside the ADC | 15/16·VDD, the self-test input on every core |
 | **LED0** | RD0 (RP49) | the yellow LED | **active low** — `LED_ACTIVE_LOW 1` |
 | SW0 | RC3 (RP36) | push button | no external pull-up; not used by this example |
-| **Console UART2** | TX RC10 (RP43), RX RC11 (RP44) | the debugger's CDC channel, one COM port | 115200 8N1; DS70005634 6.2: RC10 is the target's TX line (debugger CDC RX), RC11 the target's RX line (debugger CDC TX) |
+| **Console UART2** | TX RC10 (RP43), RX RC11 (RP44) | the debugger's CDC channel, one COM port | 115200 8N1 (the CDC takes 1200 to 500 000 baud, DS70005634A 3.1.3.3); DS70005634A Table 4-4: RC10 is the target's TX line (debugger CDC RX), RC11 the target's RX line (debugger CDC TX) |
 | Debugger | — | the on-board nEDBG via the USB connector | programming, debugging and the console share the one cable |
 | GND | — | edge connector | signal ground for the generator |
 
@@ -318,7 +318,32 @@ on the EV74H48A) is what "custom input" then starts from. While the test input i
 chosen, every tile shows the loopback (core 5, AN3 · RA8, source DAC2) and its core,
 channel and source selectors are locked. The
 console port is the Nano debugger's CDC channel. Without a board:
-`toolsdc_gui.bat --fake --fake-board EV17P63A` lets the stand-in report the Nano.
+`tools\adc_gui.bat --fake --fake-board EV17P63A` lets the stand-in report the Nano.
+
+**Programming the Nano.** None of the three ways below has been tried on a Nano yet;
+they are what the user guide and the installed tools say. The image is
+`build\adc_dma_40msps_nano.hex` (`tools\build.bat nano`).
+
+- **Copy the HEX file onto the board's USB drive** (DS70005634A 3.1.4): the debugger
+  enumerates as a drive named `CURIOSITY` next to the COM port; copying an Intel HEX file
+  onto it programs the target, `STATUS.TXT` on the drive reports the result (Windows may
+  show a cached copy). A text file whose content is `CMD:RESET` resets the target the
+  same way (debugger firmware 1.25.6 or newer). No MPLAB X, no ipecmd.
+- **MPLAB X**: the configuration `EV17P63A_Curiosity_Nano_MPS506` (tool `nEdbgTool`).
+- **ipecmd**, the command line the EV74H48A uses with `-TPPKOB4`: for the Nano the tool
+  name is most likely `-TPNEDBG` - `ipecmd.jar` (MPLAB X v6.35) carries that identifier,
+  but `ipecmd -?` does not list it, so it is unconfirmed:
+  `"C:\Program Files\Microchip\MPLABX\v6.35\mplab_platform\mplab_ipe\ipecmd.exe" -TPNEDBG -P33AK512MPS506 -M -Fbuild\adc_dma_40msps_nano.hex -OL`.
+  If it is refused, `-TS<serial number>` (from `KIT-INFO.TXT` on the drive) selects the
+  tool by serial number instead.
+
+**The console needs DTR.** The debugger passes data in either direction only while a
+terminal holds the COM port open with DTR asserted (DS70005634A 3.1.3.4; pyserial,
+and so `tools/protocol.py` and the GUI, assert it on open). The boot banner the firmware
+prints right after programming is therefore lost unless the port was already open - send
+`reset` (or copy `CMD:RESET`) after opening it to see it. While no terminal is attached,
+the debugger does not drive its CDC TX line and the board has no pull-up on it, so
+RC11 = U2RX floats (same section).
 
 ## First run on hardware
 

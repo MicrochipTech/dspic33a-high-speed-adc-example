@@ -43,6 +43,14 @@ Options:
                   --update-expected rewrites expected.log from this run,
                   for a task that changes the console on purpose (a new
                   command in "help"): commit it with the change.
+
+  --nano          with --smoke: the same run for the EV17P63A Curiosity
+                  Nano - simulator device dsPIC33AK512MPS506, default ELF
+                  build\\adc_dma_40msps_nanosmoke.elf (build.bat nanosmoke),
+                  log build\\smoke_nano.log, expected
+                  tests\\smoke\\expected_nano.log (its own file: the board
+                  lines of the banner differ). --elf/--log/--expected
+                  still override each one.
                   Exit code 0 = PASS, 1 = FAIL. Prints where the time went.
 
   --dump-sfr      with --smoke (P0.8, tests\\trace\\README.md "P0.8
@@ -68,7 +76,7 @@ import sys
 import threading
 import time
 
-DEVICE = "dsPIC33AK512MPS512"
+DEVICE = "dsPIC33AK512MPS512"   # --nano: dsPIC33AK512MPS506
 IFS6 = 0xA8            # p33AK512MPS512.gld
 IEC6 = 0xD8
 AD3CH0 = 1 << 9        # _IFS6_AD3CH0IF_MASK
@@ -257,10 +265,12 @@ def write_sfr_dump(path, names, before, after):
 
 
 def smoke(a):
-    elf = os.path.abspath(a.elf or os.path.join(ROOT, "build", "adc_dma_40msps_smoke.elf"))
+    elf = os.path.abspath(a.elf or os.path.join(ROOT, "build",
+                          "adc_dma_40msps_nanosmoke.elf" if a.nano else "adc_dma_40msps_smoke.elf"))
     out = os.path.splitext(elf)[0] + ".uart2.txt"
-    log = os.path.abspath(a.log)
-    expected = os.path.abspath(a.expected)
+    log = os.path.abspath(a.log or os.path.join(ROOT, "build", "smoke_nano.log" if a.nano else "smoke.log"))
+    expected = os.path.abspath(a.expected or os.path.join(ROOT, "tests", "smoke",
+                               "expected_nano.log" if a.nano else "expected.log"))
     uart = uart_reader(out)
     t_all = time.time()
     m, t_up, t_prog = start_sim(elf, out, a.verbose)
@@ -369,8 +379,11 @@ def main():
     ap.add_argument("--smoke", action="store_true", help="the smoke run (see the docstring)")
     ap.add_argument("--smoke-timeout", type=float, default=180.0,
                     help="seconds to wait for '[smoke] DONE' before the run counts as failed")
-    ap.add_argument("--expected", default=os.path.join(ROOT, "tests", "smoke", "expected.log"))
-    ap.add_argument("--log", default=os.path.join(ROOT, "build", "smoke.log"))
+    ap.add_argument("--expected", default=None,
+                    help="default: tests\\smoke\\expected.log (expected_nano.log with --nano)")
+    ap.add_argument("--log", default=None, help="default: build\\smoke.log (smoke_nano.log with --nano)")
+    ap.add_argument("--nano", action="store_true",
+                    help="--smoke for the EV17P63A: device dsPIC33AK512MPS506, build.bat nanosmoke's ELF")
     ap.add_argument("--update-expected", action="store_true",
                     help="--smoke: rewrite tests/smoke/expected.log from this run")
     ap.add_argument("--dump-sfr", default=None,
@@ -389,6 +402,11 @@ def main():
     ap.add_argument("--inject-seconds", type=float, default=20.0)
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args()
+    global DEVICE
+    if a.nano:
+        if not a.smoke:
+            sys.exit("--nano needs --smoke (only the smoke run has a Nano build)")
+        DEVICE = "dsPIC33AK512MPS506"
     if a.smoke:
         sys.exit(smoke(a))
     elf = os.path.abspath(a.elf or os.path.join(ROOT, "build", "adc_dma_40msps_sim.elf"))

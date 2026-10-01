@@ -78,7 +78,7 @@
 #define CONSOLE_TX_FN     21u             /* RP114 <- U2TX */
 #define CONSOLE_PORT_NAME "UART2 on the MCP2221A USB-UART channel (RH1/RD1)"
 /* The whole registers behind the pins, for the register dump: RPOR28
- * holds RP112..115 (RP114R in bits 23:16), RPINR13 holds U2RXR. */
+ * holds RP113..115 (RP114R in bits 14:8, ATDF), RPINR13 holds U2RXR. */
 #define CONSOLE_TX_TRIS_WORD  TRISH
 #define CONSOLE_RX_TRIS_WORD  TRISD
 #define CONSOLE_TX_RPOR_WORD  RPOR28
@@ -93,9 +93,9 @@
 
 /* ADC core and input: ADC1, AD1AN0 = RA2 (RP3, QFN64 pin 12, shared
  * with OA1OUT/CMP1A; the op amp is off after reset), on the edge
- * connector, labelled "RA2 / AD1AN0" (DS70005634 4.2, pin table). Port A
- * ANSEL resets to analog (DS70005591D 11.3.6, p640: reset 1 = digital
- * Schmitt trigger disabled), so nothing to set. */
+ * connector, labelled "RA2 / AD1AN0" (DS70005634A Figure 1-3, the
+ * pinout). Port A ANSEL resets to analog (DS70005591D 11.3.6, p640:
+ * reset 1 = digital Schmitt trigger disabled), so nothing to set. */
 #ifndef ADC_INSTANCE
 #define ADC_INSTANCE      1
 #endif
@@ -105,13 +105,14 @@
 #define BOARD_INPUT_NAME  "AD1AN0 = edge connector RA2"
 
 /* LED0 is RD0 (RP49), active LOW: driving the pin low lights it
- * (DS70005634 4.2.2). Port D has no ANSEL. */
+ * (DS70005634A 4.2.1; schematic: VCC_TARGET - LED - 1k - RD0). Port D
+ * has no ANSEL. */
 #define LED_TRIS          TRISDbits.TRISD0
 #define LED_LAT           LATDbits.LATD0
 #define LED_ACTIVE_LOW    1
 
 /* Console: UART2 on the on-board debugger's CDC channel. DS70005634
- * Table 4-x / 6.2: RC10 = RP43 is "UART TX (dsPIC33AK512MPS506 TX
+ * Table 4-4 (4.2.4.1): RC10 = RP43 is "UART TX (dsPIC33AK512MPS506 TX
  * line)" = the debugger's CDC RX; RC11 = RP44 is "UART RX (... RX line)"
  * = the debugger's CDC TX. So U2TX -> RC10, U2RX <- RC11. The UART
  * instance stays 2 - only the pins differ from the other board. Port C
@@ -123,7 +124,7 @@
 #define CONSOLE_TX_RPOR   _RP43R
 #define CONSOLE_TX_FN     21u             /* RP43 (RC10) <- U2TX */
 #define CONSOLE_PORT_NAME "UART2 on the debugger's CDC channel (RC10/RC11)"
-/* For the register dump: RPOR10 holds RP40..43 (RP43R in bits 31:24),
+/* For the register dump: RPOR10 holds RP41..44 (RP43R in bits 22:16, ATDF),
  * RPINR13 holds U2RXR; both console pins are on port C. */
 #define CONSOLE_TX_TRIS_WORD  TRISC
 #define CONSOLE_RX_TRIS_WORD  TRISC

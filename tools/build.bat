@@ -14,6 +14,11 @@ rem                       deliberate trap after the script, the negative test fo
 rem                       tools\sim_trap.py --smoke
 rem                                              -> ..\build\adc_dma_40msps_smokefault.elf
 rem                                                 (..._smokefault<n>.elf with n given)
+rem    build.bat nano     the EV17P63A Curiosity Nano (dsPIC33AK512MPS506)
+rem                                              -> ..\build\adc_dma_40msps_nano.elf/.hex
+rem    build.bat nanosmoke  the smoke build for the Nano, for
+rem                       tools\sim_trap.py --smoke --nano
+rem                                              -> ..\build\adc_dma_40msps_nanosmoke.elf
 rem
 rem  The simulator builds compile sim_dma.c instead of dma.c, define
 rem  __MPLAB_DEBUGGER_SIMULATOR (as MPLAB X does for a Simulator
@@ -82,6 +87,17 @@ if /i "%1"=="nano" (
   set OUT=..\build\%TARGET%_nano
   set BOARDFILE=..\src\boards\ev17p63a.c
 )
+rem  build.bat nanosmoke  the smoke build for the Nano: "nano"'s device, pins
+rem                   and board file with "smoke"'s simulator flags, for
+rem                   tools\sim_trap.py --smoke --nano
+rem                                              -> ..\build\adc_dma_40msps_nanosmoke.elf
+if /i "%1"=="nanosmoke" (
+  set MCU=33AK512MPS506
+  set DMA=..\src\sim\sim_dma.c
+  set EXTRA=-DBOARD=2 -D__MPLAB_DEBUGGER_SIMULATOR=1 -g -DSIM_SMOKE=1
+  set OUT=..\build\%TARGET%_nanosmoke
+  set BOARDFILE=..\src\boards\ev17p63a.c
+)
 set SRC=..\src
 set INC=-I%SRC%\drivers -I%SRC%\app -I%SRC%\cli -I%SRC%\tests -I%SRC%\lib -I%SRC%\diag -I%SRC%\sim -I%SRC%\port -I%SRC%\link -I%SRC%\boards -I%SRC%\meter -I%SRC%\siggen
 set SOURCES=%SRC%\app\main.c %SRC%\app\config_bits.c %SRC%\app\port_impl.c %SRC%\drivers\clock.c %SRC%\drivers\adc.c %DMA% %SRC%\app\pingpong.c %SRC%\app\capture.c %SRC%\app\acquisition.c %SRC%\app\routing.c %SRC%\meter\meter.c %SRC%\lib\crc16.c %SRC%\lib\fmt.c %SRC%\lib\stats.c %SRC%\lib\tri_eval.c %SRC%\lib\iir1.c %SRC%\lib\goertzel_f.c %SRC%\lib\goertzel_i.c %SRC%\lib\detect.c %SRC%\lib\wavegen.c %SRC%\siggen\siggen.c %SRC%\lib\frame.c %SRC%\drivers\sccp.c %SRC%\drivers\led.c %SRC%\diag\diag.c %SRC%\drivers\timebase.c %SRC%\drivers\dac.c %SRC%\drivers\uart.c %SRC%\tests\dactest.c %SRC%\tests\chaintest.c %SRC%\tests\bench.c %SRC%\link\gui_link.c %SRC%\cli\cli.c %SRC%\cli\cmd_parser.c %BOARDFILE%
@@ -109,6 +125,7 @@ echo.
 echo Build OK: %OUT%.elf
 if /i "%1"=="sim" goto :done
 if /i "%1"=="smoke" goto :done
+if /i "%1"=="nanosmoke" goto :done
 rem NOTE: bin2hex needs -mdfp too. Without it the HEX is still written, but
 rem it prints "Could not open resource file ... c30_device.info / Please
 rem specify the location of a DFP" and looks like a failed build.
