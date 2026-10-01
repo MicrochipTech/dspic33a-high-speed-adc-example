@@ -238,7 +238,7 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 <circle class="st-pending" cx="879" cy="699" r="5"><title>not tested with this version yet (changed since it was tested at 7b16260)</title></circle>
 <text class="t" x="790" y="709">uart.c</text>
 <text class="s" x="790" y="723">UART2, PPS</text>
-<text class="s" x="790" y="737">RX ISR</text>
+<text class="s" x="790" y="737">RX ISR, TX ring + ISR</text>
 <path class="ln1" d="M835 750 V790"/>
 <rect class="bx s-hw" x="780" y="790" width="110" height="62" rx="4"/>
 

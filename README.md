@@ -643,7 +643,15 @@ one line (the command table is 32 entries instead of 16 — `CMD_PARSER_MAX_COMM
 `cmd_parser.h`; 29 commands, including `route`, `siggen` and `sigproc`, plus the built-in `help` are
 registered — 30 of 32 slots, 2 free, `nano-board`). It
 runs in the UART receive interrupt, below the DMA interrupt — which is why a rate that
-overruns makes the console unresponsive, and why the firmware boots idle.
+overruns makes the console unresponsive, and why the firmware boots idle. Output goes the other
+way through an 8 KB ring buffer that the UART transmit interrupt empties (since
+01.10.2026, `src/drivers/uart.c`): a command writes its reply and returns, so a long
+reply no longer holds the CPU - `help` while streaming used to cost the main loop 550
+halves at 8 MSPS, now none - and `stream grab` halts the stream only for the copy into
+the ring. The measuring commands (`chain`, `test`, `sweep`, `selftest`, `dactest`,
+`snap`) still send polled, so nothing transmits while they measure; so do `fail()` and
+the trap handler. Ctrl+C cuts only output that is still being generated, not what is
+already in the ring.
 
 | Command | Does |
 |---|---|

@@ -558,6 +558,33 @@ bool capture_running(void)
     return run_enabled;
 }
 
+/* The burst stream should run but its DMA channel is off - main()'s
+ * fail(8) test. The three reads are taken in one go, with the console's
+ * interrupts held off (DISICTL threshold 2: the UART receive interrupt,
+ * where commands run, and the transmit one - DS70005591D 10.10.1.1,
+ * p596); the DMA (4) and the counters (3) stay live. Until 01.10.2026
+ * main() read capture_running(), capture_chain_active() and
+ * dma0_enabled() one after the other, and a "stream off" landing between
+ * the first read and the others produced a state that never existed -
+ * running, no chain, DMA off - and a false fail 8. Reproduced on the
+ * board: 1 in 9 "stream off" at 1 MSPS (docs/HARDWARE-LOG.md, 01.10.2026);
+ * the "unexplained fail 8 after stream off" of 29.09.2026 (SG.3) was the
+ * same race. The DMA interrupt's own changes (the overrun brake, the
+ * last oneshot block) cannot fake it: each is one interrupt, and it
+ * either lands before the reads or after them. */
+bool capture_stream_lost(void)
+{
+#if defined(__XC_DSC__)   /* not under the trace harness's host gcc (diag.c) */
+    const uint32_t old = DISIIPL;
+    (void)__builtin_write_DISICTL((old > 2u) ? old : 2u);
+#endif
+    const bool lost = run_enabled && !chain_mode && !dma0_enabled();
+#if defined(__XC_DSC__)
+    (void)__builtin_write_DISICTL(old);
+#endif
+    return lost;
+}
+
 bool capture_overrun_aborted(void)
 {
     return overrun_abort;

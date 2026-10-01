@@ -1967,3 +1967,54 @@ board still ran an image from before 94e36d8 and refused `buf 2000` ("16..1024")
 Not run: rates above 1 MSPS with the larger buffer, `chain all`/`test all` (whether
 `tri_eval`'s TP_MAX = 160 turning points is enough for a 4096-sample window), the GUI's
 LIVE cycle on the new image.
+
+## 2026-10-01, console transmit through a ring buffer and an interrupt - 46f2b6a + local changes, local (COM26)
+
+All flashed by `ipecmd -TPPKOB4 -P33AK512MPS512 -M -F ... -OL`. The comparison image
+("before") is 46f2b6a itself, built in a clean `git worktree`; "after" is the change
+committed right after this entry (uart.c's transmit ring, `capture_stream_lost()`,
+`console_quiet_begin()/_end()`). Measured with a script over `tools/protocol.py`'s
+`Target`: `help`/`status`/`regs` with nothing streaming, then per rate `stream on`,
+one grab to start the per-grab counters, a control grab, `help` while streaming, a
+grab, 20 grabs; `sigproc on/off` with a grab each; Ctrl+C 30 ms into `help`.
+
+- **Before (polled transmit):** `help` (1629 characters, 175 ms) held the CPU inside
+  the receive interrupt; the grab after it reported `missed` **68 / 274 / 550** halves
+  at 1 / 4 / 8 MSPS (control grabs 0). The first run of `sigproc` on silicon: `proc=1`
+  in the frame with it on, `proc=0` off.
+- **2 KB ring, TXWM = 0, every command asynchronous:** `missed` after `help` 0 / 0 / 2,
+  but the control grab at 8 MSPS also 2 - the grab waited in the receive interrupt
+  for ring space for its prompt, with the stream already restarted, in 8-byte steps.
+  And `chain all` against "before": S0.2 (Timer1 vs CPU 1250252 instead of 1250001),
+  S4.7/8 (8 MSPS, overrun 1-2), S4.11-14 (16/20 MSPS, 13-19), S9.3 (8 MSPS 15 s,
+  overrun 5) FAIL, all PASS before - the transmit interrupt still sending the previous
+  `@` line while the next measurement ran. The measuring commands now send polled
+  (chain, test, sweep, selftest, dactest, snap: `console_quiet_begin()`).
+- **TXWM = 7** ("one empty slot or more"): the console fell silent after two
+  characters - the flag is raised on reaching the watermark, not held. Back to 0.
+- **8.5 KB ring:** grabs clean, `missed` 0 everywhere, but `chain 6` at 16 / 20 MSPS
+  overrun ~7 000 / ~9 700 per second, four runs out of four, against 0 with "before"
+  (also four runs). The linker had put the ring between siggen.c's table and the ADC
+  buffer (both `.dma_buffer`, sections placed largest first): the buffer moved from
+  0x81C4 to 0xA3D8, across 0xC000, and the table no longer lay directly below it.
+  Which of the two costs the overruns is not separated; the old layout has none.
+- **8 KB ring (smaller than the 0x2040-byte buffer section, so placed after it; one
+  `.dma_buffer` section of 0x6040 bytes as before):** `chain 6` four times 0 overruns
+  at 8..20 MSPS; `chain all` **every verdict identical to "before"**; `help` while
+  streaming `missed` **0 / 0 / 0**, control grabs 0 / 0 / 0; 20 grabs per rate CRC-clean,
+  ~435 ms per grab; between two grabs 1685 halves at 8 MSPS against 290 before - the
+  halt now lasts the copy into the ring, not the 0.36 s on the line. `status`:
+  stack_size 16624 (was 25428 with the 2 x 2048 buffer alone), stack_used 816.
+  Ctrl+C 30 ms into `help`: the whole text still came (it is in the ring after a few
+  ms - abort now only cuts output still being generated), prompt back, console fine.
+- **fail 8 after `stream off` - the 29.09 one, found:** with the transmit ring, the
+  sequence above stopped once with `fail 8` after a clean `stream off` reply, and
+  reproduced 1 in 9 `stream off` at 1 MSPS. main() read `capture_running()`,
+  `capture_chain_active()` and `dma0_enabled()` one after the other; a `stream off`
+  in the receive interrupt between the first read and the others made "running, no
+  chain, DMA off" - a state that never existed. `capture_stream_lost()` reads the
+  three with the console's interrupts held off (DISICTL 2): 120 `stream off` since (60 on
+  the final image), 0 failures. The race was there before the ring (29.09, SG.3: "one unexplained
+  fail 8 after stream off, not reproduced"); the ring only made it more likely.
+
+Not run: the GUI against this image, the Nano, `test all`, `blk` of 4096 samples.

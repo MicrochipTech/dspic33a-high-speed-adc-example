@@ -268,7 +268,7 @@ static void console_sweep(uint32_t halves, bool choose)
     console_puts("[sweep] done: counters cleared\r\n");
 }
 
-static void cmd_sweep_fn(int argc, char **argv)
+static void cmd_sweep_body(int argc, char **argv)
 {
     siggen_stop();                    /* the DMA controller is reset per row (SG.3) */
     uint32_t halves = SWEEP_HALVES_DEFAULT;
@@ -277,6 +277,13 @@ static void cmd_sweep_fn(int argc, char **argv)
         return;
     }
     console_sweep(halves, false);
+}
+/* Polled transmit while it measures (console_quiet_begin(), cli.c). */
+static void cmd_sweep_fn(int argc, char **argv)
+{
+    const bool quiet = console_quiet_begin();
+    cmd_sweep_body(argc, argv);
+    console_quiet_end(quiet);
 }
 CMD_DEFINE(sweep, "sweep", cmd_sweep_fn, "sweep [halves] - overrun vs sample rate over the clock ladder");
 
@@ -775,7 +782,7 @@ static void test_list(void)
     put_line("ratio; regs prints the registers");
 }
 
-static void cmd_test_fn(int argc, char **argv)
+static void cmd_test_body(int argc, char **argv)
 {
     siggen_stop();                    /* "test dac" drives the DACs itself (SG.3) */
     uint32_t halves = 0u;                  /* 0 = the part's own default */
@@ -835,6 +842,13 @@ static void cmd_test_fn(int argc, char **argv)
         test_list();
         cmd_parser_fail();
     }
+}
+/* Polled transmit while it measures (console_quiet_begin(), cli.c). */
+static void cmd_test_fn(int argc, char **argv)
+{
+    const bool quiet = console_quiet_begin();
+    cmd_test_body(argc, argv);
+    console_quiet_end(quiet);
 }
 CMD_DEFINE(test, "test", cmd_test_fn, "test [all|self|clock|clkoff|bursts|matrix|rate|sweep|dac] [n]");
 

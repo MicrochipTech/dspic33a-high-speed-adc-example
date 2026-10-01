@@ -99,6 +99,10 @@ bool capture_select_core(uint8_t core, uint8_t pinsel, uint8_t samc);
 /* Let the current burst finish and do not restart it. */
 void capture_stop(void);
 bool capture_running(void);
+/* The burst stream should run but its DMA channel is off - read in one
+ * go, safe against a console command changing the state in between
+ * (main()'s fail(8) test; capture.c says why it matters). */
+bool capture_stream_lost(void);
 /* True if the overrun brake fired during the last measurement: the
  * handler saw more overruns than any usable rate can produce, masked
  * its own interrupt and took the channel down, so that the storm could
@@ -142,8 +146,13 @@ const struct pll_step *capture_sweep_steps(uint32_t *count);
  * above. */
 
 /* Process the completed half if a new one arrived; returns true if it did.
- * Called from the main loop and from the console's yield hook, so that
- * the measurement keeps running while a long console reply drains. */
+ * Called from the main loop, from the bench's and the chain test's own
+ * streaming loops, and from "stream grab" (capture_sigproc_catch_up()).
+ * NOT from the console's yield hook, as this comment said until
+ * 01.10.2026 - console_yield() (cli.c) only watches for Ctrl+C. While a
+ * console command runs (inside the receive interrupt) the main loop does
+ * not run; since 01.10.2026 its output goes into uart.c's transmit ring
+ * and the command returns long before the text is on the line. */
 bool capture_service(void);
 
 /* The signal processing (sigproc.c, sigproc.h): sigproc_block() is called

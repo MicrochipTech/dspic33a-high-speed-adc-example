@@ -81,15 +81,46 @@ void uart_reinit(uint32_t brg);
  * "reclocked" trace line only when true). */
 bool uart_set_baud(uint32_t brg);
 
-/* Non-blocking: writes as many of `len` bytes as fit in the transmit
- * FIFO right now, and returns how many that was (was console_write()'s
- * body - the parser's own output sink retries the remainder it is not
- * told went out; see cmd_parser.h, "Flow control"). */
+/* Transmit (since 01.10.2026 through an 8 KB ring buffer that the transmit
+ * interrupt empties - uart.c's own comment has the design): in interrupt
+ * mode (from uart_enable_tx_irq() on) the bytes go into the ring; in
+ * polled mode - before that, in the simulator, and after uart_tx_polled()
+ * (fail(), a trap, a clock failure) - the ring is emptied into the FIFO
+ * by polling first and the bytes go straight into the FIFO, as before.
+ *
+ * Non-blocking: takes as many of `len` bytes as fit right now (ring, or
+ * FIFO on the polled path), and returns how many that was (was
+ * console_write()'s body - the parser's own output sink retries the
+ * remainder it is not told went out; see cmd_parser.h, "Flow control"). */
 size_t uart_write(const uint8_t *data, size_t len);
 
-/* Wait, bounded (UART_TX_WAIT_LIMIT), until the transmitter - FIFO and
- * shift register - is empty; a no-op in the simulator build, which never
- * sets TXMTIF (was console_drain()/console_flush()). */
+/* Transmit interrupt (IRQ 103): priority as given - above the receive
+ * interrupt, inside which the console's commands write, below the
+ * measurement's interrupts - TXWM = 0, interrupt mode on. Called once,
+ * by cli_init(), never in the simulator build. */
+void uart_enable_tx_irq(uint8_t priority);
+
+/* Back to polled mode for good: for the paths that print from above the
+ * transmit interrupt's priority and never return - fail() (through
+ * cli.c's console_sync_baud()), the trap handler and _CLKFInterrupt
+ * (through uart_reinit(), which calls it itself). */
+void uart_tx_polled(void);
+
+/* Polled mode for a while, and back: suspend sends the ring out first
+ * (bounded, uart_flush()) and returns whether interrupt mode was on;
+ * resume(that) restores it. For the measuring console commands (cli.c's
+ * console_quiet_begin()/_end()). */
+bool uart_tx_irq_suspend(void);
+void uart_tx_irq_resume(bool was);
+
+/* Bytes uart_putc() found no room for even after its caller waited -
+ * the ring stayed full (the line dead, or the interrupt never ran). */
+extern volatile uint32_t uart_tx_dropped;
+
+/* Wait, bounded (UART_TX_WAIT_LIMIT per byte that does not move), until
+ * the transmitter - ring, FIFO and shift register - is empty; a no-op in
+ * the simulator build, which never sets TXMTIF (was console_drain()/
+ * console_flush()). */
 void uart_flush(void);
 
 /* The raw status bits and raw register accesses cli.c's own send/receive
@@ -100,8 +131,10 @@ void uart_flush(void);
  * UART_TX_WAIT_LIMIT above); console_write_raw() polls it with a
  * cooperative yield instead, watching for Ctrl+C; that yield reads a
  * byte back with uart_rx_empty()/uart_getc() while it waits. */
-bool    uart_tx_full(void);        /* TXBF: no room for one more byte  */
-void    uart_putc(uint8_t b);      /* one byte into the FIFO, unchecked */
+bool    uart_tx_full(void);        /* no room for one more byte (ring,
+                                    * or FIFO on the polled path)       */
+void    uart_putc(uint8_t b);      /* one byte; dropped and counted if
+                                    * there is still no room            */
 bool    uart_rx_empty(void);       /* RXBE: nothing received (yet)      */
 uint8_t uart_getc(void);           /* one received byte, unchecked      */
 

@@ -25,6 +25,10 @@ void console_force_up(void);
  * - called by main()'s loop after every capture_service(), returns at
  * once when nothing is held back. */
 void console_rx_resume(void);
+/* A measuring command's output polled, finished before it measures on
+ * (cli.c says why): begin returns what end needs to put back. */
+bool console_quiet_begin(void);
+void console_quiet_end(bool was);
 /* Wait (bounded) until the transmitter is empty, shift register included.
  * console_puts() returns as soon as the last character is in the FIFO,
  * so anything that changes the clock or the baud generator right after

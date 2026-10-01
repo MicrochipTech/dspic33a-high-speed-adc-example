@@ -317,7 +317,7 @@ int main(void)
              * half per second, far longer than this loop's idle bound. */
             /* The stream stopped: burst restart lost, or the DMA shut
              * itself off. Say so instead of sitting here silently. */
-            if (!dma0_enabled())     { fail(8u); }
+            if (capture_stream_lost()) { fail(8u); }   /* read in one go (capture.c) */
             if (++idle > WAIT_LIMIT) { fail(6u); }
         } else {
             idle = 0;                 /* idle: the console has the CPU   */

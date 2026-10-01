@@ -44,7 +44,7 @@ void usage(const char *text);
  * verbatim - unchanged, no framing involved). See "dump" (cli.c) for how
  * the filled buffer is then read.
  * ------------------------------------------------------------------ */
-static void cmd_snap_fn(int argc, char **argv)
+static void cmd_snap_body(int argc, char **argv)
 {
     (void)argc; (void)argv;
     const uint32_t n     = 2u * capture_half_len();
@@ -68,6 +68,13 @@ static void cmd_snap_fn(int argc, char **argv)
     put_kv("overrun during the burst", dma_overrun);
     put_kv("input", capture_pinsel());
     put_kv("adc core", adc_core());
+}
+/* Polled transmit while it measures (console_quiet_begin(), cli.c). */
+static void cmd_snap_fn(int argc, char **argv)
+{
+    const bool quiet = console_quiet_begin();
+    cmd_snap_body(argc, argv);
+    console_quiet_end(quiet);
 }
 CMD_DEFINE(snap, "snap", cmd_snap_fn, "snap - fill the buffer once and stop; then dump it");
 

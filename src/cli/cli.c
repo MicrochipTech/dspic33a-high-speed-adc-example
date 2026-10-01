@@ -108,6 +108,11 @@
 #endif
 
 #define UART_RX_PRIORITY  1u      /* below the DMA interrupt (4)        */
+/* The transmit interrupt (01.10.2026, uart.c) must be above the receive
+ * interrupt: the commands run inside that one and wait for room in the
+ * ring while this one empties it. Below the measurement's interrupts -
+ * the ADC/SCCP counters (3) and the DMA (4). */
+#define UART_TX_PRIORITY  2u
 
 void console_early_init(void)
 {
@@ -156,11 +161,32 @@ void console_force_up(void)
     uart_reinit(clock_cpu_on_pll() ? UART_BRG_PLL : UART_BRG_FRC);
 }
 
+/* The measuring commands - chain, test, sweep, selftest, dactest, snap -
+ * run with the transmit interrupt suspended: their output goes out polled,
+ * finished before the next measurement starts, exactly as before the
+ * transmit ring (uart.c, 01.10.2026). With the interrupt left on, it was
+ * still sending the previous "@" line while the next window ran, and
+ * "chain all" on the board lost that to it: Timer1 against the CPU 0.02 %
+ * off (S0.2), DMA overruns at 8..20 MSPS (S4.7..S4.14, S9.3 - 0 with the
+ * firmware before; docs/HARDWARE-LOG.md, 01.10.2026). Every other command
+ * and the main loop's own lines keep the ring. */
+bool console_quiet_begin(void)
+{
+    return uart_tx_irq_suspend();
+}
+
+void console_quiet_end(bool was)
+{
+    uart_tx_irq_resume(was);
+}
+
 /* Make the baud generator match whatever clock the CPU is on right now.
  * fail() calls this first: a failure after the switch to PLL2 but before
  * cli_init() would otherwise print at the wrong rate. */
 void console_sync_baud(void)
 {
+    uart_tx_polled();       /* fail() prints from anywhere and never returns:
+                             * no transmit interrupt to rely on (uart.c)   */
     (void)uart_set_baud(clock_cpu_on_pll() ? UART_BRG_PLL : UART_BRG_FRC);
 }
 
@@ -816,7 +842,7 @@ uint32_t run_dactest(uint32_t bursts)
     return rc;
 }
 
-static void cmd_dactest_fn(int argc, char **argv)
+static void cmd_dactest_body(int argc, char **argv)
 {
     uint32_t halves = 64u;
     if ((argc > 2) || ((argc == 2) && !arg_u32(argv[1], 1u, 10000u, &halves))) {
@@ -825,9 +851,16 @@ static void cmd_dactest_fn(int argc, char **argv)
     }
     if (run_dactest(halves) != 0u) { cmd_parser_fail(); }
 }
+/* Polled transmit while it measures (console_quiet_begin(), cli.c). */
+static void cmd_dactest_fn(int argc, char **argv)
+{
+    const bool quiet = console_quiet_begin();
+    cmd_dactest_body(argc, argv);
+    console_quiet_end(quiet);
+}
 CMD_DEFINE(dactest, "dactest", cmd_dactest_fn, "dactest [halves] - judge the running DAC's triangle through the chain");
 
-static void cmd_selftest_fn(int argc, char **argv)
+static void cmd_selftest_body(int argc, char **argv)
 {
     uint32_t mean = 0;
     (void)argc; (void)argv;
@@ -838,6 +871,13 @@ static void cmd_selftest_fn(int argc, char **argv)
     else if (rc == 7u) { put_line("selftest: mean outside 3648..4032"); }
     else               { put_line("selftest: DMA channel disabled (address fault?)"); }
     if (rc != 0u) { cmd_parser_fail(); }
+}
+/* Polled transmit while it measures (console_quiet_begin(), cli.c). */
+static void cmd_selftest_fn(int argc, char **argv)
+{
+    const bool quiet = console_quiet_begin();
+    cmd_selftest_body(argc, argv);
+    console_quiet_end(quiet);
 }
 CMD_DEFINE(selftest, "selftest", cmd_selftest_fn, "selftest - sample the internal reference");
 
@@ -977,7 +1017,7 @@ CMD_DEFINE(pll, "pll", cmd_pll_fn, "pll <p1> <p2> - PLL1 output dividers = the s
 
 /* The chain test (chaintest.c). "chain all" is the one command the
  * person at the board types; the rest is for repeating a part. */
-static void cmd_chain_fn(int argc, char **argv)
+static void cmd_chain_body(int argc, char **argv)
 {
     static const char use[] = "chain all | chain <0..9> | chain from <0..9> | chain run <ksps> [seconds]";
     uint32_t a = 0u, b = 0u;
@@ -994,6 +1034,13 @@ static void cmd_chain_fn(int argc, char **argv)
     } else {
         usage(use);
     }
+}
+/* Polled transmit while it measures (console_quiet_begin(), cli.c). */
+static void cmd_chain_fn(int argc, char **argv)
+{
+    const bool quiet = console_quiet_begin();
+    cmd_chain_body(argc, argv);
+    console_quiet_end(quiet);
 }
 CMD_DEFINE(chain, "chain", cmd_chain_fn, "chain all|<n>|from <n>|run <ksps> [s] - the chain test");
 
@@ -1160,6 +1207,13 @@ void cli_init(void)
                  "type 'help' for the commands\r\n"
                  "please log this terminal from power-up and send it back\r\n");
 
+    /* Transmit interrupt: from here on output goes through uart.c's ring
+     * buffer instead of waiting on the FIFO. Not in the simulator, which
+     * aborts on any pending interrupt (E0110) - there the polled path
+     * stays, byte for byte the old behaviour. */
+#ifndef __MPLAB_DEBUGGER_SIMULATOR
+    uart_enable_tx_irq(UART_TX_PRIORITY);
+#endif
     /* Receive interrupt: enabled last, so that nothing typed early runs a
      * command before the measurement is set up (uart_enable_rx_irq()). */
     uart_enable_rx_irq(UART_RX_PRIORITY);

@@ -266,7 +266,7 @@ def layers():
     d.append(band(676, 86, "drv", "Drivers", ["src/drivers/", "src/sim/"]))
     drv = [("clock.c", ["PLL1, PLL2", "CLKGEN6/7/13"]), ("adc.c", ["core 5, burst", "trigger, calib."]),
            ("dma.c", ["ch. 0 + ISR, ch. 1 tx", "sim: sim_dma.c"]), ("sccp.c", ["SCCP1 trigger,", "SCCP2 play clock"]),
-           ("dac.c", ["DAC1/2 triangle", "UREF route"]), ("uart.c", ["UART2, PPS", "RX ISR"]),
+           ("dac.c", ["DAC1/2 triangle", "UREF route"]), ("uart.c", ["UART2, PPS", "RX ISR, TX ring + ISR"]),
            ("timebase.c", ["Timer1", "stopwatch"]), ("led.c", ["LED0"])]
     hw = [("PLL1 / PLL2", ["PLL1 → ADC path", "PLL2 → CPU"]), ("ADC", ["core 5, AD5AN3", "(pin RA8)"]),
           ("DMA0 · DMA1", ["ch. 0: ADC → RAM", "ch. 1: RAM → DAC"]), ("SCCP1 · SCCP2", ["CLKGEN13 160 MHz,", "peripheral 100 MHz"]),
