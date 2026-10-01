@@ -218,6 +218,7 @@ typedef struct {
     uint32_t transfers;
     uint16_t slpdat;
     uint32_t dac_hz;
+    uint32_t proc;      /* 1: win holds sigproc_block()'s result (sigproc.h) */
 } chain_grab_t;
 
 bool chain_stream_grab_begin(chain_grab_t *g);

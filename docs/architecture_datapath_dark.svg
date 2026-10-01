@@ -94,7 +94,7 @@ svg{--bg:#11161c;--ink:#e3e8ee;--muted:#9aa6b4;--line:#3a4552;
 <text class="an" x="516" y="200">RA8</text>
 <text class="an" x="738" y="114">result</text>
 <rect class="bx s-cli" x="200" y="290" width="200" height="56" rx="4"/>
-<circle class="st-tested" cx="389" cy="301" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session)</title></circle>
+<circle class="st-pending" cx="389" cy="301" r="5"><title>not tested with this version yet (changed since it was tested at 7b16260)</title></circle>
 <text class="t" x="210" y="315">cli.c</text>
 <text class="s" x="210" y="329">stream on &lt;ksps&gt; [core pinsel]</text>
 <rect class="bx s-app" x="450" y="290" width="280" height="56" rx="4"/>
@@ -107,7 +107,7 @@ svg{--bg:#11161c;--ink:#e3e8ee;--muted:#9aa6b4;--line:#3a4552;
 <text class="t" x="790" y="315">_DMA0Interrupt</text>
 <text class="s" x="790" y="329">dma.c · 42 instr.</text>
 <rect class="bx s-app" x="980" y="290" width="170" height="56" rx="4"/>
-<circle class="st-tested" cx="1139" cy="301" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session)</title></circle>
+<circle class="st-pending" cx="1139" cy="301" r="5"><title>not tested with this version yet (changed since it was tested at 7b16260)</title></circle>
 <text class="t" x="990" y="308">dma0_event()</text>
 <text class="s" x="990" y="322">capture.c</text>
 <text class="s" x="990" y="336">→ pingpong_on_half()</text>
@@ -116,19 +116,19 @@ svg{--bg:#11161c;--ink:#e3e8ee;--muted:#9aa6b4;--line:#3a4552;
 <text class="t" x="210" y="415">adc_gui.py (host)</text>
 <text class="s" x="210" y="429">time signal, FFT, tri_eval</text>
 <rect class="bx s-drv" x="450" y="390" width="200" height="56" rx="4"/>
-<circle class="st-tested" cx="639" cy="401" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session)</title></circle>
+<circle class="st-pending" cx="639" cy="401" r="5"><title>not tested with this version yet (changed since it was tested at 7b16260)</title></circle>
 <text class="t" x="460" y="415">uart.c · UART2</text>
 <text class="s" x="460" y="429">GRAB header, data, CRC</text>
 <rect class="bx s-cli" x="700" y="390" width="250" height="56" rx="4"/>
-<circle class="st-tested" cx="939" cy="401" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session)</title></circle>
+<circle class="st-pending" cx="939" cy="401" r="5"><title>not tested with this version yet (changed since it was tested at 7b16260)</title></circle>
 <text class="t" x="710" y="408">gui_link_stream_grab()</text>
 <text class="s" x="710" y="422">halt → completed half → frame_send()</text>
-<text class="s" x="710" y="436">→ resume</text>
+<text class="s" x="710" y="436">(sigproc on: processed first) → resume</text>
 <rect class="bx s-app" x="980" y="390" width="170" height="56" rx="4"/>
-<circle class="st-tested" cx="1139" cy="401" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session)</title></circle>
+<circle class="st-pending" cx="1139" cy="401" r="5"><title>not tested with this version yet (changed since it was tested at 7b16260)</title></circle>
 <text class="t" x="990" y="408">capture_service()</text>
 <text class="s" x="990" y="422">main loop:</text>
-<text class="s" x="990" y="436">process_buffer()</text>
+<text class="s" x="990" y="436">sigproc_block() if on</text>
 <path class="ar" d="M400 318 H450"/>
 <path class="ar" d="M855 164 V290"/>
 <path class="ar" d="M930 318 H980"/>

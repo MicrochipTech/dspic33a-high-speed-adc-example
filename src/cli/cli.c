@@ -226,13 +226,58 @@ static volatile uint8_t  rx_last  = 0;
  * completed line is dispatched right here - called from uart.c's receive
  * interrupt (moved there in P5.1), in interrupt context, with the flag
  * already cleared for the byte that follows. */
+/*
+ * Held back while the signal processing runs (01.10.2026, sigproc.h): a
+ * command dispatched from this interrupt would interrupt sigproc_block()
+ * part-way through its half, and "stream grab" would then send a half
+ * that is neither raw nor processed. So while capture_service() runs with
+ * the processing on (capture_sigproc_busy()), and after that until the
+ * held-back bytes are out (rx_held_n != 0, which keeps the order), the
+ * bytes go into rx_held[] instead; main()'s loop hands them to the parser
+ * right after capture_service() returns, through console_rx_resume() -
+ * the delay is one half's processing at most. 64 bytes hold one whole
+ * command line (the parser's limit is 63 characters plus CR), and the GUI
+ * sends one line at a time and waits for its reply; a byte beyond that is
+ * dropped and counted (rx_held_lost). With the processing off nothing is
+ * held back and every byte goes straight to the parser, as before.
+ */
+#define RX_HELD_MAX 64u
+static volatile uint8_t  rx_held[RX_HELD_MAX];
+static volatile uint32_t rx_held_n    = 0;
+static volatile uint32_t rx_held_lost = 0;
+
 void uart_rx_hook(uint8_t b)
 {
     rx_count++;
     rx_last = b;
     if (b == 0x0Du)      { rx_cr++; }
     else if (b == 0x0Au) { rx_lf++; }
+    if (capture_sigproc_busy() || (rx_held_n != 0u)) {
+        if (rx_held_n < RX_HELD_MAX) { rx_held[rx_held_n++] = b; }
+        else                         { rx_held_lost++; }
+        return;
+    }
     cmd_parser_feed_char((char)b);
+}
+
+/* main()'s loop, after capture_service(): run the held-back bytes through
+ * the parser with the receive interrupt masked - a command dispatched here
+ * runs exactly as it would have inside the interrupt, with nothing else
+ * entering the parser meanwhile. The interrupt is masked before rx_held_n
+ * is read, so no byte is appended behind the loop's back; bytes arriving
+ * meanwhile wait in the FIFO and follow when the mask is lifted. */
+void console_rx_resume(void)
+{
+    if (rx_held_n == 0u) { return; }
+    const bool was = uart_rx_irq_mask();
+    /* rx_held_n is re-read each pass: a command run from here that brings
+     * the console back up (uart_enable_rx_irq()) could let the interrupt
+     * append behind it, and those bytes belong to this pass too. */
+    for (uint32_t i = 0; i < rx_held_n; i++) {
+        cmd_parser_feed_char((char)rx_held[i]);
+    }
+    rx_held_n = 0u;
+    uart_rx_irq_restore(was);
 }
 
 /* The small formatting helpers u32_to_str(), u32_to_hex() and copy_str()
@@ -321,8 +366,8 @@ void put_line(const char *s)
  * route's src/sink are named by a short, static string (routing.c's
  * route_src_name()/route_sink_name()), not a number - no local buffer
  * needed, every argument is already a complete, nul-terminated string.
- * Static: only cmd_route_fn() below uses it, unlike put_kv()/put_line()
- * which bench.c and gui_link.c also borrow. */
+ * Static: only cmd_route_fn() and cmd_sigproc_fn() below use it, unlike
+ * put_kv()/put_line() which bench.c and gui_link.c also borrow. */
 static void put_kv_str(const char *key, const char *s)
 {
     cmd_parser_write(key);
@@ -575,6 +620,28 @@ static void cmd_siggen_fn(int argc, char **argv)
     usage(use);
 }
 CMD_DEFINE(siggen, "siggen", cmd_siggen_fn, "siggen [set <p> <v> | on <dac> <n> <hz> [snap] [force] [oc] | off | regs]");
+
+/* ------------------------------------------------------------------ *
+ * "sigproc" - the signal processing switch (01.10.2026, sigproc.h):
+ *   sigproc on | sigproc off    sigproc_block() per completed half, in
+ *                               place, or not at all (off after reset)
+ *   sigproc                     status
+ * The GUI's "signal processing" switch sends the first two. One parser
+ * slot. Longest reply line: "rx_held_lost: " + 10 digits + CRLF = 26. */
+static void cmd_sigproc_fn(int argc, char **argv)
+{
+    if (argc == 2) {
+        if (strcmp(argv[1], "on") == 0)       { capture_sigproc_enable(true); }
+        else if (strcmp(argv[1], "off") == 0) { capture_sigproc_enable(false); }
+        else { usage("sigproc [on|off]"); return; }
+    } else if (argc != 1) {
+        usage("sigproc [on|off]");
+        return;
+    }
+    put_kv_str("sigproc", capture_sigproc_enabled() ? "on" : "off");
+    put_kv("rx_held_lost", rx_held_lost);
+}
+CMD_DEFINE(sigproc, "sigproc", cmd_sigproc_fn, "sigproc [on|off] - the signal processing (sigproc.c), in place");
 
 static void cmd_start_fn(int argc, char **argv)
 {
@@ -1060,6 +1127,7 @@ void cli_init(void)
     (void)cmd_register(&cmd_regs);
     (void)cmd_register(&cmd_route);
     (void)cmd_register(&cmd_siggen);
+    (void)cmd_register(&cmd_sigproc);
     (void)cmd_register(&cmd_start);
     (void)cmd_register(&cmd_stop);
     (void)cmd_register(&cmd_samc);

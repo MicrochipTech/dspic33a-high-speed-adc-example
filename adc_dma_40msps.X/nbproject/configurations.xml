@@ -11,6 +11,7 @@
         <itemPath>../src/app/acquisition_priv.h</itemPath>
         <itemPath>../src/app/routing.h</itemPath>
         <itemPath>../src/app/pingpong.h</itemPath>
+        <itemPath>../src/app/sigproc.h</itemPath>
         <itemPath>../src/app/board.h</itemPath>
       </logicalFolder>
       <logicalFolder name="boards" displayName="boards" projectFiles="true">
@@ -82,6 +83,7 @@
       <logicalFolder name="app" displayName="app" projectFiles="true">
         <itemPath>../src/app/main.c</itemPath>
         <itemPath>../src/app/pingpong.c</itemPath>
+        <itemPath>../src/app/sigproc.c</itemPath>
         <itemPath>../src/app/capture.c</itemPath>
         <itemPath>../src/app/acquisition.c</itemPath>
         <itemPath>../src/app/routing.c</itemPath>

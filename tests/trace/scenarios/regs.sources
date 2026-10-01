@@ -4,6 +4,7 @@ src/drivers/adc.c
 src/drivers/dma.c
 src/app/pingpong.c
 src/app/capture.c
+src/app/sigproc.c
 src/drivers/dac.c
 src/drivers/sccp.c
 src/drivers/timebase.c

@@ -291,7 +291,9 @@ int main(void)
 
     for (;;) {
         SIM_DMA_TICK();               /* simulator: one half per pass    */
-        if (capture_service()) {
+        const bool served = capture_service();
+        console_rx_resume();          /* bytes held back meanwhile (sigproc on) */
+        if (served) {
             idle = 0;
             /* No status lines while "stream on" runs: printing takes the
              * CPU from this loop for milliseconds and would itself cause

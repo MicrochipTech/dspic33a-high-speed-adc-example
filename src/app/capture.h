@@ -146,6 +146,17 @@ const struct pll_step *capture_sweep_steps(uint32_t *count);
  * the measurement keeps running while a long console reply drains. */
 bool capture_service(void);
 
+/* The signal processing (sigproc.c, sigproc.h): sigproc_block() is called
+ * for each completed half only while it is switched on - console command
+ * "sigproc on|off", off after reset. busy: capture_service() is running
+ * with it on (cli.c's uart_rx_hook() holds bytes back meanwhile).
+ * catch_up: "stream grab", after the halt - process the last completed
+ * half now if the main loop has not yet. */
+void capture_sigproc_enable(bool on);
+bool capture_sigproc_enabled(void);
+bool capture_sigproc_busy(void);
+void capture_sigproc_catch_up(void);
+
 /* capture_oneshot()/capture_oneshot_n(): meter.h (P9.3, 27.09.2026). */
 /* Timer1 ticks of the last one-shot, the BURST ALONE - the DMA channel
  * being taken down and set up again costs a fixed 11.3 us and used to sit

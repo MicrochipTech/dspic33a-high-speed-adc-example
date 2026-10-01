@@ -50,6 +50,7 @@
 #include "stats.h"
 #include "pingpong.h"
 #include "capture_priv.h"
+#include "sigproc.h"
 
 /* SELFTEST_* moved to meter.c with capture_selftest() (P9.3, 27.09.2026). */
 
@@ -692,8 +693,11 @@ void counters_clear(void)
 /* ------------------------------------------------------------------ *
  * Process one completed buffer half
  *
- * Placeholder for the customer's "+ and -" arithmetic. Written as a
- * plain accumulate so the cost of touching every sample is visible in
+ * Since 01.10.2026 the stream's own processing is sigproc_block()
+ * (sigproc.c), called from capture_service(); this function is now only
+ * the back-to-back bench's fixed reference load (meter.c's
+ * capture_process_bench()). It was the placeholder for the customer's
+ * "+ and -" arithmetic, written as a plain accumulate so the cost of touching every sample is visible in
  * the measurement: at 40 MSPS this loop sees 40 million values per
  * second and per channel, and whether the CPU keeps up is as much a
  * question as the DMA bandwidth.
@@ -734,14 +738,72 @@ void process_buffer(const volatile uint16_t *b, uint32_t n)
  * instruments (P9.3, 27.09.2026); half_mean() (lib/stats.c, P2.2) moved
  * with it - capture_selftest() is its only caller. */
 
+/* The signal processing switch ("sigproc on|off", off after reset) and
+ * the flag that says capture_service() is running with it on. While that
+ * flag is set, cli.c's uart_rx_hook() holds received bytes back instead of
+ * running a command (capture_sigproc_busy()), so no console command - in
+ * particular "stream grab" - can interrupt the processing of a half
+ * part-way through (sigproc.h). It is set for the WHOLE call, not only
+ * around sigproc_block(): a grab landing between pingpong_service() and
+ * the processing would otherwise find the half marked as seen but not yet
+ * processed, and send it raw under proc=1. */
+static volatile bool sigproc_on   = false;
+static volatile bool sigproc_busy = false;
+
+void capture_sigproc_enable(bool on) { sigproc_on = on; }
+bool capture_sigproc_enabled(void)   { return sigproc_on; }
+bool capture_sigproc_busy(void)      { return sigproc_busy; }
+
+static bool service_once(bool processing);
+
 bool capture_service(void)
+{
+    const bool processing = sigproc_on;     /* one reading for this half */
+    if (processing) { sigproc_busy = true; }
+    const bool served = service_once(processing);
+    sigproc_busy = false;
+    return served;
+}
+
+/* "stream grab" with the processing on, after the trigger is halted: the
+ * half it is about to send must be processed. Nothing can be part-way
+ * (see above), so either the main loop already processed the last
+ * completed half, and capture_service() finds nothing new, or it has not,
+ * and capture_service() does it now. Off, nothing is touched. */
+void capture_sigproc_catch_up(void)
+{
+    if (sigproc_on) { (void)capture_service(); }
+}
+
+static bool service_once(bool processing)
 {
     if (!pingpong_service(&pp, blocks_done)) {
         return false;
     }
     proc_missed = pp.missed;
+    /* The completed half goes to the signal processing (sigproc.c), ping
+     * and pong alike, when it is switched on. ready_half and half_len are
+     * read once, so the pointer, the length and info.half agree even if
+     * the next DMA event lands in between. The DMA is writing the other
+     * half, so the block is handed over as plain memory, to read and to
+     * write the result back into; the compiler barrier keeps every access
+     * after the ready check above (process_buffer() did the same until
+     * 01.10.2026 - it stays for meter.c's bench). The simulator's
+     * ping-pong order check moved here from process_buffer(): it judges
+     * the service, not the processing, and must run with it off too. The
+     * time is measured either way - with the processing off it is the
+     * cost of the service alone. */
+    const uint32_t h = ready_half;
+    const uint32_t n = half_len;
+    const volatile uint16_t *half = pingpong_completed_half(buf, n, h);
+    SIM_CHECK_HALF(half, n);          /* simulator: is this really the next half? */
+    const sigproc_info_t info = { h, pp.seen_blocks, proc_missed };
+    __asm__ volatile ("" ::: "memory");
     const uint32_t t0 = timebase_ticks();
-    process_buffer(capture_completed_half(), half_len);
+    if (processing) {
+        sigproc_block((uint16_t *)(volatile void *)half, n, &info);
+    }
+    __asm__ volatile ("" ::: "memory");
     const uint32_t dt = timebase_ticks() - t0;
     if (dt > proc_ticks_max) { proc_ticks_max = dt; }
     proc_ticks_sum += dt;

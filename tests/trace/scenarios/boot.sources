@@ -3,6 +3,7 @@ src/drivers/timebase.c
 src/drivers/adc.c
 src/app/pingpong.c
 src/app/capture.c
+src/app/sigproc.c
 src/drivers/dma.c
 src/drivers/led.c
 src/drivers/sccp.c

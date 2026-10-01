@@ -69,7 +69,10 @@ assert crc16_ccitt_false(b"123456789") == 0x29B1, "CRC-16/CCITT-FALSE check valu
 # ---------------------------------------------------------------------------
 _GRAB_HEADER_RE = re.compile(
     r"GRAB n=(\d+) from=(\d+) ksps=(\d+) ov=(\d+) late=(\d+) missed=(\d+) "
-    r"halves=(\d+) xfer=(\d+) slp=(\d+) dachz=(\d+)")
+    r"halves=(\d+) xfer=(\d+) slp=(\d+) dachz=(\d+)(?: proc=(\d+))?")
+# proc= (01.10.2026): 1 = the payload is the firmware's signal processing
+# result (src/app/sigproc.h, "sigproc on"), 0 = raw samples. Optional, so a
+# firmware from before it parses as proc 0.
 
 
 def parse_grab_frame(header_line: str, payload: bytes, tail: bytes):
@@ -85,7 +88,8 @@ def parse_grab_frame(header_line: str, payload: bytes, tail: bytes):
     n = int(m.group(1))
     meta = dict(from_=int(m.group(2)), ksps=int(m.group(3)), overrun=int(m.group(4)),
                 late=int(m.group(5)), missed=int(m.group(6)), halves=int(m.group(7)),
-                transfers=int(m.group(8)), slpdat=int(m.group(9)), dac_hz=int(m.group(10)))
+                transfers=int(m.group(8)), slpdat=int(m.group(9)), dac_hz=int(m.group(10)),
+                proc=int(m.group(11) or 0))
     m2 = _CRC_LINE_RE.search(tail)
     if not m2:
         raise RuntimeError(f"grab: no CRC line, got {tail!r}")

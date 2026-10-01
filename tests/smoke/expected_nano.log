@@ -6,7 +6,7 @@
 ##   ADC/DMA TEST LOG  -  START OF RUN  (copy from here)    ##
 ##############################################################
 
-[boot] adc_dma_40msps Oct  1 2026 16:08:36 git 3e4d025+local changes (master)
+[boot] adc_dma_40msps Oct  1 2026 17:04:59 git fc57833+local changes (master)
 [simtest] *** SIMULATOR BUILD - this log is not from hardware ***
 [simtest] Purpose: check that the program's buffer logic is right -
 [simtest] that the two halves of the ping-pong buffer are filled,
@@ -25,7 +25,7 @@
 adc_dma_40msps - ADC at 40 MSPS into RAM via DMA
 *** SIMULATOR BUILD: no hardware, ADC and DMA are software stand-ins, samples are a synthetic sine ***
 board: EV17P63A, dsPIC33AK512MPS506 Curiosity Nano
-build: adc_dma_40msps Oct  1 2026 16:08:51 git 3e4d025+local changes (master)
+build: adc_dma_40msps Oct  1 2026 17:05:15 git fc57833+local changes (master)
 type 'help' for the commands
 please log this terminal from power-up and send it back
 > [boot] crc16/ccitt-false self-check: ok (0x29B1)
@@ -44,6 +44,7 @@ Available commands:
   regs - clock, ADC, DMA and UART registers
   route list - the active route(s) and the resource table
   siggen [set <p> <v> | on <dac> <n> <hz> [snap] [force] [oc] | off | regs]
+  sigproc [on|off] - the signal processing (sigproc.c), in place
   start - start the burst stream
   stop - stop after the current buffer
   samc <0..31> - sample time in TAD steps
@@ -69,7 +70,7 @@ Available commands:
   reset - software reset
 > [smoke] > version
 version
-[build] adc_dma_40msps Oct  1 2026 16:08:47 git 3e4d025+local changes (master)
+[build] adc_dma_40msps Oct  1 2026 17:05:11 git fc57833+local changes (master)
 [build] board: EV17P63A, dsPIC33AK512MPS506 Curiosity Nano
 [build] adc core: 1
 [build] default input (pinsel): 0
@@ -109,11 +110,11 @@ rx_bytes: 0
 rx_last: 0
 rx_cr: 0
 rx_lf: 0
-stack_size: 27500
+stack_size: 27420
 stack_used: 188
-stack_hwm_addr: 54528
+stack_hwm_addr: 54608
 stack_free_pct: 99
-buf_addr: 33196
+buf_addr: 33208
 buf_align_mod4: 0
 buf_len: 8192
 buf_guard_ok: 1

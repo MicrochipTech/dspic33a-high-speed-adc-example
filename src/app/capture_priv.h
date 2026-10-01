@@ -8,8 +8,10 @@
  * capture_oneshot_n()/capture_measure_rate() into src/meter/meter.c, but
  * two things they need stay in capture.c on purpose:
  *
- *   process_buffer()   also called by capture_service() (the main loop),
- *                       which stays in capture.c; and
+ *   process_buffer()   called by capture_service() (the main loop) until
+ *                       01.10.2026 - that call is sigproc_block() now
+ *                       (sigproc.c), so meter.c's bench is its only
+ *                       caller; it stays here unchanged; and
  *   wait_for_blocks()   calls guard_check(), a static that reads the
  *                       guard words directly behind the private DMA
  *                       buffer (dma_buffer, capture.c) and is also called

@@ -323,6 +323,20 @@
       "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
       "rev": "7b16260"
     },
+    "sigproc.c": {
+      "status": "pending",
+      "offboard": true,
+      "blocks": [],
+      "open": [
+        "not run on silicon: 'sigproc on', the held-back console bytes and the processed grab (proc=1) are new on 01.10.2026; the body is still an empty stub - covered off the board by the simulator smoke/acceptance runs (with it off) and adc_gui.py --selftest (FakeTarget)"
+      ],
+      "files": [
+        "src/app/sigproc.c",
+        "src/app/sigproc.h"
+      ],
+      "evidence": "none on silicon yet",
+      "rev": null
+    },
     "capture_service()": {
       "status": "tested",
       "offboard": true,

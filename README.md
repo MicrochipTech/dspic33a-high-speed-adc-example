@@ -625,13 +625,23 @@ the cause of the next overrun.
 
 ![CPU and counters](docs/04_cpu_and_counters.png)
 
+**Your own processing goes into `src/app/sigproc.c`** (`sigproc_block()`, the body is empty
+today). The firmware calls it from the main loop once per completed half - ping and pong
+alike - while `sigproc on` is set (console, or the GUI's "signal processing" switch; off
+after reset), with the half's samples, its length and which half it is. The result goes
+back into the same half: `stream grab` then sends the processed data to the GUI (the frame
+says `proc=1`), with no second buffer. It has one half period to return (2048 samples at
+8 MSPS: 256 us, 25 CPU cycles per sample); `status` and the chain test's load figures show
+what it takes, and `missed` counts the halves it was too slow for. `src/app/sigproc.h` has
+the rules. `chain all` and `test` judge raw samples - switch the processing off for them.
+
 ## The console
 
 UART2 on the board's MCP2221A USB-UART channel, 115200 8N1, no flow control. The parser
 is [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser), copied unchanged except for
 one line (the command table is 32 entries instead of 16 — `CMD_PARSER_MAX_COMMANDS`,
-`cmd_parser.h`; 28 commands, including `route` and `siggen`, plus the built-in `help` are
-registered — 29 of 32 slots, 3 free, `nano-board`). It
+`cmd_parser.h`; 29 commands, including `route`, `siggen` and `sigproc`, plus the built-in `help` are
+registered — 30 of 32 slots, 2 free, `nano-board`). It
 runs in the UART receive interrupt, below the DMA interrupt — which is why a rate that
 overruns makes the console unresponsive, and why the firmware boots idle.
 

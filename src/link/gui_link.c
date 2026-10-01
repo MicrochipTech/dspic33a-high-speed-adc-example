@@ -161,7 +161,9 @@ void link_register(void)
  *
  *   GRAB n=<count> from=<from> ksps=<ksps> ov=<overrun> late=<late>
  *        missed=<missed> halves=<halves> xfer=<transfers> slp=<slpdat>
- *        dachz=<dac_hz>CRLF
+ *        dachz=<dac_hz> proc=<0|1>CRLF
+ *   (proc= since 01.10.2026: 1 = the payload is sigproc_block()'s result,
+ *   the signal processing was on - sigproc.h)
  *   <2*count bytes, uint16 little endian, 12-bit value in bits 11:0>
  *   CRLF CRC <hex4> CRLF
  *
@@ -179,7 +181,12 @@ void gui_link_stream_grab(void)
     chain_grab_t g;
     const bool got = chain_stream_grab_begin(&g);
 
-    char head[128];
+    /* Longest possible header: the eleven field names with their spaces
+     * and "=" (69 characters), ten 32-bit values of up to 10 digits, proc
+     * 1 digit, CRLF and the terminator - 69 + 100 + 1 + 2 + 1 = 173. Was
+     * char[128] until 01.10.2026, too short for ten fields at their
+     * largest even before proc= (165 + 1). */
+    char head[176];
     char *p = copy_str(head, "GRAB n=");
     p = u32_to_str(p, got ? g.win_len : 0u);
     p = copy_str(p, " from=");   p = u32_to_str(p, got ? g.from : 0u);
@@ -191,6 +198,7 @@ void gui_link_stream_grab(void)
     p = copy_str(p, " xfer=");   p = u32_to_str(p, got ? g.transfers : 0u);
     p = copy_str(p, " slp=");    p = u32_to_str(p, got ? g.slpdat : 0u);
     p = copy_str(p, " dachz=");  p = u32_to_str(p, got ? g.dac_hz : 0u);
+    p = copy_str(p, " proc=");   p = u32_to_str(p, got ? g.proc : 0u);
     p = copy_str(p, "\r\n");
     const size_t head_len = (size_t)(p - head);
 

@@ -59,17 +59,17 @@ svg{--bg:#11161c;--ink:#e3e8ee;--muted:#9aa6b4;--line:#3a4552;
 <text class="lf" x="24" y="152">src/cli/</text>
 <text class="lf" x="24" y="165">src/link/</text>
 <rect class="bx s-cli" x="170" y="124" width="400" height="62" rx="4"/>
-<circle class="st-tested" cx="559" cy="135" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session)</title></circle>
+<circle class="st-pending" cx="559" cy="135" r="5"><title>not tested with this version yet (changed since it was tested at 7b16260)</title></circle>
 <text class="t" x="180" y="145">cli.c · console.h</text>
-<text class="s" x="180" y="159">28 commands + help in 32 parser slots</text>
-<text class="s" x="180" y="173">stream on|off|grab · route list · siggen · status · clk</text>
+<text class="s" x="180" y="159">29 commands + help in 32 parser slots</text>
+<text class="s" x="180" y="173">stream on|off|grab · route list · siggen · sigproc · status</text>
 <rect class="bx s-cli" x="582" y="124" width="250" height="62" rx="4"/>
 <circle class="st-tested" cx="821" cy="135" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session)</title></circle>
 <text class="t" x="592" y="145">cmd_parser.c</text>
 <text class="s" x="592" y="159">upstream zabooh/cmd_parser</text>
 <text class="s" x="592" y="173">do not edit (MAX_COMMANDS only)</text>
 <rect class="bx s-cli" x="844" y="124" width="296" height="62" rx="4"/>
-<circle class="st-tested" cx="1129" cy="135" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session); open: snap, rate, blk</title></circle>
+<circle class="st-pending" cx="1129" cy="135" r="5"><title>not tested with this version yet (changed since it was tested at 7b16260); open: snap, rate, blk</title></circle>
 <text class="t" x="854" y="145">gui_link.c</text>
 <text class="s" x="854" y="159">snap · rate · blk</text>
 <text class="s" x="854" y="173">stream grab: halt → send → resume</text>
@@ -102,25 +102,29 @@ svg{--bg:#11161c;--ink:#e3e8ee;--muted:#9aa6b4;--line:#3a4552;
 <text class="lf" x="24" y="356">src/app/</text>
 <text class="lf" x="24" y="369">src/boards/</text>
 <rect class="bx s-app" x="170" y="328" width="150" height="48" rx="4"/>
-<circle class="st-tested" cx="309" cy="339" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session); open: intermittent fail 8 just after stream off with the generator on: 2 in ~176, not reproduced in 76 more (HARDWARE-LOG 2026-09-29)</title></circle>
+<circle class="st-pending" cx="309" cy="339" r="5"><title>not tested with this version yet (changed since it was tested at 7b16260); open: intermittent fail 8 just after stream off with the generator on: 2 in ~176, not reproduced in 76 more (HARDWARE-LOG 2026-09-29)</title></circle>
 <text class="t" x="180" y="349">main.c</text>
 <text class="s" x="180" y="363">start-up order, loop</text>
 <rect class="bx s-app" x="332" y="328" width="330" height="48" rx="4"/>
-<circle class="st-tested" cx="651" cy="339" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session); open: intermittent fail 8 just after stream off with the generator on: 2 in ~176, not reproduced in 76 more (HARDWARE-LOG 2026-09-29)</title></circle>
+<circle class="st-pending" cx="651" cy="339" r="5"><title>not tested with this version yet (changed since it was tested at 7b16260); open: intermittent fail 8 just after stream off with the generator on: 2 in ~176, not reproduced in 76 more (HARDWARE-LOG 2026-09-29)</title></circle>
 <text class="t" x="342" y="349">acquisition.c</text>
 <text class="s" x="342" y="363">rate (PLL1), variant matrix, stream on/off, chain setup</text>
 <rect class="bx s-app" x="674" y="328" width="250" height="48" rx="4"/>
-<circle class="st-tested" cx="913" cy="339" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session)</title></circle>
+<circle class="st-pending" cx="913" cy="339" r="5"><title>not tested with this version yet (changed since it was tested at 7b16260)</title></circle>
 <text class="t" x="684" y="349">routing.c</text>
 <text class="s" x="684" y="363">route_t, resources, routing_apply()</text>
 <rect class="bx s-app" x="936" y="328" width="204" height="48" rx="4"/>
-<circle class="st-tested" cx="1129" cy="339" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session); open: the EV17P63A (Nano) profile - its own first run</title></circle>
+<circle class="st-pending" cx="1129" cy="339" r="5"><title>not tested with this version yet (changed since it was tested at 7b16260); open: the EV17P63A (Nano) profile - its own first run</title></circle>
 <text class="t" x="946" y="349">board.h · board_cfg</text>
 <text class="s" x="946" y="363">EV74H48A | EV17P63A</text>
-<rect class="bx s-app" x="170" y="384" width="440" height="44" rx="4"/>
-<circle class="st-tested" cx="599" cy="395" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session); open: intermittent fail 8 just after stream off with the generator on: 2 in ~176, not reproduced in 76 more (HARDWARE-LOG 2026-09-29)</title></circle>
+<rect class="bx s-app" x="170" y="384" width="300" height="44" rx="4"/>
+<circle class="st-pending" cx="459" cy="395" r="5"><title>not tested with this version yet (changed since it was tested at 7b16260); open: intermittent fail 8 just after stream off with the generator on: 2 in ~176, not reproduced in 76 more (HARDWARE-LOG 2026-09-29)</title></circle>
 <text class="t" x="180" y="403">capture.c</text>
-<text class="s" x="180" y="417">DMA buffer + guard words · dma0_event() · counters · chain halt/resume</text>
+<text class="s" x="180" y="417">buffer + guards · dma0_event() · counters</text>
+<rect class="bx s-app" x="482" y="384" width="128" height="44" rx="4"/>
+<circle class="st-pending" cx="599" cy="395" r="5"><title>not tested with this version yet (none on silicon yet); open: not run on silicon: &#x27;sigproc on&#x27;, the held-back console bytes and the processed grab (proc=1) are new on 01.10.2026; the body is still an empty stub - covered off the board by the simulator smoke/acceptance runs (with it off) and adc_gui.py --selftest (FakeTarget)</title></circle>
+<text class="t" x="492" y="403">sigproc.c</text>
+<text class="s" x="492" y="417">per half, in place</text>
 <rect class="bx s-app" x="622" y="384" width="240" height="44" rx="4"/>
 <circle class="st-tested" cx="851" cy="395" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session)</title></circle>
 <text class="t" x="632" y="403">pingpong.c</text>
@@ -187,7 +191,7 @@ svg{--bg:#11161c;--ink:#e3e8ee;--muted:#9aa6b4;--line:#3a4552;
 <text class="s" x="180" y="825">PLL1 → ADC path</text>
 <text class="s" x="180" y="839">PLL2 → CPU</text>
 <rect class="bx s-drv" x="292" y="688" width="110" height="62" rx="4"/>
-<circle class="st-tested" cx="391" cy="699" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session)</title></circle>
+<circle class="st-pending" cx="391" cy="699" r="5"><title>not tested with this version yet (changed since it was tested at 7b16260)</title></circle>
 <text class="t" x="302" y="709">adc.c</text>
 <text class="s" x="302" y="723">core 5, burst</text>
 <text class="s" x="302" y="737">trigger, calib.</text>
@@ -231,7 +235,7 @@ svg{--bg:#11161c;--ink:#e3e8ee;--muted:#9aa6b4;--line:#3a4552;
 <text class="s" x="668" y="825">on CLKGEN7</text>
 <text class="s" x="668" y="839">400 MHz → RA8</text>
 <rect class="bx s-drv" x="780" y="688" width="110" height="62" rx="4"/>
-<circle class="st-tested" cx="879" cy="699" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session)</title></circle>
+<circle class="st-pending" cx="879" cy="699" r="5"><title>not tested with this version yet (changed since it was tested at 7b16260)</title></circle>
 <text class="t" x="790" y="709">uart.c</text>
 <text class="s" x="790" y="723">UART2, PPS</text>
 <text class="s" x="790" y="737">RX ISR</text>

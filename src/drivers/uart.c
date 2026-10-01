@@ -135,6 +135,23 @@ void uart_enable_rx_irq(uint8_t priority)
     IEC3bits.U2RXIE  = 1u;
 }
 
+/* Mask the receive interrupt for a moment and put it back: cli.c's
+ * console_rx_resume() runs held-back bytes through the parser from the
+ * main loop, and the parser must not be entered from the interrupt at
+ * the same time. Bytes arriving meanwhile wait in the receive FIFO and
+ * set U2RXIF, so the interrupt follows as soon as the enable returns. */
+bool uart_rx_irq_mask(void)
+{
+    const bool was = (IEC3bits.U2RXIE != 0u);
+    IEC3bits.U2RXIE = 0u;
+    return was;
+}
+
+void uart_rx_irq_restore(bool was)
+{
+    if (was) { IEC3bits.U2RXIE = 1u; }
+}
+
 /* Weak default: a project that never overrides this only loses received
  * bytes, nothing else (P0.5/P4.7 weak-hook pattern - tests/trace/README.md,
  * P4.7 finding: weak with one strong override links on this toolchain). */

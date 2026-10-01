@@ -20,6 +20,11 @@ void console_sync_baud(void);
  * the current state. Used by the trap handler, which cannot rely on the
  * console still being intact. */
 void console_force_up(void);
+/* Bytes received while capture_service() ran with the signal processing
+ * on were held back (uart_rx_hook(), cli.c); this hands them to the parser
+ * - called by main()'s loop after every capture_service(), returns at
+ * once when nothing is held back. */
+void console_rx_resume(void);
 /* Wait (bounded) until the transmitter is empty, shift register included.
  * console_puts() returns as soon as the last character is in the FIFO,
  * so anything that changes the clock or the baud generator right after

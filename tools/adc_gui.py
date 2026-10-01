@@ -1006,6 +1006,7 @@ class FakeTarget:
         self.on_log = on_log  # optional callable(str): the console transcript
         self.board = board if board in self.FAKE_BOARD_NAMES else "EV74H48A"
         self.fake_source = None                    # see FAKE_SOURCES; None = what the input reads
+        self.sigproc = False                       # "sigproc on|off" (cli.c, 01.10.2026)
         self.port = "fake"
         # Both DACs, as dac.c has them - only ever touched by the 'dac'
         # command, never by 'stream on' itself (the test form's own
@@ -1280,6 +1281,15 @@ class FakeTarget:
         usage_stream = ["usage: stream on <ksps 1..40000> [<core 1..5> <pinsel 0..15> "
                         "[<samc 0..31>]] | stream off | stream grab | stream"]
         try:
+            if c == "sigproc":
+                # cli.c's cmd_sigproc_fn(): the board's sigproc_block() stub does
+                # nothing yet, so the stand-in only keeps the flag and reports it
+                # in the GRAB header - the data stay what they were
+                if len(args) == 1 and args[0] in ("on", "off"):
+                    self.sigproc = args[0] == "on"
+                elif args:
+                    return False, ["usage: sigproc [on|off]"]
+                return True, [f"sigproc: {'on' if self.sigproc else 'off'}", "rx_held_lost: 0"]
             if c == "dac":
                 usage = ["usage: dac <1|2> <on|off> [low] [high] [slpdat] [force]"]
                 if len(args) < 2 or args[0] not in ("1", "2"):
@@ -1448,7 +1458,8 @@ class FakeTarget:
         if self.grab_fault == "missed":
             missed = max(missed, 2)
         header_line = (f"GRAB n={n} from={frm} ksps={self.chain_ksps} ov={ov} late=0 "
-                        f"missed={missed} halves=2 xfer={2 * n} slp={slp} dachz={int(DAC_CLK_HZ)}\r\n")
+                        f"missed={missed} halves=2 xfer={2 * n} slp={slp} dachz={int(DAC_CLK_HZ)} "
+                        f"proc={1 if self.sigproc else 0}\r\n")
         self._log(f"< {header_line.rstrip()}")
         payload = np.asarray(v, dtype="<u2").tobytes()
         self._log(f"< [binary payload, {len(payload)} bytes, not shown]")
@@ -1643,6 +1654,18 @@ def selftest() -> int:
     ok_all &= ok_custom
     print(f"grab (custom input, core 3 pin 5): slp={meta['slpdat']} (expect 0) ->",
           "PASS" if ok_custom else "FAIL")
+
+    # ---- 'sigproc on|off' (01.10.2026): the frame's proc= follows it ----
+    ok_on, _ = t.cmd("sigproc on")
+    okp1, _, meta_p1 = t.grab()
+    ok_off, _ = t.cmd("sigproc off")
+    okp0, _, meta_p0 = t.grab()
+    ok_bad, _ = t.cmd("sigproc maybe")
+    ok_sp = (ok_on and okp1 and meta_p1.get("proc") == 1 and ok_off and okp0
+             and meta_p0.get("proc") == 0 and not ok_bad)
+    ok_all &= ok_sp
+    print(f"sigproc on/off: proc={meta_p1.get('proc')} then {meta_p0.get('proc')}, a bad argument refused ->",
+          "PASS" if ok_sp else "FAIL")
     f2, db2 = spectrum(np.asarray(samples), meta["ksps"] * 1e3)
     metrics = analyze_spectrum(f2, db2)
     ok_peak = bool(metrics) and abs(metrics["fund_freq"] - 250e3) < meta["ksps"] * 1e3 / len(samples)
@@ -2276,6 +2299,11 @@ def main_gui(args):
                                                value=RISING, label="edge").props("dense outlined")                         .classes("flex-grow")
                     trig_hyst_in = ui.number("hysteresis, LSB", value=16, min=0, max=2048, step=1,
                                              format="%d").props("dense outlined").classes("flex-grow")
+                # sigproc.c on the board: off after reset; on, every half is
+                # processed in place and 'stream grab' sends the result
+                with ui.row().classes("w-full gap-2 items-center"):
+                    sigproc_cb = ui.checkbox("signal processing", value=False)
+                    sigproc_lbl = ui.label("").classes("text-xs text-slate-400")
                 with ui.row().classes("w-full gap-2"):
                     single_btn = ui.button("single", icon="camera").props("unelevated").classes("flex-grow")
                     live_btn = ui.button("live", icon="play_arrow").props("unelevated").classes("flex-grow")
@@ -2713,6 +2741,10 @@ def main_gui(args):
                       "draws the expected signal over the grab and the 'loop' chip says how well "
                       "they match."),
         (sg_apply_btn, "Send the card to the board now (it also goes by itself, 0.8 s after a change)."),
+        (sigproc_cb, "Switch the firmware's signal processing on or off ('sigproc on|off', "
+                     "src/app/sigproc.c). On, every completed half is processed in place, and the "
+                     "grab shows the processed data (the frame says proc=1); the triangle check "
+                     "is skipped then. Off after every reset of the board."),
         (trig_cb, "Trigger the time plot: show every grab from the point where the signal "
                   "first crosses the level, so a periodic signal stands still. Display only - "
                   "the stream, the FFT and the triangle verdict keep the whole half. The plot "
@@ -3281,6 +3313,7 @@ def main_gui(args):
             buf_in.label = f"buffer size, total (32..{2 * state['buf_half_max']}, 'buf' = half of it)"
             buf_in.value = state["buf_size"]
             buf_lbl.text = f"buf: {state['buf_size']} (half {state['buf_size'] // 2})"
+            await apply_sigproc()
         except Exception as ex:
             push_log(f"--- connect failed: {ex} ---")
             ui.notify(f"connect failed - {ex}", type="negative", multi_line=True, timeout=12000)
@@ -3558,6 +3591,22 @@ def main_gui(args):
             await one_cycle()   # refresh the charts immediately against the new size
     buf_btn.on_click(apply_buf)
 
+    async def apply_sigproc(e=None):
+        """cli.c: sigproc on|off - the checkbox's state to the board. Also
+        sent once after connecting, because the board starts with it off."""
+        t = state["target"]
+        want = "on" if sigproc_cb.value else "off"
+        if not t:
+            sigproc_lbl.text = "not connected"
+            return
+        while state["busy"]:
+            await asyncio.sleep(0.05)
+        async with port_lock:
+            ok, lines = await port_cmd(t, f"sigproc {want}")
+        sigproc_lbl.text = (f"sigproc {want}" if ok
+                            else "not in this firmware: " + " ".join(lines)[:60])
+    sigproc_cb.on_value_change(apply_sigproc)
+
     # ---- acquisition: configure, start/keep the chain, grab, repeat ----
     def current_acq_cfg():
         mode = input_mode_sel.value or "test"
@@ -3709,6 +3758,8 @@ def main_gui(args):
                 src_txt = f"RA8: DAC2 card's triangle {lo_}..{hi_}, SLPDAT {sl_}"
             else:
                 src_txt = f"RA8: the firmware's test triangle, SLPDAT {meta['slpdat']}"
+            if meta.get("proc", 0):
+                src_txt += " - processed by the firmware (sigproc on)"
             sig_src_lbl.text = (f"source: {src_txt}   |   grab {state['cycles']}: "
                                 f"min {int(np.min(samples))}  max {int(np.max(samples))}")
             fft_chart.options["series"][0]["data"] = [[float(fx) / 1e3, float(d)] for fx, d in zip(f, db)]
@@ -3756,7 +3807,9 @@ def main_gui(args):
                     chip.props("color=grey-8")
 
             fake_no_tri = isinstance(t, FakeTarget) and t.fake_source in ("sine", "dac1")
-            if meta["slpdat"] > 0 and not fake_no_tri and state["test_dac2"] != "off":
+            # processed data (proc=1) need not be a triangle any more
+            if (meta["slpdat"] > 0 and not fake_no_tri and state["test_dac2"] != "off"
+                    and not meta.get("proc", 0)):
                 triangle_card.set_visibility(True)
                 r = chain_tri_eval([int(v) for v in samples])
                 verdict = chain_grid_ok(r)

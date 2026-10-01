@@ -547,6 +547,13 @@ bool chain_stream_grab_begin(chain_grab_t *g)
         chain_stream_off();
         return false;
     }
+    /* With the signal processing on, the half sent must be the processed
+     * one: the trigger is halted, so no half completes any more, and the
+     * last completed one is processed now if the main loop had not got to
+     * it yet (capture.c, sigproc.h). Read after that, like every counter
+     * below. */
+    capture_sigproc_catch_up();
+    g->proc    = capture_sigproc_enabled() ? 1u : 0u;
     g->win     = capture_completed_half();
     g->win_len = capture_half_len();
     g->from    = (uint32_t)(g->win - capture_buffer());

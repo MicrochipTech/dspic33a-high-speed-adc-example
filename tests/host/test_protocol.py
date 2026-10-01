@@ -43,7 +43,8 @@ def build_grab_frame(samples, **meta):
     header = (f"GRAB n={n} from={meta.get('from_', 0)} ksps={meta.get('ksps', 8000)} "
               f"ov={meta.get('ov', 0)} late={meta.get('late', 0)} missed={meta.get('missed', 0)} "
               f"halves={meta.get('halves', 2)} xfer={meta.get('xfer', 2 * n)} "
-              f"slp={meta.get('slp', 8)} dachz={meta.get('dachz', 320000000)}\r\n")
+              f"slp={meta.get('slp', 8)} dachz={meta.get('dachz', 320000000)}"
+              + (f" proc={meta['proc']}" if "proc" in meta else "") + "\r\n")
     payload = b"".join(int(v & 0x0FFF).to_bytes(2, "little") for v in samples)
     crc = protocol.crc16_ccitt_false(payload)
     tail = f"\r\nCRC {crc:04X}\r\n> ".encode("ascii") + protocol.ACK
@@ -168,6 +169,16 @@ def main() -> int:
     ok_all &= check("GRAB frame decodes",
                      ok and list(decoded) == samples and meta["from_"] == 1024 and meta["slpdat"] == 18,
                      f"ok={ok} samples={list(decoded)} meta={meta}")
+
+    # proc= (01.10.2026): the signal processing flag - read when present,
+    # 0 when absent (a firmware from before it).
+    _, _, meta_old = protocol.parse_grab_frame(*build_grab_frame(samples))
+    _, _, meta_p0 = protocol.parse_grab_frame(*build_grab_frame(samples, proc=0))
+    okp, decp, meta_p1 = protocol.parse_grab_frame(*build_grab_frame(samples, proc=1))
+    ok_all &= check("GRAB frame proc= read, 0 when absent",
+                     meta_old["proc"] == 0 and meta_p0["proc"] == 0 and meta_p1["proc"] == 1
+                     and okp and list(decp) == samples,
+                     f"absent={meta_old['proc']} proc0={meta_p0['proc']} proc1={meta_p1['proc']}")
 
     # n=0 is the NAK shape ("stream on" not running / halt-restart failed) -
     # the same frame FakeTarget.grab() and the firmware send for that case.

@@ -116,6 +116,12 @@ void uart_stat_probe(void);
  * (was cli_init()'s three lines at the end). */
 void uart_enable_rx_irq(uint8_t priority);
 
+/* Mask the receive interrupt, returning whether it was enabled; and put
+ * that state back. For cli.c's console_rx_resume(), which feeds held-back
+ * bytes to the parser from the main loop (since 01.10.2026). */
+bool uart_rx_irq_mask(void);
+void uart_rx_irq_restore(bool was);
+
 /* Called once per received byte, from the receive interrupt
  * (_U2RXInterrupt, moved here from cli.c in P5.1), with the flag already
  * cleared for the byte that follows. Weak default does nothing; cli.c's
