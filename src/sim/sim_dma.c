@@ -31,7 +31,7 @@
  * is 15/16 * 4096 and what the self-test expects; on any other input a
  * 1 MHz sine, 2048 +/- 1600 counts. 1 MHz at 40 MSPS is 40 samples per
  * period, which is what this ADC is for: an 8 MSPS converter would see
- * the same tone with 8 points. A half of 1024 samples holds 25.6
+ * the same tone with 8 points. A half of 2048 samples holds 51.2
  * periods, so the phase runs on across the half boundary like a real
  * signal would, and the per-half sum (proc_result) alternates between
  * two values - a cheap check that the halves are really served in order.
@@ -225,9 +225,9 @@ void sim_dma_tick(void)
  * to it exactly: every sample of a completed half, as process_buffer()
  * receives it through capture_completed_half(), must equal the sine
  * table, and the phase must continue from where the previous half
- * ended. A half of 1024 samples advances the phase by 1024 mod 40 = 24,
- * so a half served twice (phase step 0) or two halves swapped (step 8
- * instead of 24) shows up as a mismatch at index 0, and a wrong pointer
+ * ended. A half of 2048 samples advances the phase by 2048 mod 40 = 8,
+ * so a half served twice (phase step 0) or two halves swapped (any step
+ * other than 8) shows up as a mismatch at index 0, and a wrong pointer
  * or a corrupted region shows up at the index where it starts.
  *
  * Runs over SIM_CHECK_HALVES halves (SIM_CHECK_HALVES / 2 full DMA

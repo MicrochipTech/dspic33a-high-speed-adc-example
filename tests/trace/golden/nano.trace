@@ -26,21 +26,22 @@ W T1CON        0x00000000 -> 0x00008010
 # timebase_init()
 W AD1CON       0x80480000 -> 0x80488000
 W AD1CH0CON1   0x00000000 -> 0x00000281
-W AD1CH0CNT    0x00000000 -> 0x00000800
-C [adc] core ready, Integration mode, CNT 2048, back-to-back
+W AD1CH0CNT    0x00000000 -> 0x00001000
+C [adc] core ready, Integration mode, back-to-back
+C [adc] cnt: 4096
 C [adc] pinsel: 0
 C [adc] samc: 0
 # adc_init()
 W IEC2         0x00000000 -> 0x00002000
 W DMACON       0x00000000 -> 0x00008001
 W DMALOW       0x00000000 -> &dma_buffer+0x0
-W DMAHIGH      0x00000000 -> &dma_buffer+0xFFF
+W DMAHIGH      0x00000000 -> &dma_buffer+0x1FFF
 W DMA0CH       0x00000000 -> 0x0600144B
 W DMA0SEL      0x00000000 -> 0x0000002F
 W DMA0SRC      0x00000000 -> &AD1CH0RES(0x000824)
 W DMA0DST      0x00000000 -> &dma_buffer+0x0
-W DMA0CNT      0x00000001 -> 0x00000800
+W DMA0CNT      0x00000001 -> 0x00001000
 C [dma] channel 0 armed, IRQ on; address window = the buffer:
 C [dma] DMALOW: &dma_buffer+0x0
-C [dma] DMAHIGH: &dma_buffer+0xFFF
+C [dma] DMAHIGH: &dma_buffer+0x1FFF
 # capture_init()

@@ -26,8 +26,10 @@
 
 /* The buffer is allocated at this maximum; the length in use is set at
  * run time (capture_set_half_len, "buf" command) and defaults to the
- * maximum, so nothing changes unless someone asks. */
-#define SAMPLES_PER_HALF_MAX  1024u
+ * maximum, so nothing changes unless someone asks. 2048 since 01.10.2026
+ * (1024 before): 8 KB for the buffer, and dactest.c's store[] grows with
+ * it - 8 KB more RAM in all, about 25 KB of stack left (64 KB data). */
+#define SAMPLES_PER_HALF_MAX  2048u
 #define SAMPLES_PER_BUF_MAX   (2u * SAMPLES_PER_HALF_MAX)
 #define SAMPLES_PER_HALF_MIN  16u
 

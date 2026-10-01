@@ -122,7 +122,7 @@ volatile uint32_t dma_bus_err   = 0;   /* DMA0STAT.BRERR | BWERR (note 1)  */
 volatile uint32_t late_service  = 0;   /* HALF and DONE pending together   */
 volatile uint32_t proc_missed   = 0;   /* main() skipped a completed half  */
 volatile uint16_t last_sample   = 0;   /* sanity check: is data moving?    */
-volatile uint32_t ready_half    = 0;   /* 0 = buf[0..], 1 = buf[1024..]    */
+volatile uint32_t ready_half    = 0;   /* 0 = first half, 1 = second half  */
 volatile uint32_t selftest_mean = 0;   /* mean seen on ADxAN6, ~3840       */
 volatile int32_t  proc_result   = 0;   /* output of process_buffer()       */
 

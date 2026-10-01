@@ -110,7 +110,7 @@ static void cmd_blk_fn(int argc, char **argv)
     const uint32_t total = 2u * capture_half_len();
     uint32_t n = total;
     if ((argc > 2) || ((argc == 2) && !arg_u32(argv[1], 1u, total, &n))) {
-        usage("blk [n 1..2048] - the sample block as binary, with a CRC");
+        usage("blk [n 1..4096] - the sample block as binary, with a CRC");
         return;
     }
 

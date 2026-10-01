@@ -53,8 +53,8 @@ C dma_addr_err: 0
 C dma_bus_err: 0
 C selftest_mean: 0
 C buf: &dma_buffer+0x0
-C half_len: 1024
-C buf_end (in use): &dma_buffer+0x1000
+C half_len: 2048
+C buf_end (in use): &dma_buffer+0x2000
 C guard0: 0x00000000
 C guard1: 0x00000000
 C guard15: 0x00000000

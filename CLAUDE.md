@@ -389,7 +389,7 @@ user when in doubt. BR decision 4 ("programming by hand, not `ipecmd`",
 ## Binary block transfer (`snap`, `rate`, `blk`) - firmware only, since 25.09.2026
 
 `docs/PLAN-BINARY-TRANSFER.md`: a `blk <n>` command sends a contiguous block of up to
-2048 samples as binary with a text header and a CRC-16 line (`crc16.c/.h`, the frame
+4096 samples (2048 until 01.10.2026, when `SAMPLES_PER_HALF_MAX` went from 1024 to 2048) as binary with a text header and a CRC-16 line (`crc16.c/.h`, the frame
 itself built by `frame_send()`, `src/lib/frame.c` since P6.3, 27.09.2026); `snap` fills
 the buffer once and stops so the block being read is not being overwritten; `rate <ksps>`
 sets the sample rate directly. `snap`/`rate`/`blk` and their registration

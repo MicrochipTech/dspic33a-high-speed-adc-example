@@ -74,12 +74,13 @@
 #define ROUTE_UREF_COUNT       1u   /* one DAC on UREF at a time           */
 
 /* RAM budget: docs/DESIGN-MULTICHANNEL.md section 2's example table sizes a
- * channel's ping-pong pair at 2 x 1024 samples x 2 bytes = 4096 bytes, and
+ * channel's ping-pong pair at 2 x 1024 samples x 2 bytes = 4096 bytes (2 x 2048
+ * = 8192 bytes since 01.10.2026, the buffer capture.c really allocates), and
  * the ~64 KB total minus ~8 KB stack/console leaves ~56 KB for buffers and
  * signal-generator tables. Both are runtime checks (decision of 26.09.2026,
  * docs/DESIGN-MULTICHANNEL.md 4.4/section 7), not `_Static_assert` yet: a
  * route's cost is only known once it is added, not at compile time. */
-#define ROUTE_HALF_SAMPLES      1024u
+#define ROUTE_HALF_SAMPLES      2048u   /* capture.h's SAMPLES_PER_HALF_MAX since 01.10.2026 */
 #define ROUTE_SAMPLE_BYTES      2u
 #define ROUTE_CHANNEL_BYTES     (2u * ROUTE_HALF_SAMPLES * ROUTE_SAMPLE_BYTES)
 #define ROUTE_RAM_BUDGET_BYTES  (56u * 1024u)

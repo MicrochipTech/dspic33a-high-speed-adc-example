@@ -174,7 +174,7 @@ SETTINGS_DEFAULTS = {
     "siggen": {"on": False, "dac": 2, "n": 5000, "play_hz": 500000, "f0": 10000.0,
                "h": [0.2, 0.4, 0.1, 0.0, 0.0, 0.0], "decay": 1000.0, "amp": 1.0,
                "lo": 800, "hi": 3500, "snap": True, "force": True},
-    "buffer": {"size": 2048},
+    "buffer": {"size": 4096},
     "dac": {
         "1": {"on": False, "low": 0x100, "high": 0xF00, "slpdat": 8},
         # DAC2 "on" is true, false or "auto": the firmware's own test
@@ -864,6 +864,9 @@ def board_svg(board_key, core, pinsel, dac_unit=0, dac_on=False):
 # clock_dac_hz() returns ADC_CLK_HZ outright) -- unlike CLKGEN6, so no
 # separate GUI control is needed for it.
 # ---------------------------------------------------------------------------
+# capture.h's SAMPLES_PER_HALF_MAX ('buf' takes 16..this, even); 1024 until
+# 01.10.2026
+BUF_HALF_MAX = 2048
 CPU_HZ = 200e6       # CLKGEN1 on PLL2 (clock.h), the CPU's clock once clock_init() ran
 DAC_CLK_HZ = 400e6   # CLKGEN7 on the PLL1 VCO divider (clock.c, 25.09.2026; was 320e6, below the DAC's spec)
 
@@ -937,7 +940,8 @@ def _parse_buf(lines) -> int:
 def query_buf(target) -> int:
     """Ask 'buf' (no argument) for the total, currently configured ping-pong
     buffer size. Falls back to the legacy fixed 2048 (1024-sample halves) for
-    a board or firmware build that does not have the 'buf' command yet."""
+    a board or firmware build that does not have the 'buf' command yet -
+    which is what those builds had; since 01.10.2026 the maximum is 4096."""
     try:
         ok, lines = target.cmd("buf")
     except Exception:
@@ -988,7 +992,7 @@ class FakeTarget:
         # is independent of the 'dac' command in the firmware).
         self.dac = {1: {"on": False, "low": 0x100, "high": 0xF00, "slp": 8},
                     2: {"on": False, "low": 0x100, "high": 0xF00, "slp": 8}}
-        self.buf_size = 2048                      # total ping-pong buffer, 'buf'
+        self.buf_size = 4096                      # total ping-pong buffer, 'buf'
         self.signal_khz = signal_khz               # custom-input sine, kHz
         self.amplitude = amplitude                 # fundamental peak, ADC counts
         self.noise_std = noise_std                 # noise, ADC counts (sets the SNR)
@@ -1293,16 +1297,16 @@ class FakeTarget:
                        else "forced - OUTSIDE the datasheet's limits (p1422)")] if force else [])
             if c == "buf":
                 # cli.c's cmd_buf_fn(): the argument is samples PER HALF,
-                # 16..1024 even, refused while the chain streams.
+                # 16..2048 even, refused while the chain streams.
                 if args:
                     h = int(args[0])
-                    if h < 16 or h > 1024:
-                        return False, ["usage: buf [samples per half 16..1024, even]  "
+                    if h < 16 or h > BUF_HALF_MAX:
+                        return False, ["usage: buf [samples per half 16..2048, even]  "
                                        "(stop first; the next start uses the new size)"]
                     if h % 2 or self.chain_on:
                         return False, ["buf: stop the stream first, and give an even number"]
                     self.buf_size = 2 * h
-                return True, [f"samples per half: {self.buf_size // 2}", "maximum: 1024"]
+                return True, [f"samples per half: {self.buf_size // 2}", f"maximum: {BUF_HALF_MAX}"]
             if c == "siggen":
                 return self._siggen(args)
             if c == "version":
@@ -1598,7 +1602,7 @@ def selftest() -> int:
     print(f"buf 64: refused while streaming, taken after stop -> total {_parse_buf(ln_b2)}, "
           f"grab n={len(sg) if okg else '-'}:", "PASS" if ok_buf else "FAIL")
     t.cmd("stream off")
-    t.cmd("buf 1024")
+    t.cmd(f"buf {BUF_HALF_MAX}")
 
     # ---- the custom form: 'stream on <ksps> <core> <pinsel> [<samc>]' ----
     ok, lines = t.cmd("stream on 5000 3 5 0")
@@ -2008,7 +2012,7 @@ def main_gui(args):
         res = await run.io_bound(t.cmd, line)
         return res if res is not None else (False, ["not sent (cancelled)"])
     state = dict(target=None, live=False, busy=False, cycles=0, grabs=0,
-                 acq_active=None, test_dac2=None, live_t0=None, buf_size=2048,
+                 acq_active=None, test_dac2=None, live_t0=None, buf_size=2 * BUF_HALF_MAX,
                  settings_path=args.settings, remote_bench=None)
 
     def ports():
@@ -2371,8 +2375,8 @@ def main_gui(args):
             with ui.card().classes("tile w-full rounded-xl p-4 gap-2"):
                 ui.label("buffer").classes("card-title")
                 with ui.row().classes("w-full gap-2 items-end"):
-                    buf_in = ui.number("buffer size, total (32..2048, 'buf' = half of it)", value=2048, min=32,
-                                       max=2048, step=32,
+                    buf_in = ui.number(f"buffer size, total (32..{2 * BUF_HALF_MAX}, 'buf' = half of it)",
+                                       value=2 * BUF_HALF_MAX, min=32, max=2 * BUF_HALF_MAX, step=32,
                                        format="%d").props("dense outlined").classes("flex-grow")
                     buf_btn = ui.button("apply", icon="tune").props("unelevated dense")
                 buf_lbl = ui.label("buf: not queried yet").classes("text-xs text-slate-400 mono")
@@ -2781,7 +2785,7 @@ def main_gui(args):
             "trigger": {"on": bool(trig_cb.value), "level": int(trig_level_in.value or 0),
                         "slope": trig_slope_sel.value or RISING,
                         "hyst": int(trig_hyst_in.value or 0)},
-            "buffer": {"size": int(buf_in.value or 2048)},
+            "buffer": {"size": int(buf_in.value or 2 * BUF_HALF_MAX)},
             "dac": {str(u): {"on": dac_mode(u) if dac_mode(u) == "auto" else dac_mode(u) == "on",
                              "low": int(c["low"].value or 0),
                              "high": int(c["high"].value or 0), "slpdat": int(c["slp"].value or 0),
@@ -2839,7 +2843,7 @@ def main_gui(args):
         trig_level_in.value = int(trg.get("level", 2048))
         trig_slope_sel.value = trg.get("slope") if trg.get("slope") in (RISING, FALLING) else RISING
         trig_hyst_in.value = int(trg.get("hyst", 16))
-        buf_in.value = int(cfg.get("buffer", {}).get("size", 2048))
+        buf_in.value = int(cfg.get("buffer", {}).get("size", 2 * BUF_HALF_MAX))
         for unit, c in dac_ui.items():
             d = cfg.get("dac", {}).get(str(unit), {})
             on = d.get("on", "auto" if unit == 2 else False)
@@ -3495,7 +3499,7 @@ def main_gui(args):
             buf_lbl.text = "not connected"
             return
         n = int(buf_in.value or state["buf_size"])
-        half = max(16, min(1024, n // 2 & ~1))     # cli.c: samples per half, 16..1024, even
+        half = max(16, min(BUF_HALF_MAX, n // 2 & ~1))   # cli.c: samples per half, 16..2048, even
         # The firmware refuses 'buf' while the chain streams: stop it first.
         # acq_active = None makes the next cycle send 'stream on' again, which
         # sets the DMA block up with the new size (LIVE carries on by itself).

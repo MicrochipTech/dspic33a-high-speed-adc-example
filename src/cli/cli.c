@@ -639,7 +639,7 @@ static void cmd_buf_fn(int argc, char **argv)
         return;
     }
     if ((argc != 2) || !arg_u32(argv[1], SAMPLES_PER_HALF_MIN, SAMPLES_PER_HALF_MAX, &n)) {
-        usage("buf [samples per half 16..1024, even]  (stop first; the next start uses the new size)");
+        usage("buf [samples per half 16..2048, even]  (stop first; the next start uses the new size)");
         return;
     }
     if (!capture_set_half_len(n)) {
@@ -649,7 +649,7 @@ static void cmd_buf_fn(int argc, char **argv)
     }
     put_kv("samples per half", capture_half_len());
 }
-CMD_DEFINE(buf, "buf", cmd_buf_fn, "buf [n] - samples per buffer half (16..1024, even)");
+CMD_DEFINE(buf, "buf", cmd_buf_fn, "buf [n] - samples per buffer half (16..2048, even)");
 
 static void cmd_dac_fn(int argc, char **argv)
 {
@@ -830,7 +830,7 @@ static void cmd_dump_fn(int argc, char **argv)
     if ((argc > 3) ||
         ((argc >= 2) && !arg_u32(argv[1], 1u, total, &count)) ||
         ((argc == 3) && !arg_u32(argv[2], 0u, total - 1u, &offset))) {
-        usage("dump [count 1..2048] [offset 0..2047]  (the whole buffer; use snap first)");
+        usage("dump [count 1..4096] [offset 0..4095]  (the whole buffer; use snap first)");
         return;
     }
     if ((offset + count) > total) {

@@ -627,11 +627,11 @@ overruns makes the console unresponsive, and why the firmware boots idle.
 | `start` / `stop` | the burst stream |
 | `input <0…15>` / `samc <0…31>` | analog input and sample time |
 | `core <1…5> [pinsel]` | switch the ADC core |
-| `buf [n]` | samples per buffer half, 16…1024 |
+| `buf [n]` | samples per buffer half, 16…2048 (1024 until 01.10.2026) |
 | `dac <1\|2> <on\|off> [low] [high] [slpdat]` | triangle on DACOUT1 = RA1 or DACOUT2 = RA8, both sharing CLKGEN7 (the last unit to stop switches it off). `slpdat` is the step per DAC clock, so **larger is faster** (default 8; the DAC test itself starts DAC2 at 64, since 8 leaves the triangle almost standing still inside one captured buffer) |
 | `dactest [halves]` | the DAC test on its own, against whichever DAC is active (`dac_active()` picks DAC2 first if both run) |
 | `stats` / `dump [count] [offset]` | the completed half: min/max/mean, or the raw values |
-| `blk [n]` | a contiguous block of up to 2048 samples as binary, with a CRC — `docs/PLAN-BINARY-TRANSFER.md`. The back-to-back capture command; kept for a terminal, no longer used by `tools/adc_gui.py` (25.09.2026 on, the GUI only drives the triggered chain, `stream grab`) |
+| `blk [n]` | a contiguous block of up to 4096 samples as binary, with a CRC — `docs/PLAN-BINARY-TRANSFER.md`. The back-to-back capture command; kept for a terminal, no longer used by `tools/adc_gui.py` (25.09.2026 on, the GUI only drives the triggered chain, `stream grab`) |
 | `chain all\|<n>\|from <n>\|run <ksps> [s]` | the chain test (`chaintest.c`) — see "The chain test" below |
 | `stream on <ksps>\|off\|grab` | the chain as a standing stream: start it, stop it, or halt/transfer/restart one window for the GUI — see "The chain test" below |
 | `clear` | zero the error counters |
@@ -757,7 +757,7 @@ Three caveats:
 - The figures are per core. Five cores together are nominally 200 MSPS — whether the
   single DMA bus carries that is precisely the open question this example is meant to
   measure.
-- The burst restart costs one interrupt latency per 2048 samples, so the measured rate
+- The burst restart costs one interrupt latency per buffer (4096 samples at the default length), so the measured rate
   sits a few tenths of a percent below the nominal value.
 - AD51 carries the footnote "design guidance only, not characterised or tested in
   manufacturing". 40 MSPS is the design target, not a tested limit.
@@ -1034,7 +1034,7 @@ the rest of the page stays.
 | `acquisition.core`, `.pinsel`, `.samc` | the custom input: ADC core 1..5, PINSEL 0..15, sample time 0..31 |
 | `acquisition.interval_ms` | pause between two grabs in LIVE |
 | `trigger.on`, `.level`, `.slope`, `.hyst` | the time plot's trigger: on/off, level in ADC counts (2048), `rising`/`falling`, hysteresis in LSB (16) |
-| `buffer.size` | total ping-pong buffer (`buf`), even, 16..8192 |
+| `buffer.size` | total ping-pong buffer (`buf` = half of it), even, 32..4096 |
 | `dac.1`, `dac.2` | `on`, `low`, `high`, `slpdat` of each DAC's triangle (DAC tiles). A change goes to the board by itself 0.8 s after the last one. DAC2's `on` can also be `"auto"` (standard): with the test input, `auto` is the firmware's own triangle (slope chosen per rate), `true` the card's triangle on RA8, `false` DAC2 off - a quiet channel; the card's state is resent after every `stream on` |
 | `siggen` | the signal generator card: `on`, `dac`, `n`, `play_hz`, `f0`, `h2`..`h7`, `decay`, `amp`, `lo`, `hi`, `snap`, `force` (also in `tools/adc_gui_defaults.json`) |
 | `fake.source` | what the stand-in plays in `--fake`, on either input: `dac2` (the test input: what RA8 carries; standard), `sine` or `dac1`. Switching the input picks `dac2` (test) or `sine` (custom); it can be changed after |

@@ -105,7 +105,7 @@ void adc_init(uint8_t pinsel, uint8_t samc, uint32_t burst_len)
     /* Conversions per burst. One burst fills the whole DMA buffer, so
      * the DMA DONE interrupt is also the moment to start the next one.
      * CNT[15:0] in ADxCH0CNT (p1272), max 65535. The caller passes the
-     * buffer's full length (capture.h's SAMPLES_PER_BUF_MAX, 2048 - the
+     * buffer's full length (capture.h's SAMPLES_PER_BUF_MAX, 4096 - the
      * driver does not know the buffer, P4.5); capture_init() sets the
      * length in use before every start (adc_set_burst_len()). */
     ADCREG(CH0CNT) = burst_len;
@@ -134,7 +134,8 @@ void adc_init(uint8_t pinsel, uint8_t samc, uint32_t burst_len)
 
     ADCBITS(CON).ON = 1;
     PORT_WAIT_WHILE(!ADCBITS(CON).ADRDY, 5u);  /* wait for the core   */
-    port_trace("[adc] core ready, Integration mode, CNT 2048, back-to-back\r\n");
+    port_trace("[adc] core ready, Integration mode, back-to-back\r\n");
+    port_trace_kv("[adc] cnt", burst_len, false);
     port_trace_kv("[adc] pinsel", pinsel, false);
     port_trace_kv("[adc] samc", samc, false);
 }
