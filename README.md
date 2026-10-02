@@ -656,7 +656,12 @@ the filter changes. On the board (02.10.2026, the signal generator through DAC2 
 400 kSPS) all three match their design to three decimals at fs/32, fs/16, fs/8 and fs/4,
 and the Goertzel finds a tone at fs/16 (1341 LSB, 100 % of the power) and nothing at the
 other three. A filter costs about 63-67 CPU cycles per sample (33 % at 1 MSPS: up to
-2 MSPS), the Goertzel up to about 55 more. Replace it with your own processing as you need.
+2 MSPS), the Goertzel about 7 more (it folds the block into 16 sums and needs one complex
+multiply per sum, not a float recursion per sample: 3.3 % at 1 MSPS, 26 % at 8 MSPS). The
+GUI's **setup** list has four Goertzel checks that drive the signal generator for it: a
+sine at fs/16 (detected), at fs/8 and 3 kHz beside fs/16 (not detected), and fs/16 with the
+high-pass on (filtered to 5 % in the plot, still detected - the Goertzel looks before the
+filter). Replace it with your own processing as you need.
 The firmware calls it from the main loop once per completed half - ping and pong alike -
 while a filter or the Goertzel is on (off after reset), with the half's samples, its
 length and which half it is. The result goes

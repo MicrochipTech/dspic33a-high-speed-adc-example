@@ -2243,3 +2243,41 @@ int-to-float per sample). Off-board: `tests/host/test_sigproc.c` 56/56, the GUI
 `--selftest` (FakeTarget runs the same filters and Goertzel), trace 15/15 unchanged, both
 smoke runs (help line and memory layout re-recorded), ISRs 46/41/55/48 unchanged, one
 `.dma_buffer` of 0x6040.
+
+## 2026-10-02 (evening), the Goertzel folded, and four Goertzel check setups in the GUI - cd0ca8a + local changes, local (COM26)
+
+The Goertzel now FOLDS the block: one pass of integer adds into acc[i mod 16] plus the
+sum of squares, then 16 complex multiplies per block. Mean and variance are exact from
+integers. It gives the same value as before; `tests/host/test_sigproc.c` holds it to a
+double-precision DFT for n = 16, 17, 100, 999, 1000, 1024 (74 checks).
+
+Board: the first flash attempt hung in ipecmd, and the PKOB4 then answered
+"Connection Failed" with the console silent, while MPLAB X was open. The user asked
+for another try later, and that one programmed normally.
+
+- **Load**, test triangle, 5 grabs each, the first after a switch left out:
+
+  | | 1 MSPS | 4 MSPS | 8 MSPS |
+  |---|---|---|---|
+  | Goertzel alone | 33 per mille | 132 per mille | 264 per mille |
+  | low-pass + Goertzel | 358 per mille | | |
+
+  Missed and overrun stay 0 at every rate. Before folding, the Goertzel alone took up
+  to 274 per mille at 1 MSPS: 55 cycles per sample became about 7.
+- **The GUI setups**, played over the console the way `do_setup()` sends them: the
+  generator on DAC2, a sine from 2000 entries at 1 MHz, read on RA8 at 400 kSPS. Each
+  result is the best of 5 grabs:
+
+  | setup | signal | Goertzel | detected |
+  |---|---|---|---|
+  | `gz_fs16` | 25 kHz (fs/16) | 1344 LSB, 100 % | 5 of 5 |
+  | `gz_fs8` | 50 kHz (fs/8) | 0 LSB | 0 of 5 |
+  | `gz_hp` | 25 kHz, high-pass on | 1345 LSB | 5 of 5 |
+  | `gz_near` | 28 kHz | 49 LSB (predicted 47) | 0 of 5 |
+
+  In `gz_hp` the plotted signal is only 170 LSB peak-to-peak; the Goertzel still
+  detects the tone because it measures before the filter.
+- **A prediction that turned out wrong:** `gz_near` was first set to 26 kHz, "expect not
+  detected". The board read 167 LSB, detected in 5 of 5. 26 kHz is only 2.56 bins of
+  fs/1024 beside fs/16, and an unwindowed DFT keeps |sinc| = 12 % there
+  (1340 x 0.122 = 164). The setup is now 28 kHz (7.7 bins), where it reads 49 LSB.

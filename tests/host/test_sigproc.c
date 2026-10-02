@@ -230,6 +230,48 @@ int main(void)
         CHECK(gz.amp >= 798u && gz.amp <= 802u);
         CHECK(amplitude(buf, 256u, 1024u) < 0.06 * 800.0 + 3.0);   /* and the filter did run */
     }
+    /* ---- the folded computation (02.10.2026) against a double-precision
+     *      DFT at fs/16 straight from the definition: block lengths that are
+     *      and are not multiples of 16, a tone off the bin, noise, a level
+     *      near full scale - amplitude, rms and share to the rounding ---- */
+    sigproc_set_filter(SIGPROC_OFF);
+    {
+        static const uint32_t ns[] = { 16u, 17u, 100u, 999u, 1000u, 1024u };
+        uint32_t lcg = 12345u;
+        for (uint32_t t = 0; t < sizeof ns / sizeof ns[0]; t++) {
+            const uint32_t n = ns[t];
+            for (uint32_t i = 0; i < n; i++) {
+                lcg = lcg * 1103515245u + 12345u;
+                const double noise = (double)((lcg >> 16) % 201u) - 100.0;
+                double v = 3900.0 + 150.0 * sin(2.0 * PI * 0.0611 * (double)i) + noise
+                           + 30.0 * sin(2.0 * PI * (double)i / 16.0 + 0.4);
+                if (t & 1u) { v -= 3000.0; }
+                buf[i] = (uint16_t)lround(v < 0.0 ? 0.0 : (v > 4095.0 ? 4095.0 : v));
+            }
+            double m = 0.0;
+            for (uint32_t i = 0; i < n; i++) { m += buf[i]; }
+            m /= (double)n;
+            double re = 0.0, im = 0.0, var = 0.0;
+            for (uint32_t i = 0; i < n; i++) {
+                const double d = (double)buf[i] - m;
+                re += d * cos(2.0 * PI * (double)i / 16.0);
+                im -= d * sin(2.0 * PI * (double)i / 16.0);
+                var += d * d;
+            }
+            var /= (double)n;
+            const double amp = 2.0 * sqrt(re * re + im * im) / (double)n;
+            run(buf, n, true, 90u + t);
+            sigproc_gz_t gz;
+            sigproc_goertzel_get(&gz);
+            if (fabs((double)gz.amp - amp) > 0.51 || fabs((double)gz.rms - sqrt(var)) > 0.51) {
+                fprintf(stderr, "n %u: amp %u want %.3f, rms %u want %.3f\n", n, gz.amp, amp, gz.rms, sqrt(var));
+            }
+            CHECK(fabs((double)gz.amp - amp) <= 0.51);
+            CHECK(fabs((double)gz.rms - sqrt(var)) <= 0.51);
+            CHECK(fabs((double)gz.share_pm - 1000.0 * amp * amp * 0.5 / var) <= 1.5);
+        }
+    }
+
     sigproc_set_goertzel(false);
     sigproc_set_filter(SIGPROC_OFF);
     CHECK(!sigproc_active());

@@ -38,17 +38,31 @@
  * high- and band-pass output mid-scale.
  *
  * The Goertzel (when on) runs on the block BEFORE the filter - it detects a
- * tone at fs/16 in the input, whatever the filter then does to it. Two
- * passes over the half: the mean, then the Goertzel recursion
- *     s = (x - mean) + 2 cos(2 pi / 16) s1 - s2
- * together with the variance. Its result: the tone's amplitude
- *     A = 2 sqrt(s1^2 + s2^2 - 2 cos(2 pi/16) s1 s2) / n   (LSB),
- * exact for a sine at fs/16 when n is a multiple of 16 (buf's default 1024
- * is; another n leaks a little), the signal's rms around its mean, the
- * tone's share of the signal's power (A^2/2 over the variance, per mille),
- * and "detected" = A >= the threshold (default 100 LSB, "sigproc gz thr").
- * Subtracting the mean first keeps a 2000-LSB DC level from leaking into the
- * bin when n is not a multiple of 16.
+ * tone at fs/16 in the input, whatever the filter then does to it. What it
+ * computes is the one DFT value a Goertzel gives,
+ *     X = sum over i of (x[i] - mean) e^(-j 2 pi i / 16),
+ * and from it the tone's amplitude A = 2 |X| / n (LSB) - exact for a sine at
+ * fs/16 when n is a multiple of 16 (buf's default 1024 is; another n leaks a
+ * little) - the signal's rms around its mean, the tone's share of the
+ * signal's power (A^2/2 over the variance, per mille), and "detected" =
+ * A >= the threshold (default 100 LSB, "sigproc gz thr"). Taking the mean
+ * out keeps a 2000-LSB DC level from leaking into the bin when n is not a
+ * multiple of 16.
+ *
+ * How (optimised the same day): because e^(-j 2 pi i / 16) repeats every 16
+ * samples, the block is first FOLDED - one pass of integer adds, sample i
+ * into acc[i mod 16], with the sum of squares (64 bit) alongside - and X is
+ * then 16 complex multiplies once per block:
+ *     X = sum over k of (acc[k] - mean cnt[k]) e^(-j 2 pi k / 16),
+ * cnt[k] being how many samples fell into acc[k], so the mean comes out
+ * exactly for any n. The variance is exact too, from integers:
+ * (n sumsq - sum^2) / n^2. The first version - two passes, the float
+ * recursion s = d + 2 cos(2 pi/16) s1 - s2 per sample, its dependency chain
+ * and an int-to-float conversion each time - cost up to 55 CPU cycles per
+ * sample (27 % of the budget at 1 MSPS, board, 02.10.2026); folded it costs
+ * about 7 (board, same day: 33 per mille at 1 MSPS, 132 at 4, 264 at
+ * 8 MSPS with nothing missed). The result is the same number;
+ * tests/host/test_sigproc.c holds it to a double-precision DFT.
  */
 #include <stdbool.h>
 #include <math.h>
@@ -74,7 +88,6 @@
 #define BP_C2  -0.845887980f
 #define BP_D2   0.624616423f
 
-#define GZ_COEF        1.847759065f   /* 2 cos(2 pi / 16)                */
 #define GZ_THR_DEFAULT 100u           /* LSB                             */
 #define MID            2048.0f        /* hp/bp output offset             */
 
@@ -137,22 +150,63 @@ void cascade(uint16_t *x, uint32_t n, float b1, float b2,
     st.x1 = x1; st.x2 = x2; st.p1 = p1; st.p2 = p2; st.q1 = q1; st.q2 = q2;
 }
 
+/* cos and sin of 2 pi k / 16, k = 0..15 */
+static const float gz_cos[16] = {
+     1.000000000f,  0.923879533f,  0.707106781f,  0.382683432f,
+     0.000000000f, -0.382683432f, -0.707106781f, -0.923879533f,
+    -1.000000000f, -0.923879533f, -0.707106781f, -0.382683432f,
+     0.000000000f,  0.382683432f,  0.707106781f,  0.923879533f };
+static const float gz_sin[16] = {
+     0.000000000f,  0.382683432f,  0.707106781f,  0.923879533f,
+     1.000000000f,  0.923879533f,  0.707106781f,  0.382683432f,
+     0.000000000f, -0.382683432f, -0.707106781f, -0.923879533f,
+    -1.000000000f, -0.923879533f, -0.707106781f, -0.382683432f };
+
+/* One step of the fold: sample i + K into acc[K], its square into the sum. */
+#define GZ_FOLD(K) do { const uint32_t v_ = x[i + (K)]; acc[K] += v_; sq += v_ * v_; } while (0)
+
 static void goertzel(const uint16_t *x, uint32_t n, uint32_t seq)
 {
-    uint32_t sum = 0u;
-    for (uint32_t i = 0; i < n; i++) { sum += x[i]; }
-    const float mean = (float)sum / (float)n;
-    float s1 = 0.0f, s2 = 0.0f, var = 0.0f;
-    for (uint32_t i = 0; i < n; i++) {
-        const float d = (float)x[i] - mean;
-        const float s = d + GZ_COEF * s1 - s2;
-        s2 = s1; s1 = s;
-        var += d * d;
+    /* The fold. Bounds: n <= 1024 (SAMPLES_PER_HALF_MAX), so acc[k] <= 64 x
+     * 4095 and the sum fit 32 bits easily; one square is at most 4095^2 <
+     * 2^24, and sq is summed in 32 bits per 16 samples (16 x 2^24 = 2^28)
+     * before it goes into the 64-bit total - one 64-bit add per 16 samples
+     * instead of per sample. */
+    uint32_t acc[16] = { 0u };
+    uint64_t sumsq = 0u;
+    uint32_t i = 0u;
+    for (; i + 16u <= n; i += 16u) {
+        uint32_t sq = 0u;
+        GZ_FOLD(0);  GZ_FOLD(1);  GZ_FOLD(2);  GZ_FOLD(3);
+        GZ_FOLD(4);  GZ_FOLD(5);  GZ_FOLD(6);  GZ_FOLD(7);
+        GZ_FOLD(8);  GZ_FOLD(9);  GZ_FOLD(10); GZ_FOLD(11);
+        GZ_FOLD(12); GZ_FOLD(13); GZ_FOLD(14); GZ_FOLD(15);
+        sumsq += sq;
     }
-    float pw = s1 * s1 + s2 * s2 - GZ_COEF * s1 * s2;
-    if (pw < 0.0f) { pw = 0.0f; }               /* rounding at a zero result */
-    const float amp = 2.0f * sqrtf(pw) / (float)n;
-    var /= (float)n;
+    {
+        uint32_t sq = 0u;
+        for (uint32_t k = 0u; i < n; i++, k++) {      /* the last n mod 16 */
+            const uint32_t v = x[i];
+            acc[k] += v;
+            sq += v * v;
+        }
+        sumsq += sq;
+    }
+
+    /* Once per block: the mean, the DFT value from the 16 sums, the variance. */
+    uint32_t sum = 0u;
+    for (uint32_t k = 0u; k < 16u; k++) { sum += acc[k]; }
+    const float mean = (float)sum / (float)n;
+    const uint32_t full = n / 16u, rem = n % 16u;
+    float xr = 0.0f, xi = 0.0f;
+    for (uint32_t k = 0u; k < 16u; k++) {
+        const float a = (float)acc[k] - mean * (float)(full + ((k < rem) ? 1u : 0u));
+        xr += a * gz_cos[k];
+        xi -= a * gz_sin[k];
+    }
+    const float amp = 2.0f * sqrtf(xr * xr + xi * xi) / (float)n;
+    const uint64_t nv = (uint64_t)n * sumsq - (uint64_t)sum * sum;   /* n^2 variance, >= 0 */
+    const float var = (float)nv / ((float)n * (float)n);
     const float share = (var > 0.0f) ? (amp * amp * 0.5f / var) : 0.0f;
     gz.amp       = (uint32_t)(amp + 0.5f);
     gz.rms       = (uint32_t)(sqrtf(var) + 0.5f);

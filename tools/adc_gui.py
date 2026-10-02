@@ -242,6 +242,19 @@ def _sg_setup(h, f0=2000.0, n=1000, play=200000, decay=0.0, dac=2, ksps=1000, tr
     }
 
 
+def _gz_setup(f0, filt="off"):
+    """A Goertzel check (02.10.2026, sigproc.c): a pure sine from the
+    generator on DAC2, read on RA8 at 400 kSPS - fs/16 = 25 kHz, fs/8 =
+    50 kHz - with the Goertzel on and the filter as given. 2000 entries at
+    1 MHz: f0 snaps to 500 Hz steps, so 25 kHz is exact; the board measured
+    the filters and the Goertzel this way (HARDWARE-LOG 02.10.2026), 1 MHz
+    being above the 200 000 entries/s the other setups keep to, but 40
+    entries a period at 25 kHz."""
+    cfg = _sg_setup({}, f0=f0, n=2000, play=1000000, ksps=400, trig=True)
+    cfg["sigproc"] = {"filter": filt, "gz": True, "thr": 100}
+    return cfg
+
+
 SETUPS = {
     "tri_test": ("DAC2 triangle - firmware test signal (test input, 8 MSPS)", {
         "acquisition": {"mode": "test", "ksps": 8000},
@@ -259,6 +272,18 @@ SETUPS = {
     "tri_dac1": ("DAC1 triangle - RA1, 0x400..0xE00, SLPDAT 4, 19.5 kHz (4 MSPS)",
                  _tri_setup(1, 0x400, 0xE00, 4, 4000)),
     "sg_sine": ("generator - sine 2 kHz on DAC2 (1 MSPS)", _sg_setup({})),
+    "gz_fs16": ("Goertzel check - sine at fs/16 (25 kHz at 400 kSPS): expect DETECTED",
+                _gz_setup(25000.0)),
+    "gz_fs8": ("Goertzel check - sine at fs/8 (50 kHz at 400 kSPS): expect not detected",
+               _gz_setup(50000.0)),
+    # 3 kHz beside fs/16 = 7.7 bins of fs/1024 at 400 kSPS: the Goertzel
+    # (no window) still sees a side lobe of about 3.5 % - ~47 LSB, below the
+    # threshold of 100. 26 kHz (2.6 bins) was the first choice and read 167 LSB
+    # on the board - detected (HARDWARE-LOG 02.10.2026).
+    "gz_near": ("Goertzel check - sine at 28 kHz, 3 kHz beside fs/16: expect not detected",
+                _gz_setup(28000.0)),
+    "gz_hp": ("Goertzel check - fs/16 with the high-pass on: plot shows it at 5 %, "
+              "the Goertzel (before the filter) DETECTED", _gz_setup(25000.0, "hp")),
     "sg_loop": ("generator - 1 kHz + 3rd harmonic 0.3 (the loop preset)",
                 _sg_setup({3: 0.3}, f0=1000.0, n=1000, play=100000)),
     "sg_square": ("generator - square-like, odd harmonics 1/k, 2 kHz",
@@ -282,6 +307,12 @@ SETUPS = {
     "sg_dac1": ("generator - sine 5 kHz on DAC1 / RA1 (1 MSPS)",
                 _sg_setup({}, f0=5000.0, dac=1)),
 }
+# Every setup that does not name the signal processing switches it off
+# (02.10.2026): a filter or the Goertzel left on from a Goertzel check would
+# otherwise change what the next setup shows (a filtered triangle fails its
+# grid check).
+for _name, _cfg in SETUPS.values():
+    _cfg.setdefault("sigproc", {"filter": "off", "gz": False})
 SETUP_FROM_FILE = "__file__"
 
 
@@ -1074,7 +1105,7 @@ class FakeTarget:
         """The GRAB header's load= as the board reports it (02.10.2026):
         a filter costs about 63 CPU cycles per sample at 200 MHz, the
         Goertzel a few more, the service alone next to nothing."""
-        per_sample = (63.0 if self.sp_filter else 0.3) + (8.0 if self.sp_gz else 0.0)
+        per_sample = (63.0 if self.sp_filter else 0.3) + (7.0 if self.sp_gz else 0.0)
         return int(per_sample * self.chain_ksps * 1e3 / CPU_HZ * 1000)
 
     def _chain_slpdat(self) -> int:
@@ -1766,6 +1797,32 @@ def selftest() -> int:
     print(f"sigproc lp/hp/gz/off: proc={meta_p1.get('proc')},{meta_p2.get('proc')},{meta_p0.get('proc')} "
           f"hp mean {float(np.mean(s_hp)):.0f}, gz={meta_g.get('gz')}, a bad argument refused ->",
           "PASS" if ok_sp else "FAIL")
+    # the Goertzel check setups (02.10.2026), played through the stand-in the
+    # way do_setup() sends them: generator on DAC2, custom input RA8, 400 kSPS
+    gz_res = {}
+    for key, want in (("gz_fs16", 1), ("gz_fs8", 0), ("gz_near", 0), ("gz_hp", 1)):
+        cfg = SETUPS[key][1]
+        sg, acq, sp = cfg["siggen"], cfg["acquisition"], cfg["sigproc"]
+        t.cmd("stream off")
+        for line in siggen_commands(dict(sg, play=sg["play_hz"], h={k: sg["h"][k - 2] for k in range(2, 8)})):
+            t.cmd(line)
+        t.cmd(f"stream on {acq['ksps']} {acq['core']} {acq['pinsel']}")
+        t.cmd(f"sigproc {sp['filter']}")
+        t.cmd("sigproc gz on")
+        okg, s_g, meta_g = t.grab()
+        gz = meta_g.get("gz") or {}
+        gz_res[key] = (gz.get("detected"), gz.get("amp"), meta_g.get("proc"))
+        t.cmd("sigproc off")
+        t.cmd("sigproc gz off")
+        t.cmd("siggen off")
+        t.cmd("stream off")
+    t.cmd("stream on 5000 3 5 0")          # the custom stream the steps below expect
+    ok_gzs = (gz_res["gz_fs16"][0] == 1 and gz_res["gz_fs8"][0] == 0 and gz_res["gz_near"][0] == 0
+              and gz_res["gz_hp"][0] == 1 and gz_res["gz_hp"][2] == 2
+              and all(cfg.get("sigproc") for _, cfg in SETUPS.values()))
+    ok_all &= ok_gzs
+    print(f"Goertzel check setups on the stand-in (detected, amp, proc): {gz_res} ->",
+          "PASS" if ok_gzs else "FAIL")
     # the stand-in's processing against the firmware's design: a tone at
     # fs/16 is found, one at fs/8 not; the band-pass passes fs/8 whole
     tn = np.arange(1024)
@@ -3155,6 +3212,7 @@ def main_gui(args):
         for u in sorted(dac_ui):
             if dac_mode(u) == "off":
                 await send_dac(u)
+        await apply_sigproc()              # every setup names it (02.10.2026)
         if not state["live"]:              # LIVE starts the new chain itself
             await do_single()
 
