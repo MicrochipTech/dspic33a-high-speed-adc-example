@@ -59,3 +59,8 @@ tools/adc_gui_settings.json
 # board run, not build output of the current tree (board_run/README.md).
 !board_run/
 !board_run/*.hex
+
+# MPLAB X / MDB trace and log files, written next to the project or the working directory
+defmplabxtrace.log*
+**/defmplabxtrace.log*
+MPLABXLog.xml*
