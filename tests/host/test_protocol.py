@@ -47,6 +47,7 @@ def build_grab_frame(samples, **meta):
               + (f" proc={meta['proc']}" if "proc" in meta else "")
               + (f" load={meta['load']}" if "load" in meta else "")
               + (f" gz={meta['gz'][0]} gzs={meta['gz'][1]} gzd={meta['gz'][2]}" if "gz" in meta else "")
+              + (f" cnt={meta['cnt'][0]} cnr={meta['cnt'][1]} cpk={meta['cnt'][2]}" if "cnt" in meta else "")
               + "\r\n")
     payload = b"".join(int(v & 0x0FFF).to_bytes(2, "little") for v in samples)
     crc = protocol.crc16_ccitt_false(payload)
@@ -196,6 +197,14 @@ def main() -> int:
                      and meta_g["gz"] == dict(amp=812, share_pm=997, detected=1)
                      and meta_l["gz"] is None and meta_g["load_pm"] == 600,
                      f"proc={meta_g['proc']} gz={meta_g['gz']} absent={meta_l['gz']}")
+
+    # cnt=/cnr=/cpk= the impact counter (CNT), after the Goertzel's fields
+    _, _, meta_c = protocol.parse_grab_frame(*build_grab_frame(samples, proc=0, load=40,
+                                                                gz=(5, 0, 0), cnt=(1234, 998, 412)))
+    ok_all &= check("GRAB frame the counter's fields read, cnt None when absent",
+                     meta_c["cnt"] == dict(count=1234, rate=998, peak=412) and meta_c["gz"]["amp"] == 5
+                     and meta_g["cnt"] is None,
+                     f"cnt={meta_c['cnt']} absent={meta_g['cnt']}")
 
     # n=0 is the NAK shape ("stream on" not running / halt-restart failed) -
     # the same frame FakeTarget.grab() and the firmware send for that case.

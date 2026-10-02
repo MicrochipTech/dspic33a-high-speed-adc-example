@@ -664,7 +664,27 @@ high-pass on (filtered to 5 % in the plot, still detected - the Goertzel looks b
 filter). Replace it with your own processing as you need.
 The firmware calls it from the main loop once per completed half - ping and pong alike -
 while a filter or the Goertzel is on (off after reset), with the half's samples, its
-length and which half it is. The result goes
+length and which half it is.
+
+**Counting impacts** (since 02.10.2026, `docs/IMPLEMENTATION-PLAN.md` section CNT): small
+balls falling onto a metal plate, each impact a ring at a high frequency (20..200 kHz)
+that dies away within about 0.5 ms, up to about 1000 a second. `sigproc cnt ...` runs a
+damped resonator at the ring frequency on every sample of the input, and a detector that
+counts each ring once: above the threshold, then not again until the magnitude has fallen
+below half of it. It counts continuously, also between grabs, and reports the count, the
+rate per second and the peak magnitude (the GUI's counter chips; GRAB `cnt=`/`cnr=`/`cpk=`).
+The GUI's setup list has four checks that make impacts with the signal generator - one
+damped ring per table, so the rate is exactly known.
+
+On the board (1 MSPS, rings decaying with 100 us) it counts exactly at 500, 1000 and
+2000/s, at 20, 50 and 150 kHz, and costs 10-15 % of the CPU. Two limits come from the
+physics, not the code:
+
+- **Frequency selectivity is about 2.5:1.** A short ring is broadband: an 80-kHz ring
+  still moves a 50-kHz counter to 39 % of its own peak. A ring at the wrong frequency is
+  ignored only when the threshold sits between the two (the `peak` chip shows where).
+- **Rings closer than their decay merge.** At 5000/s, 200 us apart, the magnitude never
+  falls below half the threshold, and the count stops. The result goes
 back into the same half: `stream grab` then sends the processed data to the GUI (the frame
 says which filter: `proc=1` low-pass, `2` high-pass, `3` band-pass), with no second buffer. It has one half period to return (1024 samples at
 8 MSPS: 128 us, 25 CPU cycles per sample); `status`, the chain test's load figures and the
@@ -700,6 +720,7 @@ already in the ring.
 | `siggen off` \| `siggen regs` | stop the generator; dump DMA 2 and SCCP2 registers |
 | `sigproc [lp\|hp\|bp\|off]` | the filter at fs/8 on every completed half, in place (`on` = `lp`); `sigproc` alone = status: filter, Goertzel on/off, its threshold and last result |
 | `sigproc gz on\|off` \| `sigproc gz thr <lsb>` | the Goertzel detector for a tone at fs/16 on the input, and its threshold (1..4095, default 100 LSB) |
+| `sigproc cnt on\|off\|reset` \| `sigproc cnt f <hz>` \| `cnt tau <us>` \| `cnt thr <lsb>` | the impact counter: a resonator at the ring frequency (1000 Hz .. fs/2.5), its time constant (default 100 us) and the threshold; `sigproc` alone reports count, rate per second, time, missed halves and the peak |
 | `route list` | the active route (source, core, pinsel, DAC, sink) and the resource table — which DMA channel, SCCP, DAC output and UREF are in use, RAM used vs. budget (`docs/DESIGN-MULTICHANNEL.md`'s routing core) |
 | `test [part] [halves]` | run a part of the measurement, or `all` — see below |
 | `pll <p1> <p2>` | **the sample rate**: PLL1 output dividers, 1600 MHz / (p1·p2), p1 ≥ p2, both 1…7 |

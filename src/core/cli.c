@@ -652,13 +652,18 @@ CMD_DEFINE(siggen, "siggen", cmd_siggen_fn, "siggen [set <p> <v> | on <dac> <n> 
  *   sigproc on                   = lp (the switch of 01.10.2026)
  *   sigproc gz on | off          the Goertzel detector at fs/16
  *   sigproc gz thr <lsb>         its threshold, 1..4095 (default 100)
+ *   sigproc cnt on | off | reset the impact counter (CNT, 02.10.2026)
+ *   sigproc cnt f <hz> | tau <us> | thr <lsb>   its resonator and threshold
  *   sigproc                      status
  * capture.c calls sigproc_block() while either runs (sigproc_active()).
  * The GUI's signal processing card sends these. One parser slot. Longest
  * reply line: "rx_held_lost: " + 10 digits + CRLF = 26. */
 static void cmd_sigproc_fn(int argc, char **argv)
 {
-    static const char use[] = "sigproc [lp|hp|bp|off|on] | sigproc gz on|off | sigproc gz thr <lsb>";
+    static const char use[] = "sigproc [lp|hp|bp|off|on] | gz on|off | gz thr <lsb> | "
+                              "cnt on|off|reset | cnt f <hz> | cnt tau <us> | cnt thr <lsb>";
+    sigproc_cnt_t cn;
+    sigproc_cnt_get(&cn, false);
     if (argc == 2) {
         if (strcmp(argv[1], "on") == 0 || strcmp(argv[1], "lp") == 0) { sigproc_set_filter(SIGPROC_LP); }
         else if (strcmp(argv[1], "hp") == 0)  { sigproc_set_filter(SIGPROC_HP); }
@@ -673,6 +678,22 @@ static void cmd_sigproc_fn(int argc, char **argv)
         uint32_t thr;
         if (!arg_u32(argv[3], 1u, 4095u, &thr)) { usage(use); return; }
         sigproc_set_threshold(thr);
+    } else if (argc == 3 && strcmp(argv[1], "cnt") == 0) {
+        if (strcmp(argv[2], "on") == 0)         { sigproc_cnt_enable(true); }
+        else if (strcmp(argv[2], "off") == 0)   { sigproc_cnt_enable(false); }
+        else if (strcmp(argv[2], "reset") == 0) { sigproc_cnt_reset(); }
+        else { usage(use); return; }
+    } else if (argc == 4 && strcmp(argv[1], "cnt") == 0) {
+        uint32_t v, f = cn.f_hz, tau = cn.tau_us, thr = cn.thr;
+        if (!arg_u32(argv[3], 1u, 1000000u, &v)) { usage(use); return; }
+        if (strcmp(argv[2], "f") == 0)        { f = v; }
+        else if (strcmp(argv[2], "tau") == 0) { tau = v; }
+        else if (strcmp(argv[2], "thr") == 0) { thr = v; }
+        else { usage(use); return; }
+        if (!sigproc_cnt_config(f, tau, thr)) {
+            usage("cnt f 1000..fs/2.5 Hz, tau 2..5000 us, thr 1..4095 LSB");
+            return;
+        }
     } else if (argc != 1) {
         usage(use);
         return;
@@ -690,9 +711,22 @@ static void cmd_sigproc_fn(int argc, char **argv)
         put_kv("gz_share_pm", gz.share_pm);
         put_kv("gz_detected", gz.detected);
     }
+    sigproc_cnt_get(&cn, false);
+    put_kv_str("cnt", cn.on ? "on" : "off");
+    put_kv("cnt_f_hz", cn.f_hz);
+    put_kv("cnt_tau_us", cn.tau_us);
+    put_kv("cnt_thr", cn.thr);
+    if (cn.on) {
+        put_kv("cnt_count", cn.count);
+        put_kv("cnt_rate", cn.rate);
+        put_kv("cnt_ms", cn.ms);
+        put_kv("cnt_missed", cn.missed);
+        put_kv("cnt_peak", cn.peak);
+        put_kv("cnt_fs_hz", cn.fs_hz);
+    }
     put_kv("rx_held_lost", rx_held_lost);
 }
-CMD_DEFINE(sigproc, "sigproc", cmd_sigproc_fn, "sigproc [lp|hp|bp|off] | gz on|off | gz thr <lsb> - filter at fs/8, Goertzel at fs/16");
+CMD_DEFINE(sigproc, "sigproc", cmd_sigproc_fn, "sigproc [lp|hp|bp|off] | gz on|off|thr <n> | cnt on|off|reset|f|tau|thr <n> - filter fs/8, Goertzel fs/16, impact counter");
 
 
 static void cmd_buf_fn(int argc, char **argv)

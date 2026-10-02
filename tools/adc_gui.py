@@ -173,7 +173,9 @@ SETTINGS_DEFAULTS = {
     "trigger": {"on": False, "level": 2048, "slope": "rising", "hyst": 16},
     # the signal processing card (02.10.2026, sigproc.c): filter at fs/8
     # ("off", "lp", "hp", "bp"), Goertzel at fs/16 and its threshold
-    "sigproc": {"filter": "off", "gz": False, "thr": 100},
+    "sigproc": {"filter": "off", "gz": False, "thr": 100,
+                # the impact counter (CNT): on, ring frequency Hz, tau us, threshold LSB
+                "cnt": False, "cnt_f": 50000, "cnt_tau": 100, "cnt_thr": 150},
     # SG.6: the signal generator card - tab_wave_gen.py's defaults (500 kHz,
     # 0.01 s = 5000 entries, 10 kHz, 0.2/0.4/0.1, decay 1000), the range
     # 800..3500 where the board's DAC follows (HARDWARE-LOG 29.09.2026)
@@ -307,12 +309,37 @@ SETUPS = {
     "sg_dac1": ("generator - sine 5 kHz on DAC1 / RA1 (1 MSPS)",
                 _sg_setup({}, f0=5000.0, dac=1)),
 }
+def _cnt_setup(f_ring, rate, f_cnt=None, thr=150):
+    """An impact-counter check (CNT, 02.10.2026): the generator plays ONE
+    damped ring per table - f_ring, decay 10000/s (100 us), the table
+    1e6 / rate entries at 1 MHz, so `rate` rings a second, exactly - on
+    DAC2, read on RA8 at 1 MSPS, the counter listening at f_cnt (default
+    f_ring) with tau 100 us. The count must go up by `rate` a second
+    (board: exact at 500, 1000, 2000/s; HARDWARE-LOG 02.10.2026)."""
+    cfg = _sg_setup({}, f0=float(f_ring), n=int(round(1e6 / rate)), play=1000000,
+                    decay=10000.0, ksps=1000, trig=True)
+    cfg["sigproc"] = {"filter": "off", "gz": False, "thr": 100, "cnt": True,
+                      "cnt_f": int(f_cnt or f_ring), "cnt_tau": 100, "cnt_thr": thr}
+    return cfg
+
+
+SETUPS.update({
+    "cnt_1000": ("impact counter - rings at 50 kHz, 1000/s: the count rises by 1000 a second",
+                 _cnt_setup(50000, 1000)),
+    "cnt_500": ("impact counter - rings at 50 kHz, 500/s", _cnt_setup(50000, 500)),
+    "cnt_wrong_f": ("impact counter - rings at 80 kHz, counter at 50 kHz, threshold 300: expect 0 "
+                    "(at 150 it counts them - a short ring is broadband)",
+                    _cnt_setup(80000, 1000, f_cnt=50000, thr=300)),
+    "cnt_dense": ("impact counter - 5000/s, rings 200 us apart: they merge, the count stops "
+                  "(the limit; 2000/s still counts exactly)", _cnt_setup(50000, 5000)),
+})
+
 # Every setup that does not name the signal processing switches it off
 # (02.10.2026): a filter or the Goertzel left on from a Goertzel check would
 # otherwise change what the next setup shows (a filtered triangle fails its
 # grid check).
 for _name, _cfg in SETUPS.values():
-    _cfg.setdefault("sigproc", {"filter": "off", "gz": False})
+    _cfg.setdefault("sigproc", {"filter": "off", "gz": False, "cnt": False})
 SETUP_FROM_FILE = "__file__"
 
 
@@ -1052,6 +1079,7 @@ class FakeTarget:
         self.sp_gz = False
         self.sp_thr = 100
         self.sp_last_gz = None
+        self.sp_cnt = FakeCounter()               # "sigproc cnt ..." (CNT)
         self.port = "fake"
         # Both DACs, as dac.c has them - only ever touched by the 'dac'
         # command, never by 'stream on' itself (the test form's own
@@ -1105,7 +1133,8 @@ class FakeTarget:
         """The GRAB header's load= as the board reports it (02.10.2026):
         a filter costs about 63 CPU cycles per sample at 200 MHz, the
         Goertzel a few more, the service alone next to nothing."""
-        per_sample = (63.0 if self.sp_filter else 0.3) + (7.0 if self.sp_gz else 0.0)
+        per_sample = ((63.0 if self.sp_filter else 0.3) + (7.0 if self.sp_gz else 0.0)
+                      + (25.0 if self.sp_cnt.on else 0.0))
         return int(per_sample * self.chain_ksps * 1e3 / CPU_HZ * 1000)
 
     def _chain_slpdat(self) -> int:
@@ -1347,9 +1376,23 @@ class FakeTarget:
                 elif (len(args) == 3 and args[:2] == ["gz", "thr"] and args[2].isdigit()
                       and 1 <= int(args[2]) <= 4095):
                     self.sp_thr = int(args[2])
+                elif len(args) == 2 and args[0] == "cnt" and args[1] in ("on", "off", "reset"):
+                    if args[1] == "reset" or (args[1] == "on" and not self.sp_cnt.on):
+                        self.sp_cnt.reset()
+                    if args[1] != "reset":
+                        self.sp_cnt.on = args[1] == "on"
+                elif len(args) == 3 and args[0] == "cnt" and args[1] in ("f", "tau", "thr") and args[2].isdigit():
+                    v = int(args[2])
+                    fs = self.chain_ksps * 1e3
+                    ok_v = {"f": 1000 <= v and v * 2.5 <= fs, "tau": 2 <= v <= 5000,
+                            "thr": 1 <= v <= 4095}[args[1]]
+                    if not ok_v:
+                        return False, ["usage: cnt f 1000..fs/2.5 Hz, tau 2..5000 us, thr 1..4095 LSB"]
+                    setattr(self.sp_cnt, args[1], v)
                 elif args:
-                    return False, ["usage: sigproc [lp|hp|bp|off|on] | sigproc gz on|off | sigproc gz thr <lsb>"]
-                on = bool(self.sp_filter) or self.sp_gz
+                    return False, ["usage: sigproc [lp|hp|bp|off|on] | gz on|off | gz thr <lsb> | "
+                                   "cnt on|off|reset | cnt f <hz> | cnt tau <us> | cnt thr <lsb>"]
+                on = bool(self.sp_filter) or self.sp_gz or self.sp_cnt.on
                 lines = [f"sigproc: {'on' if on else 'off'}",
                          f"filter: {['off', 'lp', 'hp', 'bp'][self.sp_filter]}",
                          f"goertzel: {'on' if self.sp_gz else 'off'}", f"gz_thr: {self.sp_thr}"]
@@ -1357,6 +1400,15 @@ class FakeTarget:
                     g = self.sp_last_gz
                     lines += [f"gz_amp: {g['amp']}", f"gz_rms: {g['rms']}",
                               f"gz_share_pm: {g['share_pm']}", f"gz_detected: {g['detected']}"]
+                k = self.sp_cnt
+                lines += [f"cnt: {'on' if k.on else 'off'}", f"cnt_f_hz: {k.f}", f"cnt_tau_us: {k.tau}",
+                          f"cnt_thr: {k.thr}"]
+                if k.on:
+                    secs = k.seen / (self.chain_ksps * 1e3) if self.chain_ksps else 0.0
+                    lines += [f"cnt_count: {k.count}",
+                              f"cnt_rate: {int(round(k.count / secs)) if secs else 0}",
+                              f"cnt_ms: {int(round(secs * 1000))}", "cnt_missed: 0",
+                              f"cnt_peak: {int(round(k.peak))}", f"cnt_fs_hz: {int(self.chain_ksps * 1e3)}"]
                 return True, lines + ["rx_held_lost: 0"]
             if c == "dac":
                 usage = ["usage: dac <1|2> <on|off> [low] [high] [slpdat] [force]"]
@@ -1529,6 +1581,12 @@ class FakeTarget:
             self.sp_last_gz = fake_goertzel(v, self.sp_thr)
             g = self.sp_last_gz
             gz_txt = f" gz={g['amp']} gzs={g['share_pm']} gzd={g['detected']}"
+        cnt_txt = ""
+        if self.sp_cnt.on and self.chain_ksps:    # on the input, before the filter
+            fs = self.chain_ksps * 1e3
+            self.sp_cnt.block(v, fs)
+            cc, cr, cp, _ = self.sp_cnt.fields(fs)
+            cnt_txt = f" cnt={cc} cnr={cr} cpk={cp}"
         if self.sp_filter:
             v = fake_filter(v, self.sp_filter)
         if self.grab_fault == "overrun":
@@ -1538,7 +1596,7 @@ class FakeTarget:
         header_line = (f"GRAB n={n} from={frm} ksps={self.chain_ksps} ov={ov} late=0 "
                         f"missed={missed} halves=2 xfer={2 * n} slp={slp} dachz={int(DAC_CLK_HZ)} "
                         f"proc={self.sp_filter} "
-                        f"load={self._fake_load_pm()}{gz_txt}\r\n")
+                        f"load={self._fake_load_pm()}{gz_txt}{cnt_txt}\r\n")
         self._log(f"< {header_line.rstrip()}")
         payload = np.asarray(v, dtype="<u2").tobytes()
         self._log(f"< [binary payload, {len(payload)} bytes, not shown]")
@@ -1590,6 +1648,54 @@ def fake_goertzel(v, thr: int):
     a = int(round(amp))
     return dict(amp=a, rms=int(round(math.sqrt(var))), share_pm=min(1000, int(round(share * 1000))),
                 detected=1 if a >= thr else 0)
+
+
+class FakeCounter:
+    """sigproc.c's impact counter (CNT) for the stand-in: the same first
+    difference, damped resonator, magnitude every 4th sample against the
+    squared thresholds, re-arm at half the threshold, and the same exact
+    scale. The stand-in only has the grabbed windows, not a continuous
+    stream, so it counts what they show and restarts the resonator at
+    each one (a gap, as on the board after missed halves)."""
+
+    def __init__(self):
+        self.on, self.f, self.tau, self.thr = False, 50000, 100, 100
+        self.reset()
+
+    def reset(self):
+        self.count, self.seen, self.peak = 0, 0, 0.0
+        self.armed = True
+
+    def block(self, v, fs):
+        w = 2 * math.pi * self.f / fs
+        d = math.exp(-1e6 / (self.tau * fs))
+        c, dd, cw, sw = 2 * d * math.cos(w), d * d, math.cos(w), math.sin(w)
+        dre = 1 - c * cw + dd * math.cos(2 * w)
+        dim = c * sw - dd * math.sin(2 * w)
+        scale = 2 * math.sin(w / 2) * sw / math.hypot(dre, dim)
+        thr2, rearm2 = (self.thr * scale) ** 2, (self.thr * scale / 2) ** 2
+        q1 = q2 = 0.0
+        x = [float(u) for u in v]
+        xp = x[0]
+        for i, u in enumerate(x):
+            q0 = (u - xp) + c * q1 - dd * q2
+            xp, q2, q1 = u, q1, q0
+            if i % 4 == 3:
+                m2 = (q1 - q2 * cw) ** 2 + (q2 * sw) ** 2
+                self.peak = max(self.peak, math.sqrt(m2) / scale)
+                if self.armed and m2 > thr2:
+                    self.count += 1
+                    self.armed = False
+                elif not self.armed and m2 < rearm2:
+                    self.armed = True
+        self.seen += len(x)
+
+    def fields(self, fs):
+        secs = self.seen / fs if fs else 0.0
+        rate = int(round(self.count / secs)) if secs else 0
+        peak = int(round(self.peak))
+        self.peak = 0.0
+        return self.count, rate, peak, int(round(secs * 1000))
 
 
 def spectrum(samples: np.ndarray, fs_hz: float):
@@ -1823,6 +1929,32 @@ def selftest() -> int:
     ok_all &= ok_gzs
     print(f"Goertzel check setups on the stand-in (detected, amp, proc): {gz_res} ->",
           "PASS" if ok_gzs else "FAIL")
+    # the impact counter (CNT): commands, header fields, and the counting
+    # setups through the stand-in - a ring per table, counted in the grabs
+    cnt_res = {}
+    for key in ("cnt_1000", "cnt_wrong_f", "cnt_dense"):
+        cfg = SETUPS[key][1]
+        sg, acq, sp = cfg["siggen"], cfg["acquisition"], cfg["sigproc"]
+        t.cmd("stream off")
+        for line in siggen_commands(dict(sg, play=sg["play_hz"], h={k: sg["h"][k - 2] for k in range(2, 8)})):
+            t.cmd(line)
+        t.cmd(f"stream on {acq['ksps']} {acq['core']} {acq['pinsel']}")
+        okc = all(t.cmd(x)[0] for x in (f"sigproc cnt f {sp['cnt_f']}", f"sigproc cnt tau {sp['cnt_tau']}",
+                                         f"sigproc cnt thr {sp['cnt_thr']}", "sigproc cnt on"))
+        for _ in range(3):
+            okg, s_c, meta_c = t.grab()
+        cnt_res[key] = (okc, (meta_c.get("cnt") or {}).get("count"), (meta_c.get("cnt") or {}).get("peak"))
+        t.cmd("sigproc cnt off")
+        t.cmd("siggen off")
+    t.cmd("stream on 5000 3 5 0")
+    ok_bad_f, _ = t.cmd("sigproc cnt f 3000000")
+    # 3 grabs of 2048 samples at 1 MSPS hold 6 rings at 1000/s
+    ok_cnt = (cnt_res["cnt_1000"][0] and 5 <= (cnt_res["cnt_1000"][1] or 0) <= 7
+              and cnt_res["cnt_wrong_f"][1] == 0 and (cnt_res["cnt_dense"][1] or 0) <= 3
+              and not ok_bad_f)
+    ok_all &= ok_cnt
+    print(f"impact counter setups on the stand-in (ok, count, peak): {cnt_res}, f beyond fs/2.5 refused ->",
+          "PASS" if ok_cnt else "FAIL")
     # the stand-in's processing against the firmware's design: a tone at
     # fs/16 is found, one at fs/8 not; the band-pass passes fs/8 whole
     tn = np.arange(1024)
@@ -2485,6 +2617,23 @@ def main_gui(args):
                     sp_thr_in = ui.number("threshold, LSB", value=100, min=1, max=4095, step=10,
                                           format="%d").props("dense outlined").classes("flex-grow")
                 sp_gz_chip = ui.chip("fs/16: Goertzel off", color="grey-8").props("dense outline")
+                # CNT: the impact counter - a resonator at the plate's ring
+                # frequency and a detector that counts each ring once
+                ui.label("impact counter").classes("text-xs text-slate-400")
+                with ui.row().classes("w-full gap-2 items-center"):
+                    sp_cnt_cb = ui.checkbox("count", value=False)
+                    sp_cnt_f_in = ui.number("ring f, kHz", value=50, min=1, max=400, step=1,
+                                            format="%g").props("dense outlined").classes("flex-grow")
+                with ui.row().classes("w-full gap-2 items-center"):
+                    sp_cnt_tau_in = ui.number("tau, us", value=100, min=2, max=5000, step=10,
+                                              format="%d").props("dense outlined").classes("flex-grow")
+                    sp_cnt_thr_in = ui.number("threshold, LSB", value=150, min=1, max=4095, step=10,
+                                              format="%d").props("dense outlined").classes("flex-grow")
+                    sp_cnt_reset_btn = ui.button("reset", icon="restart_alt").props("outline dense")
+                with ui.row().classes("w-full gap-1 items-center"):
+                    sp_cnt_chip = ui.chip("count –", color="grey-8").props("dense outline")
+                    sp_cnr_chip = ui.chip("rate –", color="grey-8").props("dense outline")
+                    sp_cpk_chip = ui.chip("peak –", color="grey-8").props("dense outline")
                 sigproc_lbl = ui.label("").classes("text-xs text-slate-400")
 
             with ui.card().classes("tile w-full rounded-xl p-4 gap-2"):
@@ -2941,6 +3090,24 @@ def main_gui(args):
                     "('sigproc gz thr <lsb>')."),
         (sp_gz_chip, "The Goertzel's result for the last half before the grab: the tone's amplitude, "
                      "its share of the signal's power, detected or not."),
+        (sp_cnt_cb, "The impact counter in the firmware ('sigproc cnt on|off'): a damped resonator "
+                    "at the plate's ring frequency, on every sample of the input, and a detector "
+                    "that counts each ring once - above the threshold, again only after it has "
+                    "fallen below half of it. Counts continuously, also between grabs."),
+        (sp_cnt_f_in, "The ring frequency the resonator listens at, kHz ('sigproc cnt f <hz>'); "
+                      "at most fs/2.5."),
+        (sp_cnt_tau_in, "The resonator's time constant, us ('sigproc cnt tau <us>'): best the ring's "
+                        "own decay time (a matched filter). Longer: more selective, slower to fall, "
+                        "so close impacts merge sooner."),
+        (sp_cnt_thr_in, "Count above this magnitude, LSB of the ring's amplitude ('sigproc cnt thr'). "
+                        "The 'peak' chip shows what the rings reach - set it well below that, and "
+                        "above what other noises reach. A ring at another frequency still reaches "
+                        "a part (a short ring is broadband: 39 % at 80 kHz for 50)."),
+        (sp_cnt_reset_btn, "Start count and time over ('sigproc cnt reset')."),
+        (sp_cnt_chip, "Impacts counted since the reset."),
+        (sp_cnr_chip, "Impacts per second, over the time since the reset."),
+        (sp_cpk_chip, "The largest resonator magnitude since the previous grab, LSB - what a ring "
+                      "reaches, to set the threshold against."),
         (trig_cb, "Trigger the time plot: show every grab from the point where the signal "
                   "first crosses the level, so a periodic signal stands still. Display only - "
                   "the stream, the FFT and the triangle verdict keep the whole half. The plot "
@@ -3045,7 +3212,10 @@ def main_gui(args):
                         "slope": trig_slope_sel.value or RISING,
                         "hyst": int(trig_hyst_in.value or 0)},
             "sigproc": {"filter": sp_filter_sel.value or "off", "gz": bool(sp_gz_cb.value),
-                        "thr": int(sp_thr_in.value or 100)},
+                        "thr": int(sp_thr_in.value or 100), "cnt": bool(sp_cnt_cb.value),
+                        "cnt_f": int(round(float(sp_cnt_f_in.value or 50) * 1000)),
+                        "cnt_tau": int(sp_cnt_tau_in.value or 100),
+                        "cnt_thr": int(sp_cnt_thr_in.value or 150)},
             "buffer": {"size": int(buf_in.value or 2 * BUF_HALF_MAX)},
             "dac": {str(u): {"on": dac_mode(u) if dac_mode(u) == "auto" else dac_mode(u) == "on",
                              "low": int(c["low"].value or 0),
@@ -3108,6 +3278,10 @@ def main_gui(args):
         sp_filter_sel.value = spc.get("filter") if spc.get("filter") in SP_FILTERS else "off"
         sp_gz_cb.value = bool(spc.get("gz", False))
         sp_thr_in.value = int(spc.get("thr", 100))
+        sp_cnt_f_in.value = int(spc.get("cnt_f", 50000)) / 1000.0
+        sp_cnt_tau_in.value = int(spc.get("cnt_tau", 100))
+        sp_cnt_thr_in.value = int(spc.get("cnt_thr", 150))
+        sp_cnt_cb.value = bool(spc.get("cnt", False))
         buf_in.value = int(cfg.get("buffer", {}).get("size", 2 * BUF_HALF_MAX))
         for unit, c in dac_ui.items():
             d = cfg.get("dac", {}).get(str(unit), {})
@@ -3803,6 +3977,10 @@ def main_gui(args):
         filt = sp_filter_sel.value or "off"
         gz = bool(sp_gz_cb.value)
         thr = int(sp_thr_in.value or 100)
+        cnt = bool(sp_cnt_cb.value)
+        cnt_f = int(round(float(sp_cnt_f_in.value or 50) * 1000))
+        cnt_tau = int(sp_cnt_tau_in.value or 100)
+        cnt_thr = int(sp_cnt_thr_in.value or 150)
         if not t:
             sigproc_lbl.text = "not connected"
             return
@@ -3810,7 +3988,10 @@ def main_gui(args):
             await asyncio.sleep(0.05)
         refused = None
         async with port_lock:
-            for line in (f"sigproc {filt}", f"sigproc gz {'on' if gz else 'off'}", f"sigproc gz thr {thr}"):
+            cnt_lines = ([f"sigproc cnt f {cnt_f}", f"sigproc cnt tau {cnt_tau}", f"sigproc cnt thr {cnt_thr}"]
+                         if cnt else []) + [f"sigproc cnt {'on' if cnt else 'off'}"]
+            for line in [f"sigproc {filt}", f"sigproc gz {'on' if gz else 'off'}",
+                         f"sigproc gz thr {thr}"] + cnt_lines:
                 ok, lines = await port_cmd(t, line)
                 if not ok:
                     refused = (line, lines)
@@ -3819,13 +4000,28 @@ def main_gui(args):
             sigproc_lbl.text = f"'{refused[0]}' refused - not in this firmware? " + " ".join(refused[1])[:50]
         else:
             sigproc_lbl.text = (f"filter: {SP_FILTERS[filt] if filt in SP_FILTERS else filt}; Goertzel "
-                                + (f"on, threshold {thr} LSB" if gz else "off"))
+                                + (f"on, threshold {thr} LSB" if gz else "off") + "; counter "
+                                + (f"at {cnt_f / 1e3:g} kHz, tau {cnt_tau} us, threshold {cnt_thr} LSB"
+                                   if cnt else "off"))
         if not gz:
             sp_gz_chip.text = "fs/16: Goertzel off"
             sp_gz_chip.props("color=grey-8")
     sp_filter_sel.on_value_change(apply_sigproc)
     sp_gz_cb.on_value_change(apply_sigproc)
     sp_thr_in.on_value_change(apply_sigproc)
+    for _el in (sp_cnt_cb, sp_cnt_f_in, sp_cnt_tau_in, sp_cnt_thr_in):
+        _el.on_value_change(apply_sigproc)
+
+    async def cnt_reset(e=None):
+        t = state["target"]
+        if not t:
+            return
+        while state["busy"]:
+            await asyncio.sleep(0.05)
+        async with port_lock:
+            await port_cmd(t, "sigproc cnt reset")
+        sp_cnt_chip.text = "count 0"
+    sp_cnt_reset_btn.on_click(cnt_reset)
 
     # ---- acquisition: configure, start/keep the chain, grab, repeat ----
     def current_acq_cfg():
@@ -3992,10 +4188,21 @@ def main_gui(args):
                 marks.append({"xAxis": meta["ksps"] / 8.0, "label": {"formatter": "fs/8"}})
             if gzm is not None and meta["ksps"]:
                 marks.append({"xAxis": meta["ksps"] / 16.0, "label": {"formatter": "fs/16"}})
+            cntm = meta.get("cnt")
+            if cntm is not None:
+                marks.append({"xAxis": float(sp_cnt_f_in.value or 0), "label": {"formatter": "ring f"}})
             fft_chart.options["series"][0]["markLine"] = {
                 "silent": True, "symbol": "none",
                 "lineStyle": {"type": "dashed", "color": "#a78bfa", "width": 1}, "data": marks}
             fft_chart.update()
+            if cntm is None:
+                sp_cnt_chip.text, sp_cnr_chip.text, sp_cpk_chip.text = "count –", "rate –", "peak –"
+                sp_cnt_chip.props("color=grey-8")
+            else:
+                sp_cnt_chip.text = f"count {cntm['count']}"
+                sp_cnr_chip.text = f"{cntm['rate']} /s"
+                sp_cpk_chip.text = f"peak {cntm['peak']} LSB"
+                sp_cnt_chip.props("color=positive" if cntm["count"] else "color=grey-8")
             if gzm is None:
                 sp_gz_chip.text = ("fs/16: no result in the frame" if sp_gz_cb.value
                                    else "fs/16: Goertzel off")

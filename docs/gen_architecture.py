@@ -264,7 +264,7 @@ def layers():
     d.append(box(746, 328, 200, 48, "routing.c", ["route_t, resources, apply()"], "app"))
     d.append(box(958, 328, 182, 48, "board.h · board_cfg", ["glue · EV74H48A | EV17P63A"], "app"))
     d.append(box(170, 384, 290, 44, "capture.c", ["pairs A/B + guards · dma0_event() · counters"], "app"))
-    d.append(box(472, 384, 218, 44, "sigproc.c", ["lp | hp | bp at fs/8, Goertzel fs/16"], "app"))
+    d.append(box(472, 384, 218, 44, "sigproc.c", ["filter fs/8 · Goertzel · impact counter"], "app"))
     d.append(box(702, 384, 160, 44, "pingpong.c", ["half bookkeeping"], "app"))
     d.append(box(874, 384, 266, 44, "port_impl.c", ["glue · port_* → console / fail()"], "app"))
     d.append(box(170, 440, 970, 44, "siggen.c", ["src/core/ · wavegen table (8192 x 16 bit, .dma_buffer) → dma.c ch. 2 → dac.c, paced by sccp.c (SCCP2); claim in routing.c; no register"], "app"))

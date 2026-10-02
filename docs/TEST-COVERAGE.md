@@ -98,6 +98,7 @@ that accepts `buf` and ignores it.
 | Module | Before N+1 | N+1 change | Tested by | Off-board | Not reached |
 |---|---|---|---|---|---|
 | `main.c` | proven | restructured - BR.6: `diag_stack_paint()` first; smoke path (`SIM_SMOKE`) preprocessor-guarded | R0 | [SMOKE] | - |
+| `sigproc.c` (core) | never (new 01.10.2026) | 02.10.2026: selectable filters at fs/8, Goertzel at fs/16 (folded), the impact counter (CNT) | by hand on the board, 02.10.2026 (HARDWARE-LOG): the filters against their design to three decimals, the Goertzel setups, the counter exact at 500/1000/2000 per second | host `test_sigproc` (91 checks: filters against the analog magnitude, Goertzel against a double DFT, counter on synthetic ring trains) | no `board_run.py` block switches the processing on |
 | `example_main.c` (core) | never (new) | CORE.5 (02.10.2026): the core build's `main()` | none (no board-run block flashes the core build); by hand 02.10.2026: stream at 1/4/8 MSPS, `sigproc on`, the generator loop (HARDWARE-LOG) | `tools\build.bat core`/`make core`, link only | the core build under `board_run.py` |
 | `config_bits.c` | proven | none | R0 (the board boots) | build only | - |
 | `board.h`, `ev74h48a.c` | proven as `board.h` macros | restructured - P7.1: boot PLL dividers as `board_cfg` data | R0 (boot rate 7/7), R2 restore, R3 sweep/matrix | trace `b2b`, `clk`, `variants`, `stream_on*` | - |

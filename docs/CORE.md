@@ -85,7 +85,10 @@ that matter:
 - `info->gap` = 1 means this block does not follow the previous one (first block, restart,
   or a missed half): reset your filter state there.
 
-The example's body is selectable (`sigproc lp|hp|bp|off`): a 4th-order Butterworth low-,
+The example's body is selectable (`sigproc lp|hp|bp|off`), and alongside it runs an impact
+counter (`sigproc cnt ...`): a resonator at a ring frequency on every sample and a
+detector counting each ring once - the README's "Counting impacts" has what it can and
+cannot do. The filters are a 4th-order Butterworth low-,
 high- or band-pass at fs/8, and independently a Goertzel detector for a tone at fs/16
 (`sigproc gz on|off`). The coefficients come from `tools/sigproc_design.py`. A filter costs
 about 63-67 cycles per sample, so it keeps up to about 2 MSPS; the Goertzel adds about

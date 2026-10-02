@@ -507,6 +507,7 @@ static bool stream_on_route(uint32_t ksps, const route_t *r)
     }
     s_on     = true;
     s_ticks  = n;
+    sigproc_set_fs((float)acq_trig_hz / (float)n);   /* the impact counter's fs (CNT) */
     s_slpdat = slp;
     g_grab_ov0 = 0u; g_grab_la0 = 0u; g_grab_mi0 = 0u; g_grab_hv0 = 0u; g_grab_xf0 = 0u;
     g_grab_ps0 = 0u; g_grab_pc0 = 0u;

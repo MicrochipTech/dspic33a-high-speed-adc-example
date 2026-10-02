@@ -2281,3 +2281,44 @@ for another try later, and that one programmed normally.
   detected". The board read 167 LSB, detected in 5 of 5. 26 kHz is only 2.56 bins of
   fs/1024 beside fs/16, and an unwindowed DFT keeps |sinc| = 12 % there
   (1340 x 0.122 = 164). The setup is now 28 kHz (7.7 bins), where it reads 49 LSB.
+
+## 2026-10-02 (evening), the impact counter (CNT) - 3a7ce5f + local changes, local (COM26)
+
+`sigproc cnt ...` (`docs/IMPLEMENTATION-PLAN.md` section CNT). Impacts came from the
+signal generator on DAC2 -> RA8 -> core 5 / PINSEL 3: one damped ring per table (h2..h7
+0, decay 10000/s = 100 us, range 800..3500), the table 1e6/rate entries at 1 MHz, so the
+rate is exact. The stream ran at 1 MSPS, and the counter at tau 100 us. The count is over
+about 10 s; the expected value is the time the counter saw (cnt_ms) x play_hz / n.
+
+| ring | rate | counter f / thr | count | expected | peak (LSB) |
+|---|---|---|---|---|---|
+| 50 kHz | 1000/s | 50 kHz / 150 | 10339 in 10339 ms | 10339.0 | 536 |
+| 50 kHz | 500/s | 50 kHz / 150 | 5160 in 10321 ms | 5160.5 | 532 |
+| 50 kHz | 2000/s | 50 kHz / 150 | 20590 in 10295 ms | 20590.0 | 553 |
+| 50 kHz | 5000/s | 50 kHz / 150 | **0** | 51580 | 732 |
+| 80 kHz | 1000/s | 50 kHz / 150 | 10348 (all) | - | 194 |
+| 80 kHz | 1000/s | 50 kHz / 300 | 0 | - | 201 |
+| 20 kHz | 1000/s | 20 kHz / 150 | 10328 in 10328 ms | 10328.0 | 626 |
+| 150 kHz | 1000/s | 150 kHz / 150 | 10359 in 10359 ms | 10359.0 | 468 |
+
+A quick run first counted 4554 in 4554 ms (1000/s). In every run, missed was 0 and the
+load 95..156 per mille: about 20-30 CPU cycles per sample, with the service.
+
+**The predictions held:**
+- The 80-kHz ring reached 194 against the computed 39 % of the on-frequency peak
+  (0.39 x ~500).
+- 5000/s merges, because the magnitude never falls below half the threshold between
+  rings 200 us apart with a 100-us decay. That stops the count completely - a harder
+  failure than "too few". The GUI's `cnt_dense` setup shows it.
+
+**A clue to an open question:** in the 1000/s runs the counter saw every ring for 10 s
+without a gap, while grabs ran every 0.2 s. So the generator played continuously, and the
+"DAC2 stands still for a whole half" seen in some grabs since the CORE entry is more
+likely on the way from the buffer to the grab than in the generator.
+
+Off-board: `tests/host/test_sigproc.c` 91/91. Its first run counted 41 of 40, because a
+reset during the previous scenario's ring re-armed the detector; the firmware now arms
+after a reset only if nothing is ringing. Also: the GUI `--selftest` (the counting setups
+through `FakeCounter`), `gui_ui_test.py`, trace 15/15, hosttest 20/20, smoke
+re-recorded (help line, 88 bytes of stack), ISRs 46/41/55/48, one `.dma_buffer` of
+0x6040.

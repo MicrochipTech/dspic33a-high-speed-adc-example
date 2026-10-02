@@ -97,8 +97,40 @@ bool sigproc_goertzel_on(void);
 void sigproc_set_threshold(uint32_t lsb);         /* default 100 LSB */
 void sigproc_goertzel_get(sigproc_gz_t *out);
 
-/* true when either a filter or the Goertzel is on: capture.c then calls
- * sigproc_block() (capture_sigproc_enable(), set by the console). */
+/* ---- The impact counter (CNT, 02.10.2026, docs/IMPLEMENTATION-PLAN.md):
+ * a damped Goertzel resonator at the plate's ring frequency, run per sample
+ * on the input before the filter, and a detector that counts once when the
+ * resonator's magnitude rises above `thr` and re-arms when it has fallen
+ * below thr / 2. Its state carries across halves; a reset starts count and
+ * time over. Needs the stream's sample rate: sigproc_set_fs(), called by
+ * acquisition.c when a stream starts. */
+typedef struct {
+    uint32_t on;        /* 1: counting                                       */
+    uint32_t f_hz;      /* the resonator's frequency                         */
+    uint32_t tau_us;    /* its time constant (D = exp(-1 / (tau fs)))        */
+    uint32_t thr;       /* count above this magnitude, LSB of tone amplitude */
+    uint32_t count;     /* impacts since the reset                           */
+    uint32_t rate;      /* impacts per second over the time seen since then  */
+    uint32_t ms;        /* that time, ms (the samples seen / fs)             */
+    uint32_t missed;    /* halves the processing never saw since the reset   */
+    uint32_t peak;      /* the largest magnitude since the last peak read, LSB */
+    uint32_t fs_hz;     /* the sample rate it is set up for (0: none yet)    */
+} sigproc_cnt_t;
+
+void sigproc_set_fs(float fs_hz);
+void sigproc_cnt_enable(bool on);
+bool sigproc_cnt_on(void);
+/* f 1000..fs/2.5 (checked against the running fs when it is known), tau
+ * 2..5000 us, thr 1..4095. false: refused, nothing changed. Restarts the
+ * resonator; the count goes on. */
+bool sigproc_cnt_config(uint32_t f_hz, uint32_t tau_us, uint32_t thr);
+void sigproc_cnt_reset(void);
+/* clear_peak: the grab reads the peak since the previous grab; the
+ * console leaves it. */
+void sigproc_cnt_get(sigproc_cnt_t *out, bool clear_peak);
+
+/* true when a filter, the Goertzel or the counter is on: capture.c then
+ * calls sigproc_block() (capture_sigproc_enable(), set by the console). */
 bool sigproc_active(void);
 
 #endif

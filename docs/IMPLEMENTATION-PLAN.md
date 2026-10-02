@@ -1424,6 +1424,161 @@ own. Open from that run, not CORE's: the generator loop's grabs where DAC2 stand
 Not done: a `board_run.py` block that flashes the core build (`example_main.c`'s box stays
 grey until one does or it is marked by hand).
 
+## CNT: counting impacts (balls on a metal plate) with a Goertzel
+
+Added 02.10.2026 (user request): many small balls fall in quick succession onto a metal
+plate. Each impact makes the plate ring at a high frequency, up into the ultrasound range,
+and a Goertzel with a detector behind it is to **count the balls**. The user decided:
+
+- **Ring frequency:** set in Hz, 20..200 kHz.
+- **Rate:** up to about 1000 impacts per second; a ring dies away in under 0.5 ms.
+- **Process:** plan first, build after approval.
+
+**Why not the Goertzel of 02.10.2026.** `sigproc gz` gives ONE value per half: 1024
+samples, about 1 ms at 1 MSPS. That can hold one impact, or none, or two. Counting needs
+a magnitude per sample (or per few samples) that rises with each ring and falls before the
+next. `lib/goertzel_f` (a damped Goertzel resonator) and `lib/detect` (a pulse detector:
+fires once, re-arms by hysteresis) were written for exactly this in P3.3/P3.5
+(`docs/DESIGN-MULTICHANNEL.md` 4.3, taken from the Goertzel template). Both are
+host-tested against `tests/ref/goertzel_ref.py`, and both are linked but never called.
+
+**The signal chain:**
+
+    ADC (fs, default 1 MSPS: 5 samples per period at 200 kHz)
+     -> damped Goertzel resonator at f_ring, time constant tau
+        (D = exp(-1 / (tau fs)); tau about 20..50 us: it rises within a
+        ring and has fallen well before the next, 1 ms later at 1000/s)
+     -> magnitude, low-passed, every `window`-th sample
+     -> detector: count once above `thr`, re-arm below thr x hyst (0.5)
+     -> counter (32 bit, never reset by a grab), rate per second
+
+It runs on the input before the filter, like the block Goertzel, and its state carries
+across halves: the pair-mode stream has no gaps. A missed half (`missed`) is time the
+counter never saw, so it is reported next to the count.
+
+**What the physics allows:** two impacts are only told apart if the first one's magnitude
+has fallen below the re-arm level before the second arrives. At 1000/s with a 0.5-ms ring
+that leaves half the interval, enough. Closer impacts merge, and the counter counts too
+few. CNT.6 measures where that begins rather than assuming it.
+
+### CNT.1 Sample rate into sigproc
+`goertzel_f_init()` needs fs and f in Hz. `sigproc_info_t` gains `fs_hz`, the actual rate
+of the running stream (acquisition.c knows it: `acq_trig_hz` / ticks). The filters and the
+block Goertzel ignore it (they are fractions of fs).
+
+### CNT.2 The counter in sigproc.c
+- An instance of `goertzel_f_t` and one of `detect_t`.
+- `sigproc_cnt_set(f_hz, tau_us, thr, window)` and `sigproc_cnt_enable(bool)`.
+- `sigproc_cnt_reset()`, and `sigproc_cnt_get()` returning count, rate (counts per
+  second over the time since the reset, from the blocks seen and fs), peak magnitude,
+  missed halves since the reset and `valid`.
+- The resonator is re-initialised when f, tau or fs change.
+- Per block: `goertzel_f_block()` into a magnitude buffer (one half / window int32 - 1 KB
+  at window 4), then `detect_block()`.
+- `capture_sigproc_enable(sigproc_active())` as for the others.
+
+### CNT.3 Console and GRAB
+- Console: `sigproc cnt on|off`, `sigproc cnt f <hz>`, `sigproc cnt tau <us>`,
+  `sigproc cnt thr <n>`, `sigproc cnt reset`. Plain `sigproc` also reports count, rate,
+  peak and missed. One parser slot (the `sigproc` one) as before.
+- The GRAB header gains `cnt=<count> cnr=<per second>` while the counter runs, optional
+  in `protocol.py` like `gz=`.
+- `board_run.py`/`eval_board.py` updated and self-tested (rule of BR: the GRAB header
+  changes).
+
+### CNT.4 The GUI
+- The signal processing card gets an **impact counter** section: on/off, f (kHz), tau
+  (us), threshold, a reset button.
+- Chips: count, rate per second, missed.
+- In the FFT a dashed mark at f.
+- FakeTarget runs the reference implementation (`tests/ref/goertzel_ref.py`'s Goertzel +
+  Detector) on its samples.
+
+### CNT.5 Test signals - impacts from the signal generator
+The generator's `decay` makes the table ONE damped burst (`lib/wavegen.h`), and played in
+a loop it is one "impact" per table period: rate = play_hz / n, exactly known.
+New setups in the GUI's setup list:
+
+- `cnt_500`: 50 kHz rings, 500/s (2000 entries at 1 MHz).
+- `cnt_1000`: 50 kHz rings, 1000/s.
+- `cnt_wrong_f`: rings at 80 kHz while the counter listens at 50 kHz - expect about 0.
+- `cnt_dense`: rings 5000/s, the decay unchanged - where impacts merge (CNT.6 says how
+  far).
+
+Limits of this stand-in: every burst has the same amplitude and the same spacing (a
+table has one pulse; real balls are random). The detector's handling of amplitude
+spread is covered by the host test (CNT.7), not by the generator.
+
+### CNT.6 Board run
+For each setup, the count over 10 s against play_hz / n x 10 s; the target is exact
+(+-1) at 500/s and 1000/s and 0 at the wrong frequency. Measured as well:
+
+- the rate at which counts start to go missing (cnt_dense, and decays of 2000..20000/s);
+- the CPU load at 1 MSPS (the resonator per sample in float, estimated 15-25 cycles,
+  i.e. 10 % of the budget) and the highest rate where nothing is missed.
+
+Everything goes into `docs/HARDWARE-LOG.md`.
+
+### CNT.7 Host tests
+`tests/host/test_sigproc.c` gets burst trains at known times through the full block path:
+
+- exact counts across half boundaries, a burst split by one;
+- amplitude spread 1:10 with an adaptive or a fixed threshold;
+- two bursts closer than the re-arm (counted once, documented as the limit);
+- a burst at the wrong frequency (0);
+- a reset.
+
+The reference is `goertzel_ref.py`, cross-checked like `test_tri_eval_xcheck.py`.
+
+### CNT.8 Documentation
+README (a section on counting impacts), CORE.md (the counter is core, part of the
+sigproc example), CLAUDE.md, the architecture diagram's sigproc box, TEST-COVERAGE.
+
+**Open until measured:**
+- whether a float resonator per sample fits beside a filter at 1 MSPS (both together
+  would be about 63 + 25 cycles of 200);
+- whether the magnitude's low-pass (`GOERTZEL_LP_K`) and `window` need other values than
+  the template's for 0.5-ms rings.
+
+The plan does not decide these; CNT.6 measures them.
+
+### Status (02.10.2026, evening)
+
+CNT.1-CNT.8 are done; the board results are in HARDWARE-LOG 02.10.2026 "impact counter".
+Deviations from the plan, each decided while building:
+
+- **No `lib/goertzel_f`, no `lib/detect` call.** The resonator works on the FIRST
+  DIFFERENCE of the samples. The raw samples sit at about 2000 LSB, and that DC level puts
+  a standing magnitude of the same order as a ring's into the resonator (about 6500 for
+  50 kHz, tau 25 us, 1 MSPS); the difference removes DC exactly, with no state of its own.
+- **The magnitude every 4th sample, squared, against squared thresholds** - no square
+  root, no low-pass, no per-sample buffer - in a loop of its own in `sigproc.c`. The
+  detector is `lib/detect`'s rule (fire once, re-arm at half the threshold), written out
+  on the squared magnitude.
+- **The scale is analytic and exact:** the evaluation |q1 - e^(-jw) q2| cancels the
+  negative frequency in steady state, so the magnitude has no ripple, and a steady tone of
+  A reads A (host test: 800 -> 790..810).
+- **fs reaches sigproc through `sigproc_set_fs()`,** called by acquisition.c when a
+  stream starts, not through `sigproc_info_t`: capture.c's per-half path is unchanged.
+- **tau defaults to 100 us,** equal to a 0.5-ms ring's decay: the matched filter for a
+  damped sine. Computed before building, for a 1000-LSB ring at 50 kHz decaying with
+  100 us:
+
+  | | 25 kHz | 40 kHz | 60 kHz | 80 kHz | 100 kHz |
+  |---|---|---|---|---|---|
+  | share of the on-frequency peak (368) | 19 % | 49 % | 64 % | 39 % | 29 % |
+
+  It falls below a quarter 270 us after the peak.
+- **Frequency selectivity is a matter of the threshold, about 2.5:1, not absolute.** A
+  short ring is broadband. The board confirmed it: 80-kHz rings reach 194 against the
+  50-kHz counter's 533 - counted at threshold 150, not at 300.
+- **A reset during a ring does not count it again:** the detector is re-armed only if the
+  magnitude is below the re-arm level (the first host run counted 41 of 40 because of
+  that).
+- **Rings closer than the decay merge, and the count then stops altogether:** at 5000/s
+  (200 us apart, 100-us decay) the magnitude never falls below half the threshold, and
+  the count stays 0. 2000/s still counts exactly.
+
 ## Order and dependencies
 
 ```
