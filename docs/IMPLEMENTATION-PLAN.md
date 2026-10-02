@@ -1575,9 +1575,28 @@ Deviations from the plan, each decided while building:
 - **A reset during a ring does not count it again:** the detector is re-armed only if the
   magnitude is below the re-arm level (the first host run counted 41 of 40 because of
   that).
-- **Rings closer than the decay merge, and the count then stops altogether:** at 5000/s
-  (200 us apart, 100-us decay) the magnitude never falls below half the threshold, and
-  the count stays 0. 2000/s still counts exactly.
+- **Rings closer than the decay merged, and the count then stopped altogether:** at
+  5000/s (200 us apart, 100-us decay) the magnitude never fell below half the threshold,
+  and the count stayed 0. The user saw it in the GUI's `cnt_dense` setup. **Fixed the same
+  evening with a relative re-arm:**
+  - re-arm when the magnitude has fallen below 0.7 x the peak since the count (or below
+    thr/2);
+  - count only above thr AND after a rise by 1/0.7 from the trough since the re-arm.
+    Re-arming alone counted every ring twice: its own tail was still above thr.
+
+  A model first, then the board:
+
+  | rate | tau 100 us | tau 25 us |
+  |---|---|---|
+  | 1000..5000/s | exact (5000/s: 32501 of 32500) | |
+  | 7000/s | 0 | exact (45048 of 45049) |
+  | 10000/s | 0 | exact (64235 of 64240) |
+
+  With random spacing and amplitude (model) it counts fewer and fewer as rings crowd,
+  never stuck. The GUI warns when the count stands while the peak is above the threshold.
+  The fix also exposed a second fault: after a new set-up the first difference started
+  from a stale previous sample, and the step kicked the resonator like a ring. Now it
+  starts at the block's first sample.
 
 ## Order and dependencies
 

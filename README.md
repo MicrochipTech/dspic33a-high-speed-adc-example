@@ -683,8 +683,12 @@ physics, not the code:
 - **Frequency selectivity is about 2.5:1.** A short ring is broadband: an 80-kHz ring
   still moves a 50-kHz counter to 39 % of its own peak. A ring at the wrong frequency is
   ignored only when the threshold sits between the two (the `peak` chip shows where).
-- **Rings closer than their decay merge.** At 5000/s, 200 us apart, the magnitude never
-  falls below half the threshold, and the count stops. The result goes
+- **Rings closer than their decay merge.** The detector re-arms once the magnitude has
+  fallen to 70 % of its peak and counts the next rise, so a ring on the last one's tail
+  is still counted. On the board it counts exactly up to 5000/s at tau 100 us. Regular
+  rings at 7000/s and more merge completely, and the count then stands - the GUI says so -
+  but at tau 25 us it counts them exactly too (10000/s: 64235 of 64240). A smaller tau
+  separates closer rings and selects the frequency less sharply. The result goes
 back into the same half: `stream grab` then sends the processed data to the GUI (the frame
 says which filter: `proc=1` low-pass, `2` high-pass, `3` band-pass), with no second buffer. It has one half period to return (1024 samples at
 8 MSPS: 128 us, 25 CPU cycles per sample); `status`, the chain test's load figures and the

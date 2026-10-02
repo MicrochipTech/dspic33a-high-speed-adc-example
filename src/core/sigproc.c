@@ -78,9 +78,26 @@
  * the same order as a ring's (about 6500 for 50 kHz, tau 25 us, 1 MSPS);
  * the difference removes DC exactly, with no state of its own. (2) the
  * magnitude only every 4th sample, squared, against squared thresholds -
- * no square root, no low-pass, no per-sample magnitude buffer. The
- * detector is lib/detect's rule (fire once, re-arm by hysteresis 0.5),
- * written out here on the squared magnitude. The magnitude is scaled so a
+ * no square root, no low-pass, no per-sample magnitude buffer.
+ *
+ * The detector counts a ring when the magnitude is above thr AND has risen
+ * by 1/0.7 from the lowest value since it was last re-armed; it re-arms
+ * when the magnitude has fallen below 0.7 x the peak since the count (or
+ * below thr / 2). Until the same evening it was lib/detect's rule - re-arm
+ * only below thr / 2 - and at 5000 rings a second (200 us apart, 100-us
+ * decay) the magnitude never got that low: the count stopped at 1 for
+ * good (board, setup cnt_dense). Re-armed relative to the peak, a new ring
+ * on top of the last one's tail is counted: in a model (02.10.2026)
+ * regular rings were counted exactly up to 5000/s at tau 100 and up to
+ * 10000/s at tau 25, and with random spacing (0.5..1.5) and amplitude
+ * (0.3..1) 37 of 38 at 1000/s, 77 of 79 at 2000/s, then fewer and fewer -
+ * too few, never stuck - as the rings crowd. On the board (same evening,
+ * the generator's regular rings decaying with 100 us): exact at 1000..5000/s
+ * with tau 100 (32501 of 32500 at 5000/s); 7000/s and 10000/s count 0 at
+ * tau 100 - regular rings closer than the decay still merge - and exactly
+ * at tau 25 (45048 of 45049, 64235 of 64240). Requiring the RISE matters:
+ * re-arming alone, without it, counted every ring twice (its own tail is
+ * still above thr when it re-arms). The magnitude is scaled so a
  * steady tone of amplitude A at f reads A (LSB): cnt_setup() computes the
  * chain's gain once per configuration (exactly, see there), so the
  * threshold is in the units of the signal, whatever f, tau and fs are.
@@ -151,6 +168,7 @@ static sigproc_gz_t gz;                 /* the last block's result         */
  * applied at the next block (cnt_dirty): the console never runs while a
  * block is processed (cli.c's uart_rx_hook()). */
 #define CNT_EVERY 4u                    /* the magnitude every 4th sample  */
+#define CNT_DROP2 0.49f                 /* 0.7^2: re-arm at 70 % of the peak, count after a rise by 1/0.7 */
 static struct {
     volatile bool on, dirty, reset;
     volatile uint32_t f_hz, tau_us, thr;
@@ -159,6 +177,7 @@ static struct {
     float thr2, rearm2, inv_scale2;     /* squared, in resonator units     */
     float q1, q2, xp;                   /* resonator, previous sample      */
     bool armed, ready;
+    float pk2, tr2;                     /* peak since the count, trough since re-arm (squared) */
     uint32_t count, missed0, missed;
     uint64_t seen;                      /* samples processed since reset   */
     float peak2;                        /* squared, resonator units        */
@@ -301,23 +320,32 @@ static void cnt_setup(void)
 
 static void cnt_block(const uint16_t *x, uint32_t n, const sigproc_info_t *info)
 {
-    if (cn.dirty) { cn.dirty = false; cnt_setup(); }
+    bool fresh = false;
+    if (cn.dirty) { cn.dirty = false; cnt_setup(); fresh = true; }
     if (cn.reset) {
         cn.reset = false;
         cn.count = 0u; cn.seen = 0u; cn.peak2 = 0.0f;
         cn.missed0 = info->missed;
-        /* armed only if nothing is ringing right now: a reset in the
-         * middle of a ring must not count that ring as a new one */
+        /* not armed, with what rings right now as the peak: a reset in
+         * the middle of a ring must not count that ring as a new one; it
+         * re-arms once that has fallen (or at once when nothing rings) */
         const float re = cn.q1 - cn.q2 * cn.cw, im = cn.q2 * cn.sw;
-        cn.armed = !cn.ready || ((re * re + im * im) < cn.rearm2);
+        cn.armed = false;
+        cn.pk2 = cn.ready ? (re * re + im * im) : 0.0f;
     }
     if (!cn.ready) { return; }
-    if (info->gap) { cn.q1 = cn.q2 = 0.0f; cn.xp = (float)x[0]; }   /* no step from before */
+    /* After a new set-up or a gap the first difference starts at the
+     * block's first sample: from a stale (or the initial 0) previous value
+     * the step to ~2048 would kick the resonator like a ring of its own -
+     * the relative re-arm then measured the real rings against that
+     * phantom peak and never counted (host test, 02.10.2026). */
+    if (fresh || info->gap) { cn.q1 = cn.q2 = 0.0f; cn.xp = (float)x[0]; }
     cn.missed = info->missed - cn.missed0;
     float q1 = cn.q1, q2 = cn.q2, xp = cn.xp, pk = cn.peak2;
     const float c = cn.c, dd = cn.dd, cw = cn.cw, sw = cn.sw;
     const float thr2 = cn.thr2, rearm2 = cn.rearm2;
     bool armed = cn.armed;
+    float pkc = cn.pk2, tr = cn.tr2;
     uint32_t count = cn.count, i = 0u;
     for (; i + CNT_EVERY <= n; i += CNT_EVERY) {
         for (uint32_t k = 0; k < CNT_EVERY; k++) {
@@ -329,9 +357,11 @@ static void cnt_block(const uint16_t *x, uint32_t n, const sigproc_info_t *info)
         const float m2 = re * re + im * im;
         if (m2 > pk) { pk = m2; }
         if (armed) {
-            if (m2 > thr2) { count++; armed = false; }
-        } else if (m2 < rearm2) {
-            armed = true;
+            if (m2 < tr) { tr = m2; }
+            if ((m2 > thr2) && (m2 * CNT_DROP2 > tr)) { count++; armed = false; pkc = m2; }
+        } else {
+            if (m2 > pkc) { pkc = m2; }
+            if ((m2 < CNT_DROP2 * pkc) || (m2 < rearm2)) { armed = true; tr = m2; }
         }
     }
     for (; i < n; i++) {                              /* n mod 4: no evaluation */
@@ -340,7 +370,7 @@ static void cnt_block(const uint16_t *x, uint32_t n, const sigproc_info_t *info)
         xp = u; q2 = q1; q1 = q0;
     }
     cn.q1 = q1; cn.q2 = q2; cn.xp = xp; cn.peak2 = pk;
-    cn.armed = armed; cn.count = count;
+    cn.armed = armed; cn.count = count; cn.pk2 = pkc; cn.tr2 = tr;
     cn.seen += n;
 }
 

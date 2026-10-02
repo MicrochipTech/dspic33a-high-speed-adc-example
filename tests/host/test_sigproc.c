@@ -369,6 +369,19 @@ int main(void)
         sigproc_cnt_get(&c, true);
         CHECK_EQ(c.count, 1u);
 
+        /* 5000 rings a second (200 us apart, 100-us decay): each one on the
+         * last one's tail - counted all the same (relative re-arm; until
+         * the same evening the count stopped at 1 here) */
+        CNT_QUIET();
+        nb = 0u;
+        for (uint32_t k = 0; k < 40u; k++) { t0[nb] = 300.0 + 200.0 * k; am[nb] = 1000.0; fr[nb] = 50000.0; nb++; }
+        sigproc_cnt_reset();
+        CNT_SYNTH(9000u);
+        CNT_FEED(9000u);
+        sigproc_cnt_get(&c, true);
+        if (c.count < 39u || c.count > 40u) { fprintf(stderr, "5000/s: %u of 40\n", c.count); }
+        CHECK(c.count >= 39u && c.count <= 40u);
+
         /* rings at 100 kHz, the same amplitude: 29 % of the peak (107 of
          * 368) - below thr 150, not counted */
         CNT_QUIET();

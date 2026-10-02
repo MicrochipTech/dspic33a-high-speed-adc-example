@@ -330,8 +330,10 @@ SETUPS.update({
     "cnt_wrong_f": ("impact counter - rings at 80 kHz, counter at 50 kHz, threshold 300: expect 0 "
                     "(at 150 it counts them - a short ring is broadband)",
                     _cnt_setup(80000, 1000, f_cnt=50000, thr=300)),
-    "cnt_dense": ("impact counter - 5000/s, rings 200 us apart: they merge, the count stops "
-                  "(the limit; 2000/s still counts exactly)", _cnt_setup(50000, 5000)),
+    "cnt_dense": ("impact counter - 5000/s, rings 200 us apart, each on the last one's tail: "
+                  "still counted", _cnt_setup(50000, 5000)),
+    "cnt_limit": ("impact counter - 10000/s, 100 us apart at a 100-us decay: the limit - set "
+                  "tau to 25 us and it counts again", _cnt_setup(50000, 10000)),
 })
 
 # Every setup that does not name the signal processing switches it off
@@ -1664,7 +1666,7 @@ class FakeCounter:
 
     def reset(self):
         self.count, self.seen, self.peak = 0, 0, 0.0
-        self.armed = True
+        self.armed, self.pk2, self.tr2 = True, 0.0, 0.0
 
     def block(self, v, fs):
         w = 2 * math.pi * self.f / fs
@@ -1683,11 +1685,17 @@ class FakeCounter:
             if i % 4 == 3:
                 m2 = (q1 - q2 * cw) ** 2 + (q2 * sw) ** 2
                 self.peak = max(self.peak, math.sqrt(m2) / scale)
-                if self.armed and m2 > thr2:
-                    self.count += 1
-                    self.armed = False
-                elif not self.armed and m2 < rearm2:
-                    self.armed = True
+                # sigproc.c's rule: count above thr after a rise by 1/0.7
+                # from the trough, re-arm at 70 % of the peak (or thr / 2)
+                if self.armed:
+                    self.tr2 = min(self.tr2, m2)
+                    if m2 > thr2 and m2 * 0.49 > self.tr2:
+                        self.count += 1
+                        self.armed, self.pk2 = False, m2
+                else:
+                    self.pk2 = max(self.pk2, m2)
+                    if m2 < 0.49 * self.pk2 or m2 < rearm2:
+                        self.armed, self.tr2 = True, m2
         self.seen += len(x)
 
     def fields(self, fs):
@@ -1932,7 +1940,7 @@ def selftest() -> int:
     # the impact counter (CNT): commands, header fields, and the counting
     # setups through the stand-in - a ring per table, counted in the grabs
     cnt_res = {}
-    for key in ("cnt_1000", "cnt_wrong_f", "cnt_dense"):
+    for key in ("cnt_1000", "cnt_wrong_f", "cnt_dense", "cnt_limit"):
         cfg = SETUPS[key][1]
         sg, acq, sp = cfg["siggen"], cfg["acquisition"], cfg["sigproc"]
         t.cmd("stream off")
@@ -1948,10 +1956,14 @@ def selftest() -> int:
         t.cmd("siggen off")
     t.cmd("stream on 5000 3 5 0")
     ok_bad_f, _ = t.cmd("sigproc cnt f 3000000")
-    # 3 grabs of 2048 samples at 1 MSPS hold 6 rings at 1000/s
-    ok_cnt = (cnt_res["cnt_1000"][0] and 5 <= (cnt_res["cnt_1000"][1] or 0) <= 7
-              and cnt_res["cnt_wrong_f"][1] == 0 and (cnt_res["cnt_dense"][1] or 0) <= 3
-              and not ok_bad_f)
+    # 3 grabs of 2048 samples at 1 MSPS hold 6 rings at 1000/s and 30 at
+    # 5000/s (counted since the relative re-arm); 10000/s at tau 100 is the
+    # limit - the rings merge, at most one counted per grab
+    # (the stand-in sees only the grabs and restarts at each one: a grab
+    # that begins inside a ring counts its tail too - up to one per grab)
+    ok_cnt = (cnt_res["cnt_1000"][0] and 5 <= (cnt_res["cnt_1000"][1] or 0) <= 9
+              and cnt_res["cnt_wrong_f"][1] == 0 and 27 <= (cnt_res["cnt_dense"][1] or 0) <= 33
+              and (cnt_res["cnt_limit"][1] or 0) <= 3 and not ok_bad_f)
     ok_all &= ok_cnt
     print(f"impact counter setups on the stand-in (ok, count, peak): {cnt_res}, f beyond fs/2.5 refused ->",
           "PASS" if ok_cnt else "FAIL")
@@ -4196,12 +4208,26 @@ def main_gui(args):
                 "lineStyle": {"type": "dashed", "color": "#a78bfa", "width": 1}, "data": marks}
             fft_chart.update()
             if cntm is None:
+                state["cnt_prev"] = None
                 sp_cnt_chip.text, sp_cnr_chip.text, sp_cpk_chip.text = "count –", "rate –", "peak –"
                 sp_cnt_chip.props("color=grey-8")
             else:
                 sp_cnt_chip.text = f"count {cntm['count']}"
                 sp_cnr_chip.text = f"{cntm['rate']} /s"
                 sp_cpk_chip.text = f"peak {cntm['peak']} LSB"
+                # no new count since the last grab although the resonator
+                # rang above the threshold: the rings merge (or one long
+                # tone) - the detector never re-arms (board: 7000/s at tau
+                # 100 counts 0, at tau 25 exactly; HARDWARE-LOG 02.10.2026)
+                prev = state.get("cnt_prev")
+                stuck = (prev is not None and cntm["count"] == prev
+                         and cntm["peak"] > int(sp_cnt_thr_in.value or 150))
+                state["cnt_prev"] = cntm["count"]
+                if stuck:
+                    sp_cnr_chip.text = f"{cntm['rate']} /s - rings merge or one long tone: lower tau"
+                    sp_cnr_chip.props("color=warning")
+                else:
+                    sp_cnr_chip.props("color=grey-8")
                 sp_cnt_chip.props("color=positive" if cntm["count"] else "color=grey-8")
             if gzm is None:
                 sp_gz_chip.text = ("fs/16: no result in the frame" if sp_gz_cb.value

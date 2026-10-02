@@ -2322,3 +2322,38 @@ after a reset only if nothing is ringing. Also: the GUI `--selftest` (the counti
 through `FakeCounter`), `gui_ui_test.py`, trace 15/15, hosttest 20/20, smoke
 re-recorded (help line, 88 bytes of stack), ISRs 46/41/55/48, one `.dma_buffer` of
 0x6040.
+
+## 2026-10-02 (late evening), the impact counter re-arms relative to the peak - fb23efb + local changes, local (COM26)
+
+**The user found it in the GUI:** the setup `cnt_dense` (5000 rings a second) showed
+"count 1, 0 /s, peak 742". That was the limit the setup was meant to show, but the
+failure was a bad one: the count stopped altogether. The magnitude never fell below half
+the threshold between rings 200 us apart, so the detector never re-armed.
+
+**New rule** (`sigproc.c`, `CNT_DROP2`): re-arm when the magnitude has fallen below
+0.7 x the peak since the count (or below thr/2), and count only above thr after a rise
+by 1/0.7 from the trough since the re-arm. In the model, a re-arm without the rise
+condition counted every ring twice: its own tail was still above thr. The host test then
+found a second, older fault: after a set-up the first difference started from a stale
+previous sample (0), and the step kicked the resonator like a ring. The relative re-arm
+measured the real rings against that phantom peak and never counted. The fix is to start
+the first difference at the block's first sample.
+
+Board: regular rings from the generator, 50 kHz, decaying with 100 us, threshold 150,
+about 6.4 s each:
+
+| rate | tau 100 us | tau 25 us |
+|---|---|---|
+| 1000/s | 6427 of 6427.0 | |
+| 2000/s | 12863 of 12864.0 | |
+| 3000/s | 19382 of 19381.4 | |
+| **5000/s** | **32501 of 32500.0** (before: 0) | |
+| 7000/s | 0 | 45048 of 45049.0 |
+| 10000/s | 0 | 64235 of 64240.0 |
+
+The 80-kHz rings at threshold 300 still count 0 (peak 188). Missed was 0 throughout, and
+the load 99..166 per mille. The model agreed beforehand at every rate, and it adds that
+random spacing (0.5..1.5) and amplitude (0.3..1) make the count fall short gradually
+instead of stopping. The GUI's rate chip now warns ("rings merge or one long tone: lower
+tau") when the count stands between grabs while the peak is above the threshold. The new
+setup `cnt_limit` (10000/s) shows the limit at tau 100.
