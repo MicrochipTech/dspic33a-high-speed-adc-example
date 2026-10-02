@@ -219,6 +219,9 @@ typedef struct {
     uint16_t slpdat;
     uint32_t dac_hz;
     uint32_t proc;      /* 1: win holds sigproc_block()'s result (sigproc.h) */
+    uint32_t load_pm;   /* the processing's mean share of a half period since
+                         * the previous grab, per mille (1000 = it just keeps
+                         * up) - capture_service()'s own proc_ticks_* deltas */
 } chain_grab_t;
 
 bool chain_stream_grab_begin(chain_grab_t *g);

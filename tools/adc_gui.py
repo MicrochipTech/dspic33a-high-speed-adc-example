@@ -1058,6 +1058,13 @@ class FakeTarget:
         self.sg_table = []
         self.sg_t0 = None
 
+    def _fake_load_pm(self) -> int:
+        """The GRAB header's load= as the board reports it (02.10.2026):
+        the low-pass costs about 63 CPU cycles per sample at 200 MHz when
+        "sigproc on", the service alone next to nothing."""
+        per_sample = 63.0 if self.sigproc else 0.3
+        return int(per_sample * self.chain_ksps * 1e3 / CPU_HZ * 1000)
+
     def _chain_slpdat(self) -> int:
         """triangle_for()'s SLOPE_TARGET=128-samples-per-slope search, for
         the rate the stand-in's chain is "on" at -- same formula as
@@ -1464,7 +1471,8 @@ class FakeTarget:
             missed = max(missed, 2)
         header_line = (f"GRAB n={n} from={frm} ksps={self.chain_ksps} ov={ov} late=0 "
                         f"missed={missed} halves=2 xfer={2 * n} slp={slp} dachz={int(DAC_CLK_HZ)} "
-                        f"proc={1 if self.sigproc else 0}\r\n")
+                        f"proc={1 if self.sigproc else 0} "
+                        f"load={self._fake_load_pm()}\r\n")
         self._log(f"< {header_line.rstrip()}")
         payload = np.asarray(v, dtype="<u2").tobytes()
         self._log(f"< [binary payload, {len(payload)} bytes, not shown]")
@@ -2472,6 +2480,7 @@ def main_gui(args):
                         ui.tooltip(COUNTER_TIPS[_k]).style("font-size: 14px; max-width: 24rem;")
                 rate_chip = ui.chip("actual rate –", color="grey-8").props("dense outline")
                 halves_chip = ui.chip("halves/xfer –", color="grey-8").props("dense outline")
+                load_chip = ui.chip("CPU load –", color="grey-8").props("dense outline")
                 trig_chip = ui.chip("trigger off", color="grey-8").props("dense outline")
                 loop_chip = ui.chip("loop –", color="grey-8").props("dense outline")
                 with loop_chip:
@@ -2497,6 +2506,13 @@ def main_gui(args):
                 with halves_chip:
                     ui.tooltip("Buffer halves completed and DMA transfers since the previous grab "
                                "(chain_stream_grab_begin()'s per-cycle counters).")\
+                        .style("font-size: 14px; max-width: 24rem;")
+                with load_chip:
+                    ui.tooltip("The signal processing's share of the CPU since the previous grab: "
+                               "its mean time per buffer half over the time a half takes (the "
+                               "frame's load=, firmware since 02.10.2026). Under 70 % green, up "
+                               "to 100 % amber; above 100 % it cannot keep up and halves go "
+                               "unprocessed ('missed'). Near 0 with the processing off.")\
                         .style("font-size: 14px; max-width: 24rem;")
             with ui.card().classes("tile w-full rounded-xl p-2"):
                 ui.label("time signal").classes("card-title px-2 pt-1")
@@ -3785,8 +3801,12 @@ def main_gui(args):
             cyc_lbl.classes(replace="text-slate-300 mono")
             # the CPU's budget per sample: CLKGEN1 = PLL2 = 200 MHz (clock.h)
             # over the frame's actual rate
-            cyc_txt = (f"   {CPU_HZ / (meta['ksps'] * 1e3):.1f} CPU cycles/sample"
-                       if meta["ksps"] else "")
+            # what the processing uses of it: the frame's load= (per mille of
+            # a half period, firmware since 02.10.2026) times the budget
+            budget = CPU_HZ / (meta['ksps'] * 1e3) if meta["ksps"] else 0.0
+            load = meta.get("load_pm")
+            used_txt = (f"{budget * load / 1000:.1f} of " if (load is not None and budget) else "")
+            cyc_txt = (f"   {used_txt}{budget:.1f} CPU cycles/sample" if budget else "")
             cyc_lbl.text = (f"grab {state['cycles']}   n={len(samples)}   from={meta['from_']}   "
                             f"{meta['ksps']} kSPS actual{cyc_txt}{rate_txt}")
             for k in ("overrun", "late", "missed"):
@@ -3795,6 +3815,13 @@ def main_gui(args):
             rate_chip.props("color=grey-8")
             halves_chip.text = f"halves {meta['halves']} / xfer {meta['transfers']}"
             halves_chip.props("color=grey-8")
+            if load is None:
+                load_chip.text = "CPU load –"
+                load_chip.props("color=grey-8")
+            else:
+                load_chip.text = f"CPU load {load / 10:.1f} %"
+                load_chip.props("color=" + ("positive" if load < 700 else
+                                            "warning" if load < 1000 else "negative"))
 
             metrics = analyze_spectrum(f, db)
             if metrics:

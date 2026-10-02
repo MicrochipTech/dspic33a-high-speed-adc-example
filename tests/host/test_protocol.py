@@ -44,7 +44,8 @@ def build_grab_frame(samples, **meta):
               f"ov={meta.get('ov', 0)} late={meta.get('late', 0)} missed={meta.get('missed', 0)} "
               f"halves={meta.get('halves', 2)} xfer={meta.get('xfer', 2 * n)} "
               f"slp={meta.get('slp', 8)} dachz={meta.get('dachz', 320000000)}"
-              + (f" proc={meta['proc']}" if "proc" in meta else "") + "\r\n")
+              + (f" proc={meta['proc']}" if "proc" in meta else "")
+              + (f" load={meta['load']}" if "load" in meta else "") + "\r\n")
     payload = b"".join(int(v & 0x0FFF).to_bytes(2, "little") for v in samples)
     crc = protocol.crc16_ccitt_false(payload)
     tail = f"\r\nCRC {crc:04X}\r\n> ".encode("ascii") + protocol.ACK
@@ -179,6 +180,12 @@ def main() -> int:
                      meta_old["proc"] == 0 and meta_p0["proc"] == 0 and meta_p1["proc"] == 1
                      and okp and list(decp) == samples,
                      f"absent={meta_old['proc']} proc0={meta_p0['proc']} proc1={meta_p1['proc']}")
+
+    # load= (02.10.2026): per mille, None when the firmware does not send it
+    _, _, meta_l = protocol.parse_grab_frame(*build_grab_frame(samples, proc=1, load=634))
+    ok_all &= check("GRAB frame load= read, None when absent",
+                     meta_l["load_pm"] == 634 and meta_l["proc"] == 1 and meta_old["load_pm"] is None,
+                     f"load={meta_l['load_pm']} absent={meta_old['load_pm']}")
 
     # n=0 is the NAK shape ("stream on" not running / halt-restart failed) -
     # the same frame FakeTarget.grab() and the firmware send for that case.

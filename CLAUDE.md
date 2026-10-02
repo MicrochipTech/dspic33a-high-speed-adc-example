@@ -455,9 +455,13 @@ not obvious:
 - **The frame is `blk`'s framing, with a wider header**, so the GUI's existing binary
   reader (`Target._read_line`/`_read_exact`, `crc16.c`) needed no changes, only a second
   regex: `GRAB n=<count> from=<from> ksps=<ksps> ov=<overrun> late=<late>
-  missed=<missed> halves=<halves> xfer=<transfers> slp=<slpdat> dachz=<dac_hz> proc=<0|1>`
-  (`proc=` since 01.10.2026: 1 = the payload is `sigproc_block()`'s result; optional in
-  `parse_grab_frame()`'s regex, so an older firmware reads as 0), then the
+  missed=<missed> halves=<halves> xfer=<transfers> slp=<slpdat> dachz=<dac_hz> proc=<0|1>
+  load=<per mille>` (`proc=` since 01.10.2026: 1 = the payload is `sigproc_block()`'s
+  result; `load=` since 02.10.2026: the processing's mean share of a half period since the
+  previous grab - `proc_ticks_sum/_count` deltas over the half's duration, 1000 = it just
+  keeps up, shown by the GUI as the "CPU load" chip and "x of y CPU cycles/sample"; both
+  optional in `parse_grab_frame()`'s regex, so an older firmware reads as proc 0 / load
+  None), then the
   payload and a CRC line exactly like `blk` - both built by the same `frame_send()`
   (`src/lib/frame.c`, P6.3), called from `gui_link_stream_grab()` (`src/link/gui_link.c`,
   P6.4; `cli.c`'s `cmd_stream_fn()` still owns "stream on|off|grab" dispatch and calls

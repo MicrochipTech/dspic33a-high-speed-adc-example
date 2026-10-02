@@ -649,8 +649,8 @@ alike - while `sigproc on` is set (console, or the GUI's "signal processing" swi
 after reset), with the half's samples, its length and which half it is. The result goes
 back into the same half: `stream grab` then sends the processed data to the GUI (the frame
 says `proc=1`), with no second buffer. It has one half period to return (1024 samples at
-8 MSPS: 128 us, 25 CPU cycles per sample); `status` and the chain test's load figures show
-what it takes, and `missed` counts the halves it was too slow for. `src/app/sigproc.h` has
+8 MSPS: 128 us, 25 CPU cycles per sample); `status`, the chain test's load figures and the
+GUI's "CPU load" chip (the GRAB frame's `load=`, per mille of a half period) show what it takes, and `missed` counts the halves it was too slow for. `src/app/sigproc.h` has
 the rules. `chain all` and `test` judge raw samples - switch the processing off for them.
 
 ## The console

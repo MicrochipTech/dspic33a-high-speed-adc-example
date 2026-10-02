@@ -459,6 +459,9 @@ static uint16_t s_slpdat = 0u;
  * capture_chain_start() calls counters_clear()). */
 static uint32_t g_grab_ov0, g_grab_la0, g_grab_mi0, g_grab_hv0;
 static uint64_t g_grab_xf0;
+/* ... and of capture.c's processing time (proc_ticks_sum/proc_count, also
+ * cleared by counters_clear()), for the grab's load= field (02.10.2026). */
+static uint32_t g_grab_ps0, g_grab_pc0;
 
 static uint32_t period_for(uint32_t ksps)
 {
@@ -505,6 +508,7 @@ static bool stream_on_route(uint32_t ksps, const route_t *r)
     s_ticks  = n;
     s_slpdat = slp;
     g_grab_ov0 = 0u; g_grab_la0 = 0u; g_grab_mi0 = 0u; g_grab_hv0 = 0u; g_grab_xf0 = 0u;
+    g_grab_ps0 = 0u; g_grab_pc0 = 0u;
     return true;
 }
 
@@ -573,6 +577,21 @@ bool chain_stream_grab_begin(chain_grab_t *g)
     g->halves    = hv - g_grab_hv0;
     g->transfers = (uint32_t)(xf - g_grab_xf0);
     g_grab_ov0 = ov; g_grab_la0 = la; g_grab_mi0 = mi; g_grab_hv0 = hv; g_grab_xf0 = xf;
+    /* The load: the mean time capture_service() spent processing one half
+     * (sigproc_block() when "sigproc on", next to nothing otherwise) since
+     * the previous grab, over the time a half takes - half_ticks above.
+     * 1000 per mille means the processing just keeps up; above it halves
+     * go unprocessed ("missed"). */
+    {
+        const uint32_t ps = proc_ticks_sum, pc = proc_count;
+        const uint32_t dsum = ps - g_grab_ps0, dcnt = pc - g_grab_pc0;
+        g_grab_ps0 = ps; g_grab_pc0 = pc;
+        uint64_t pm = 0u;
+        if ((dcnt != 0u) && (half_ticks != 0u)) {
+            pm = ((uint64_t)dsum * 1000u) / ((uint64_t)dcnt * half_ticks);
+        }
+        g->load_pm = (pm > 99999u) ? 99999u : (uint32_t)pm;
+    }
     g->slpdat  = s_slpdat;
     g->dac_hz  = clock_dac_hz();
     return true;

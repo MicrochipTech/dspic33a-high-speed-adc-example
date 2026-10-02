@@ -6,7 +6,7 @@
 ##   ADC/DMA TEST LOG  -  START OF RUN  (copy from here)    ##
 ##############################################################
 
-[boot] adc_dma_40msps Oct  2 2026 02:01:29 git 2481e31+local changes (master)
+[boot] adc_dma_40msps Oct  2 2026 10:59:26 git 4d18dea+local changes (master)
 [simtest] *** SIMULATOR BUILD - this log is not from hardware ***
 [simtest] Purpose: check that the program's buffer logic is right -
 [simtest] that the two halves of the ping-pong buffer are filled,
@@ -25,7 +25,7 @@
 adc_dma_40msps - ADC at 40 MSPS into RAM via DMA
 *** SIMULATOR BUILD: no hardware, ADC and DMA are software stand-ins, samples are a synthetic sine ***
 board: EV17P63A, dsPIC33AK512MPS506 Curiosity Nano
-build: adc_dma_40msps Oct  2 2026 02:01:45 git 2481e31+local changes (master)
+build: adc_dma_40msps Oct  2 2026 10:59:42 git 4d18dea+local changes (master)
 type 'help' for the commands
 please log this terminal from power-up and send it back
 > [boot] crc16/ccitt-false self-check: ok (0x29B1)
@@ -70,7 +70,7 @@ Available commands:
   reset - software reset
 > [smoke] > version
 version
-[build] adc_dma_40msps Oct  2 2026 02:01:41 git 2481e31+local changes (master)
+[build] adc_dma_40msps Oct  2 2026 10:59:38 git 4d18dea+local changes (master)
 [build] board: EV17P63A, dsPIC33AK512MPS506 Curiosity Nano
 [build] adc core: 1
 [build] default input (pinsel): 0
@@ -110,11 +110,11 @@ rx_bytes: 0
 rx_last: 0
 rx_cr: 0
 rx_lf: 0
-stack_size: 23256
+stack_size: 23248
 stack_used: 192
-stack_hwm_addr: 58776
+stack_hwm_addr: 58784
 stack_free_pct: 99
-buf_addr: 33252
+buf_addr: 33260
 buf_align_mod4: 0
 buf_len: 4096
 buf_guard_ok: 1

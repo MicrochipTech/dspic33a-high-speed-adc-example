@@ -2153,3 +2153,14 @@ gains: PASS.
 - **Cost:** 1 MSPS 137 free CPU cycles per sample, 2 MSPS 37, missed 0 in 10 grabs each;
   3 MSPS 4 free and 70 halves missed, 4 MSPS 3563 - about 63 cycles per sample (43 at
   fs/4), still up to 2 MSPS.
+
+## 2026-10-02, the processing's CPU load in the GRAB frame and the GUI - 4d18dea + local changes, local (COM26)
+
+New GRAB header field `load=` (per mille): the mean `capture_service()` processing time per
+half since the previous grab over the time a half takes (acquisition.c, from
+`proc_ticks_sum/_count`). The GUI shows it as a "CPU load" chip (green < 70 %, amber to
+100 %, red above) and in the grab line as "x of y CPU cycles/sample". On the board, 5
+grabs each: sigproc off 0 per mille at 1/2/3 MSPS; sigproc on (the fs/8 low-pass) 310 at
+1 MSPS, 621 at 2 MSPS, 938 at 3 MSPS - 62 CPU cycles per sample every time, matching the
+"free cycles" figures; at 3 MSPS already 31 halves missed in 5 grabs (the rest of the
+service and the interrupts take the last 6 %).
