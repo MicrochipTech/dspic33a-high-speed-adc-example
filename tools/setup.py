@@ -27,7 +27,7 @@ PACK_NAME = "dsPIC33AK-MP_DFP"
 # The hardware build's source list, relative to the repo root (src/<folder>/,
 # P1.1); the same files build.bat compiles. SRC_DIRS go on the include path.
 SRC_DIRS = ["drivers", "app", "core", "lab", "lib", "sim", "port", "boards"]
-SOURCES = ["app/main.c", "app/config_bits.c", "app/port_impl.c", "drivers/clock.c", "drivers/adc.c", "drivers/dma.c",
+SOURCES = ["app/main.c", "app/config_bits.c", "app/port_impl.c", "app/impact.c", "drivers/clock.c", "drivers/adc.c", "drivers/dma.c",
            "core/pingpong.c", "core/sigproc.c", "core/capture.c", "core/acquisition.c", "core/routing.c", "lab/meter.c", "lib/crc16.c", "lib/fmt.c", "lib/stats.c", "lab/tri_eval.c",
            "lib/iir1.c", "lib/goertzel_f.c", "lib/goertzel_i.c", "lib/detect.c", "lib/wavegen.c", "core/siggen.c", "lib/frame.c",
            "drivers/sccp.c", "drivers/led.c", "core/diag.c",

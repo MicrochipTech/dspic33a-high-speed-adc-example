@@ -47,7 +47,7 @@ def build_grab_frame(samples, **meta):
               + (f" proc={meta['proc']}" if "proc" in meta else "")
               + (f" load={meta['load']}" if "load" in meta else "")
               + (f" gz={meta['gz'][0]} gzs={meta['gz'][1]} gzd={meta['gz'][2]}" if "gz" in meta else "")
-              + (f" cnt={meta['cnt'][0]} cnr={meta['cnt'][1]} cpk={meta['cnt'][2]}" if "cnt" in meta else "")
+              + "".join(f" {k}={v}" for k, v in meta.get("ext", {}).items())
               + "\r\n")
     payload = b"".join(int(v & 0x0FFF).to_bytes(2, "little") for v in samples)
     crc = protocol.crc16_ccitt_false(payload)
@@ -198,13 +198,14 @@ def main() -> int:
                      and meta_l["gz"] is None and meta_g["load_pm"] == 600,
                      f"proc={meta_g['proc']} gz={meta_g['gz']} absent={meta_l['gz']}")
 
-    # cnt=/cnr=/cpk= the impact counter (CNT), after the Goertzel's fields
+    # any further key=value fields are the application's (gui_link_app_fields()),
+    # after the Goertzel's: meta['ext'], empty when there are none
     _, _, meta_c = protocol.parse_grab_frame(*build_grab_frame(samples, proc=0, load=40,
-                                                                gz=(5, 0, 0), cnt=(1234, 998, 412)))
-    ok_all &= check("GRAB frame the counter's fields read, cnt None when absent",
-                     meta_c["cnt"] == dict(count=1234, rate=998, peak=412) and meta_c["gz"]["amp"] == 5
-                     and meta_g["cnt"] is None,
-                     f"cnt={meta_c['cnt']} absent={meta_g['cnt']}")
+                                                                gz=(5, 0, 0), ext=dict(abc=1234, x2=7)))
+    ok_all &= check("GRAB frame the application's fields read, ext empty when absent",
+                     meta_c["ext"] == dict(abc=1234, x2=7) and meta_c["gz"]["amp"] == 5
+                     and meta_g["ext"] == {},
+                     f"ext={meta_c['ext']} absent={meta_g['ext']}")
 
     # n=0 is the NAK shape ("stream on" not running / halt-restart failed) -
     # the same frame FakeTarget.grab() and the firmware send for that case.

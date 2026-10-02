@@ -70,7 +70,7 @@ assert crc16_ccitt_false(b"123456789") == 0x29B1, "CRC-16/CCITT-FALSE check valu
 _GRAB_HEADER_RE = re.compile(
     r"GRAB n=(\d+) from=(\d+) ksps=(\d+) ov=(\d+) late=(\d+) missed=(\d+) "
     r"halves=(\d+) xfer=(\d+) slp=(\d+) dachz=(\d+)(?: proc=(\d+))?(?: load=(\d+))?"
-    r"(?: gz=(\d+) gzs=(\d+) gzd=(\d+))?(?: cnt=(\d+) cnr=(\d+) cpk=(\d+))?")
+    r"(?: gz=(\d+) gzs=(\d+) gzd=(\d+))?((?: [a-z]\w*=\d+)*)")
 # proc= (01.10.2026): 1 = the payload is the firmware's signal processing
 # result (src/core/sigproc.h, "sigproc on"), 0 = raw samples. Optional, so a
 # firmware from before it parses as proc 0. load= (02.10.2026): the
@@ -82,10 +82,10 @@ _GRAB_HEADER_RE = re.compile(
 # share of the block's power (per mille) and detected (0/1): meta['gz'] is
 # then a dict with amp/share_pm/detected, None otherwise.
 PROC_NAMES = {0: "off", 1: "low-pass", 2: "high-pass", 3: "band-pass"}
-# cnt=/cnr=/cpk= (CNT, 02.10.2026), present only while the impact counter
-# runs: the count and its rate per second since the counter's reset, and the
-# largest resonator magnitude since the previous grab (LSB) - meta['cnt'] is
-# then a dict count/rate/peak, None otherwise.
+# Any further " key=value" fields (02.10.2026) are the application's own
+# (gui_link_app_fields(), src/core/gui_link.h): meta['ext'] is a dict of
+# them, name -> int, empty when there are none.
+_EXT_FIELD_RE = re.compile(r" ([a-z]\w*)=(\d+)")
 
 
 def parse_grab_frame(header_line: str, payload: bytes, tail: bytes):
@@ -106,8 +106,7 @@ def parse_grab_frame(header_line: str, payload: bytes, tail: bytes):
                 load_pm=int(m.group(12)) if m.group(12) is not None else None,
                 gz=(dict(amp=int(m.group(13)), share_pm=int(m.group(14)), detected=int(m.group(15)))
                     if m.group(13) is not None else None),
-                cnt=(dict(count=int(m.group(16)), rate=int(m.group(17)), peak=int(m.group(18)))
-                     if m.group(16) is not None else None))
+                ext={k: int(v) for k, v in _EXT_FIELD_RE.findall(m.group(16) or "")})
     m2 = _CRC_LINE_RE.search(tail)
     if not m2:
         raise RuntimeError(f"grab: no CRC line, got {tail!r}")

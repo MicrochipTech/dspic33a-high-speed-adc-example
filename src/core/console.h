@@ -18,6 +18,13 @@ void cli_init(void);
  * cli_lab.c, an empty weak default in cli.c for a build without the lab
  * (CORE.3, 02.10.2026). */
 void cli_register_lab(void);
+/* The application's part of the "sigproc" command (02.10.2026, sigproc.h's
+ * application hooks): cmd_sigproc_fn() hands every sub-command it does not
+ * know to sigproc_app_cmd() - 0: not the application's (cli.c prints the
+ * usage), 1: done, -1: refused, the application has said why - and
+ * appends sigproc_app_status() to its status. Weak and empty in cli.c. */
+int  sigproc_app_cmd(int argc, char **argv);
+void sigproc_app_status(void);
 /* Baud generator re-matched to the current CPU clock; used by fail(). */
 void console_sync_baud(void);
 /* Re-establish pins, PPS and UART from scratch, assuming nothing about

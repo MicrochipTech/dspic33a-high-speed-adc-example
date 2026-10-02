@@ -21,4 +21,11 @@
  * Called from cli.c's cmd_stream_fn() for the "grab" sub-command. */
 void gui_link_stream_grab(void);
 
+/* The application's fields in the GRAB header (02.10.2026, sigproc.h's
+ * application hooks): called while the signal processing is on, appends
+ * " key=value" fields at p and returns the new end; `end` is the last
+ * position it may write to, terminator included. Weak in gui_link.c,
+ * appends nothing. */
+char *gui_link_app_fields(char *p, const char *end);
+
 #endif /* GUI_LINK_H */

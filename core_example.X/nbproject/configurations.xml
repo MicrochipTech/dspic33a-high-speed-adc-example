@@ -47,6 +47,7 @@
       </logicalFolder>
       <logicalFolder name="app" displayName="app" projectFiles="true">
         <itemPath>../src/app/board.h</itemPath>
+        <itemPath>../src/app/impact.h</itemPath>
       </logicalFolder>
       <logicalFolder name="boards" displayName="boards" projectFiles="true">
         <itemPath>../src/boards/board_cfg.h</itemPath>
@@ -95,6 +96,7 @@
       <logicalFolder name="app" displayName="app" projectFiles="true">
         <itemPath>../src/app/config_bits.c</itemPath>
         <itemPath>../src/app/port_impl.c</itemPath>
+        <itemPath>../src/app/impact.c</itemPath>
       </logicalFolder>
       <logicalFolder name="boards" displayName="boards" projectFiles="true">
         <itemPath>../src/boards/ev74h48a.c</itemPath>

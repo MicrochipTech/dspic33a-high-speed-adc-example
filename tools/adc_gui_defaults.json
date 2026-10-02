@@ -48,11 +48,7 @@
   "sigproc": {
     "filter": "off",
     "gz": false,
-    "thr": 100,
-    "cnt": false,
-    "cnt_f": 50000,
-    "cnt_tau": 100,
-    "cnt_thr": 150
+    "thr": 100
   },
   "buffer": {
     "size": 4096

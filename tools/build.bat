@@ -115,7 +115,7 @@ if /i "%1"=="core" (
   set INC=-I%SRC%\drivers -I%SRC%\app -I%SRC%\core -I%SRC%\lib -I%SRC%\port -I%SRC%\boards
   set OUT=..\build\%TARGET%_core
 )
-set SOURCES=%MAIN% %SRC%\app\config_bits.c %SRC%\app\port_impl.c %SRC%\drivers\clock.c %SRC%\drivers\adc.c %DMA% %SRC%\core\pingpong.c %SRC%\core\sigproc.c %SRC%\core\capture.c %SRC%\core\acquisition.c %SRC%\core\routing.c %SRC%\lib\crc16.c %SRC%\lib\fmt.c %SRC%\lib\stats.c %SRC%\lib\iir1.c %SRC%\lib\goertzel_f.c %SRC%\lib\goertzel_i.c %SRC%\lib\detect.c %SRC%\lib\wavegen.c %SRC%\core\siggen.c %SRC%\lib\frame.c %SRC%\drivers\sccp.c %SRC%\drivers\led.c %SRC%\core\diag.c %SRC%\drivers\timebase.c %SRC%\drivers\dac.c %SRC%\drivers\uart.c %SRC%\core\gui_link.c %SRC%\core\cli.c %SRC%\core\cmd_parser.c %BOARDFILE% %LAB%
+set SOURCES=%MAIN% %SRC%\app\config_bits.c %SRC%\app\port_impl.c %SRC%\app\impact.c %SRC%\drivers\clock.c %SRC%\drivers\adc.c %DMA% %SRC%\core\pingpong.c %SRC%\core\sigproc.c %SRC%\core\capture.c %SRC%\core\acquisition.c %SRC%\core\routing.c %SRC%\lib\crc16.c %SRC%\lib\fmt.c %SRC%\lib\stats.c %SRC%\lib\iir1.c %SRC%\lib\goertzel_f.c %SRC%\lib\goertzel_i.c %SRC%\lib\detect.c %SRC%\lib\wavegen.c %SRC%\core\siggen.c %SRC%\lib\frame.c %SRC%\drivers\sccp.c %SRC%\drivers\led.c %SRC%\core\diag.c %SRC%\drivers\timebase.c %SRC%\drivers\dac.c %SRC%\drivers\uart.c %SRC%\core\gui_link.c %SRC%\core\cli.c %SRC%\core\cmd_parser.c %BOARDFILE% %LAB%
 
 if not exist ..\build mkdir ..\build
 

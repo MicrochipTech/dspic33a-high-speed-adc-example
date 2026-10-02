@@ -92,8 +92,8 @@ void gui_link_stream_grab(void)
      * proc= (165 + 1); char[176] until load= came (02.10.2026), char[192]
      * until the Goertzel's three fields came the same day: " gz=" and
      * " gzs=" with up to 10 digits each, " gzd=" with 1 - 35 more, 219;
-     * char[224] until the impact counter's " cnt=", " cnr=", " cpk=" came
-     * (CNT, the same day), 15 + 30 more: 264. */
+     * char[224] until the application's fields came (gui_link_app_fields(),
+     * the same day): 48 more for them, 267 - it writes only what fits. */
     char head[272];
     char *p = copy_str(head, "GRAB n=");
     p = u32_to_str(p, got ? g.win_len : 0u);
@@ -120,14 +120,10 @@ void gui_link_stream_grab(void)
             p = copy_str(p, " gzd="); p = u32_to_str(p, gz.detected);
         }
     }
-    /* The impact counter (CNT), while it runs: the count and rate since
-     * its reset, and the largest magnitude since the previous grab. */
-    if (got && capture_sigproc_enabled() && sigproc_cnt_on()) {
-        sigproc_cnt_t cn;
-        sigproc_cnt_get(&cn, true);
-        p = copy_str(p, " cnt="); p = u32_to_str(p, cn.count);
-        p = copy_str(p, " cnr="); p = u32_to_str(p, cn.rate);
-        p = copy_str(p, " cpk="); p = u32_to_str(p, cn.peak);
+    /* The application's own fields (gui_link.h), while the processing is
+     * on; room left for the CRLF and the terminator. */
+    if (got && capture_sigproc_enabled()) {
+        p = gui_link_app_fields(p, head + sizeof(head) - 3u);
     }
     p = copy_str(p, "\r\n");
     const size_t head_len = (size_t)(p - head);
@@ -145,4 +141,11 @@ void gui_link_stream_grab(void)
     /* Restart unconditionally - see the comment above. */
     const bool resumed = chain_stream_grab_end();
     if ((sent != (2u * n)) || !resumed) { cmd_parser_fail(); }
+}
+
+/* No application fields unless a project defines this (gui_link.h). */
+__attribute__((weak)) char *gui_link_app_fields(char *p, const char *end)
+{
+    (void)end;
+    return p;
 }

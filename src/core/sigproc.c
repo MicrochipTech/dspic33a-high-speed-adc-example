@@ -64,56 +64,9 @@
  * 8 MSPS with nothing missed). The result is the same number;
  * tests/host/test_sigproc.c holds it to a double-precision DFT.
  *
- * The impact counter (CNT, 02.10.2026, docs/IMPLEMENTATION-PLAN.md): balls
- * falling onto a metal plate, each impact a ring at f (20..200 kHz) that
- * dies away within 0.5 ms, up to about 1000 a second. Per sample, on the
- * input before the filter:
- *     d  = x[i] - x[i-1]                      (the first difference)
- *     q0 = d + 2 D cos(w) q1 - D^2 q2         (a damped Goertzel resonator)
- * with w = 2 pi f / fs and D = exp(-1 / (tau fs)), and every 4th sample the
- * magnitude |q1 - e^(-jw) q2| against the threshold: count once above thr,
- * re-arm below thr / 2. Two departures from lib/goertzel_f, which the plan
- * had named: (1) the first difference - the raw samples sit at about 2000
- * LSB, and that DC level puts a standing magnitude into the resonator of
- * the same order as a ring's (about 6500 for 50 kHz, tau 25 us, 1 MSPS);
- * the difference removes DC exactly, with no state of its own. (2) the
- * magnitude only every 4th sample, squared, against squared thresholds -
- * no square root, no low-pass, no per-sample magnitude buffer.
- *
- * The detector counts a ring when the magnitude is above thr AND has risen
- * by 1/0.7 from the lowest value since it was last re-armed; it re-arms
- * when the magnitude has fallen below 0.7 x the peak since the count (or
- * below thr / 2). Until the same evening it was lib/detect's rule - re-arm
- * only below thr / 2 - and at 5000 rings a second (200 us apart, 100-us
- * decay) the magnitude never got that low: the count stopped at 1 for
- * good (board, setup cnt_dense). Re-armed relative to the peak, a new ring
- * on top of the last one's tail is counted: in a model (02.10.2026)
- * regular rings were counted exactly up to 5000/s at tau 100 and up to
- * 10000/s at tau 25, and with random spacing (0.5..1.5) and amplitude
- * (0.3..1) 37 of 38 at 1000/s, 77 of 79 at 2000/s, then fewer and fewer -
- * too few, never stuck - as the rings crowd. On the board (same evening,
- * the generator's regular rings decaying with 100 us): exact at 1000..5000/s
- * with tau 100 (32501 of 32500 at 5000/s); 7000/s and 10000/s count 0 at
- * tau 100 - regular rings closer than the decay still merge - and exactly
- * at tau 25 (45048 of 45049, 64235 of 64240). Requiring the RISE matters:
- * re-arming alone, without it, counted every ring twice (its own tail is
- * still above thr when it re-arms). The magnitude is scaled so a
- * steady tone of amplitude A at f reads A (LSB): cnt_setup() computes the
- * chain's gain once per configuration (exactly, see there), so the
- * threshold is in the units of the signal, whatever f, tau and fs are.
- *
- * tau: best set to the ring's own decay time - the resonator is then the
- * matched filter for a damped sine. Default 100 us. What it can and cannot
- * do (numbers for a 1000-LSB ring at 50 kHz decaying with 100 us, 1 MSPS,
- * computed 02.10.2026 before building): its peak magnitude is 368 at tau
- * 100 (629 at 25, 250 at 200 - a short ring never reaches a steady tone's
- * full amplitude); it falls below a quarter of that 270 us after the peak,
- * so impacts 1 ms apart are counted one by one and ones closer than about
- * 0.3 ms merge. A ring at ANOTHER frequency still moves it - a short burst
- * is broadband: 19 % of the on-frequency peak at 25 kHz, 49 % at 40, 64 %
- * at 60, 39 % at 80, 29 % at 100 kHz. Telling the frequencies apart is
- * therefore a matter of the threshold sitting between those levels, about
- * 2.5:1 here, not an absolute property.
+ * A project's own analysis of the blocks hooks in through
+ * sigproc_app_block() and its companions (sigproc.h), defined in a file of
+ * its own; the weak defaults at the end of this file do nothing.
  */
 #include <stdbool.h>
 #include <math.h>
@@ -163,25 +116,6 @@ static volatile bool restart = true;    /* a new filter: settle on the next bloc
 static volatile bool gz_on   = false;
 static volatile uint32_t gz_thr = GZ_THR_DEFAULT;
 static sigproc_gz_t gz;                 /* the last block's result         */
-
-/* The impact counter (see the header). Configuration from the console,
- * applied at the next block (cnt_dirty): the console never runs while a
- * block is processed (cli.c's uart_rx_hook()). */
-#define CNT_EVERY 4u                    /* the magnitude every 4th sample  */
-#define CNT_DROP2 0.49f                 /* 0.7^2: re-arm at 70 % of the peak, count after a rise by 1/0.7 */
-static struct {
-    volatile bool on, dirty, reset;
-    volatile uint32_t f_hz, tau_us, thr;
-    volatile float fs;
-    float c, dd, cw, sw;                /* 2 D cos w, D^2, cos w, sin w     */
-    float thr2, rearm2, inv_scale2;     /* squared, in resonator units     */
-    float q1, q2, xp;                   /* resonator, previous sample      */
-    bool armed, ready;
-    float pk2, tr2;                     /* peak since the count, trough since re-arm (squared) */
-    uint32_t count, missed0, missed;
-    uint64_t seen;                      /* samples processed since reset   */
-    float peak2;                        /* squared, resonator units        */
-} cn = { .f_hz = 50000u, .tau_us = 100u, .thr = 100u, .armed = true };
 
 /* The state after a long constant input u: each unscaled section's gain at
  * DC is b(1) / (1 + a1 + a2) - 1/g for the low-pass, 0 for the others. */
@@ -287,98 +221,11 @@ static void goertzel(const uint16_t *x, uint32_t n, uint32_t seq)
     gz.valid     = 1u;
 }
 
-/* The resonator's coefficients and its gain for a steady tone at f, once
- * per configuration (from sigproc_block(), main loop). Analytic and exact:
- * for q[n] = Q e^(jwn) the magnitude |q1 - e^(-jw) q2| is |Q| |1 - e^(-2jw)|,
- * and for the negative frequency e^(-jwn) it is exactly 0 - the steady
- * magnitude has no ripple. A sine of amplitude 1 is half of each, so
- *     scale = 1/2 |1 - e^(-jw)| |H(e^(jw))| |1 - e^(-2jw)|
- *           = 2 sin(w/2) sin(w) / |1 - c e^(-jw) + D^2 e^(-2jw)|
- * (the first factor is the first difference). */
-static void cnt_setup(void)
-{
-    cn.ready = false;
-    const float fs = cn.fs;
-    if (fs <= 0.0f) { return; }
-    const float w = 6.283185307f * (float)cn.f_hz / fs;
-    const float d = expf(-1.0e6f / ((float)cn.tau_us * fs));
-    cn.cw = cosf(w);
-    cn.sw = sinf(w);
-    cn.c  = 2.0f * d * cn.cw;
-    cn.dd = d * d;
-    const float c2w = cosf(2.0f * w), s2w = sinf(2.0f * w);
-    const float dre = 1.0f - cn.c * cn.cw + cn.dd * c2w;
-    const float dim = cn.c * cn.sw - cn.dd * s2w;
-    const float scale = 2.0f * sinf(0.5f * w) * cn.sw / sqrtf(dre * dre + dim * dim);
-    const float t = (float)cn.thr * scale;
-    cn.thr2 = t * t;
-    cn.rearm2 = 0.25f * cn.thr2;                   /* (thr / 2)^2 */
-    cn.inv_scale2 = 1.0f / (scale * scale);
-    cn.q1 = cn.q2 = 0.0f;
-    cn.ready = true;
-}
-
-static void cnt_block(const uint16_t *x, uint32_t n, const sigproc_info_t *info)
-{
-    bool fresh = false;
-    if (cn.dirty) { cn.dirty = false; cnt_setup(); fresh = true; }
-    if (cn.reset) {
-        cn.reset = false;
-        cn.count = 0u; cn.seen = 0u; cn.peak2 = 0.0f;
-        cn.missed0 = info->missed;
-        /* not armed, with what rings right now as the peak: a reset in
-         * the middle of a ring must not count that ring as a new one; it
-         * re-arms once that has fallen (or at once when nothing rings) */
-        const float re = cn.q1 - cn.q2 * cn.cw, im = cn.q2 * cn.sw;
-        cn.armed = false;
-        cn.pk2 = cn.ready ? (re * re + im * im) : 0.0f;
-    }
-    if (!cn.ready) { return; }
-    /* After a new set-up or a gap the first difference starts at the
-     * block's first sample: from a stale (or the initial 0) previous value
-     * the step to ~2048 would kick the resonator like a ring of its own -
-     * the relative re-arm then measured the real rings against that
-     * phantom peak and never counted (host test, 02.10.2026). */
-    if (fresh || info->gap) { cn.q1 = cn.q2 = 0.0f; cn.xp = (float)x[0]; }
-    cn.missed = info->missed - cn.missed0;
-    float q1 = cn.q1, q2 = cn.q2, xp = cn.xp, pk = cn.peak2;
-    const float c = cn.c, dd = cn.dd, cw = cn.cw, sw = cn.sw;
-    const float thr2 = cn.thr2, rearm2 = cn.rearm2;
-    bool armed = cn.armed;
-    float pkc = cn.pk2, tr = cn.tr2;
-    uint32_t count = cn.count, i = 0u;
-    for (; i + CNT_EVERY <= n; i += CNT_EVERY) {
-        for (uint32_t k = 0; k < CNT_EVERY; k++) {
-            const float u = (float)x[i + k];
-            const float q0 = (u - xp) + c * q1 - dd * q2;
-            xp = u; q2 = q1; q1 = q0;
-        }
-        const float re = q1 - q2 * cw, im = q2 * sw;
-        const float m2 = re * re + im * im;
-        if (m2 > pk) { pk = m2; }
-        if (armed) {
-            if (m2 < tr) { tr = m2; }
-            if ((m2 > thr2) && (m2 * CNT_DROP2 > tr)) { count++; armed = false; pkc = m2; }
-        } else {
-            if (m2 > pkc) { pkc = m2; }
-            if ((m2 < CNT_DROP2 * pkc) || (m2 < rearm2)) { armed = true; tr = m2; }
-        }
-    }
-    for (; i < n; i++) {                              /* n mod 4: no evaluation */
-        const float u = (float)x[i];
-        const float q0 = (u - xp) + c * q1 - dd * q2;
-        xp = u; q2 = q1; q1 = q0;
-    }
-    cn.q1 = q1; cn.q2 = q2; cn.xp = xp; cn.peak2 = pk;
-    cn.armed = armed; cn.count = count; cn.pk2 = pkc; cn.tr2 = tr;
-    cn.seen += n;
-}
-
 void sigproc_block(uint16_t *x, uint32_t n, const sigproc_info_t *info)
 {
     if (n == 0u) { return; }
     if (gz_on) { goertzel(x, n, info->seq); }
-    if (cn.on) { cnt_block(x, n, info); }
+    sigproc_app_block(x, n, info);
     const sigproc_filter_t f = filter;          /* one reading per block */
     if (f == SIGPROC_OFF) { return; }
     if (info->gap || restart) { settle(f, (float)x[0]); restart = false; }
@@ -428,47 +275,19 @@ void sigproc_goertzel_get(sigproc_gz_t *out)
     out->thr = gz_thr;
 }
 
-void sigproc_set_fs(float fs_hz)
+void sigproc_set_fs(float fs_hz) { sigproc_app_set_fs(fs_hz); }
+
+/* The application's processing (sigproc.h): nothing unless a project
+ * defines these itself. */
+__attribute__((weak)) bool sigproc_app_active(void) { return false; }
+__attribute__((weak)) void sigproc_app_set_fs(float fs_hz) { (void)fs_hz; }
+__attribute__((weak)) void sigproc_app_block(const uint16_t *x, uint32_t n,
+                                             const sigproc_info_t *info)
 {
-    if (fs_hz != cn.fs) { cn.fs = fs_hz; cn.dirty = true; }
+    (void)x; (void)n; (void)info;
 }
 
-void sigproc_cnt_enable(bool on)
+bool sigproc_active(void)
 {
-    if (on && !cn.on) { cn.dirty = true; cn.reset = true; }
-    cn.on = on;
+    return (filter != SIGPROC_OFF) || gz_on || sigproc_app_active();
 }
-
-bool sigproc_cnt_on(void) { return cn.on; }
-
-bool sigproc_cnt_config(uint32_t f_hz, uint32_t tau_us, uint32_t thr)
-{
-    if ((f_hz < 1000u) || (tau_us < 2u) || (tau_us > 5000u) || (thr < 1u) || (thr > 4095u)) {
-        return false;
-    }
-    if ((cn.fs > 0.0f) && ((float)f_hz * 2.5f > cn.fs)) { return false; }
-    cn.f_hz = f_hz; cn.tau_us = tau_us; cn.thr = thr;
-    cn.dirty = true;
-    return true;
-}
-
-void sigproc_cnt_reset(void) { cn.reset = true; }
-
-void sigproc_cnt_get(sigproc_cnt_t *out, bool clear_peak)
-{
-    out->on = cn.on ? 1u : 0u;
-    out->f_hz = cn.f_hz;
-    out->tau_us = cn.tau_us;
-    out->thr = cn.thr;
-    out->fs_hz = (uint32_t)(cn.fs + 0.5f);
-    const bool fresh = cn.reset;                  /* a reset not yet applied */
-    out->count = fresh ? 0u : cn.count;
-    out->missed = fresh ? 0u : cn.missed;
-    const float secs = (cn.fs > 0.0f && !fresh) ? (float)cn.seen / cn.fs : 0.0f;
-    out->ms = (uint32_t)(secs * 1000.0f + 0.5f);
-    out->rate = (secs > 0.0f) ? (uint32_t)((float)out->count / secs + 0.5f) : 0u;
-    out->peak = (cn.ready && !fresh) ? (uint32_t)(sqrtf(cn.peak2 * cn.inv_scale2) + 0.5f) : 0u;
-    if (clear_peak) { cn.peak2 = 0.0f; }
-}
-
-bool sigproc_active(void) { return (filter != SIGPROC_OFF) || gz_on || cn.on; }
