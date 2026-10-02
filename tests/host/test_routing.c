@@ -1,5 +1,5 @@
 /*
- * test_routing.c - host-side test for src/app/routing.c (see routing.h),
+ * test_routing.c - host-side test for src/core/routing.c (see routing.h),
  * one function per conflict/resource rule (docs/IMPLEMENTATION-PLAN.md
  * P11.2), each with a case that just passes and a case that triggers the
  * rule's own route_err_t. Every test calls routing_clear() first, so the

@@ -1,1 +1,1 @@
-src/app/sigproc.c
+src/core/sigproc.c

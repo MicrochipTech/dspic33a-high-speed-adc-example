@@ -51,6 +51,7 @@
 #include "pingpong.h"
 #include "capture_priv.h"
 #include "sigproc.h"
+#include "disi.h"
 
 /* SELFTEST_* moved to meter.c with capture_selftest() (P9.3, 27.09.2026). */
 
@@ -642,11 +643,11 @@ bool capture_stream_lost(void)
 {
 #if defined(__XC_DSC__)   /* not under the trace harness's host gcc (diag.c) */
     const uint32_t old = DISIIPL;
-    (void)__builtin_write_DISICTL((old > 2u) ? old : 2u);
+    disi_set((old > 2u) ? old : 2u);
 #endif
     const bool lost = run_enabled && !chain_mode && !dma0_enabled();
 #if defined(__XC_DSC__)
-    (void)__builtin_write_DISICTL(old);
+    disi_set(old);
 #endif
     return lost;
 }

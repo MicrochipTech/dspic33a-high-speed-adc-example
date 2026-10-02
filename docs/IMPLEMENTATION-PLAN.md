@@ -1329,6 +1329,101 @@ days, plus the board run in SG.8 (and a second one if the fallback is needed).
 
 ---
 
+## CORE: a core folder the customer takes over
+
+Added 02.10.2026 (user request): the customer sets up their own project on this one and must
+be able to take the decisive sources out and into it. Decided with the user: a core folder
+that this project uses itself (one source, no drift), holding the triggered stream with
+the two ping-pong pairs, the processing callback (`sigproc`), the pair grab, the console
+with the GUI link, and the DAC test signal and signal generator. Everything else - the
+back-to-back burst mode and its commands, the chain test, the bench and meter
+instruments, the simulator stand-ins - is the lab and stays in this project on top of the
+core.
+
+**What a trial link said (02.10.2026):** the would-be core (drivers, port layer,
+`capture.c`, `acquisition.c`, `pingpong.c`, `sigproc.c`, `routing.c`, `siggen.c`, `cli.c`,
+`cmd_parser.c`, `gui_link.c`, `diag.c`, `port_impl.c`, `config_bits.c`, the board file,
+`lib/` crc16/fmt/frame/stats/wavegen) with an empty `main()` misses exactly eight symbols:
+`chain_all`, `chain_run`, `capture_selftest`, `dactest_run`, `bench_register_sweep/_test`
+(lab commands `cli.c` registers), `capture_oneshot` (`snap`/`blk` in `gui_link.c`) and
+`adc_ch0_event` (`adc.c` calling into the chain test). `capture.c` and `acquisition.c`
+still carry back-to-back code, but nothing in them reaches into the lab - they move whole
+now; taking the burst mode out of them is a later, separate step.
+
+**Layout after CORE:**
+
+| Folder | Role | Contents |
+|---|---|---|
+| `src/drivers/`, `src/port/` | core | unchanged |
+| `src/lib/` | core | crc16, fmt, frame, stats, wavegen, and the unused building blocks iir1, goertzel_f/i, detect |
+| `src/core/` | core | capture, acquisition, pingpong, sigproc, routing (+ pin tables), siggen, console (`cli.c`'s core commands), cmd_parser, gui_link (`stream grab`), diag, and `example_main.c` (the customer's starting point, only in the `core` build) |
+| `src/app/`, `src/boards/` | project glue (the customer writes his own) | main.c, board.h, config_bits.c, port_impl.c, the board files |
+| `src/lab/` | lab | chaintest, bench, dactest, meter, tri_eval, the lab commands, `snap`/`rate`/`blk` |
+| `src/sim/` | lab | the simulator stand-ins |
+
+**Rules:** nothing under `src/core/`, `src/drivers/`, `src/port/` or `src/lib/` includes a
+header from `src/lab/` (checked by grep and by the `core` build). Lab code reaches the core
+through its public headers; the core reaches the lab only through weak hooks with a
+do-nothing default. Each step builds every variant, keeps `trace.bat` (changes only where
+the step says why), `hosttest.bat` and the smoke runs green.
+
+### CORE.1 `adc_ch0_event()` as a weak hook
+`adc.c` calls `chaintest.c`'s `adc_ch0_event()` directly (the P8.3 note). A weak
+do-nothing default in `adc.c`, the strong one stays in `chaintest.c` - the
+`clock_fail_hook()` pattern.
+
+### CORE.2 `gui_link.c` split
+`stream grab` (frame, `grab_poll()`) stays; `snap`/`rate`/`blk` (back-to-back, through
+`capture_oneshot()`) go to a lab file that registers them.
+
+### CORE.3 `cli.c` split
+The console (UART framing, held-back bytes, `put_kv()`/`put_line()`/`arg_u32()`/`usage()`)
+and the core commands - `version`, `status`, `regs`, `route`, `siggen`, `sigproc`, `stats`,
+`dump`, `clear`, `led`, `buf`, `dac`, `stream`, `reset` - stay; the lab commands (`start`,
+`stop`, `samc`, `input`, `selftest`, `clk`, `pll`, `core`, `dactest`, `sweep`, `test`,
+`chain`, `snap`, `rate`, `blk`) are registered by the lab through a weak
+`cli_register_lab()`. (Done 02.10.2026: `stats`/`dump`/`clear` stayed in the core - a
+customer looking at his own signal wants them; the lab's commands are in `cli_lab.c`.) `help`'s order changes (core first): `tests/smoke/expected*.log`
+regenerated with the diff reviewed; `board_run.py` reads capabilities by name, not order.
+
+### CORE.4 The move
+Files into the layout above; every path list (`tools/build.bat`, `tools/Makefile`,
+`tools/setup.py`, `nbproject/configurations.xml`, `tools/trace_build.py`,
+`tools/hosttest.bat`, `tests/trace/scenarios/*.sources`, `tests/host/*.sources`) and the
+documents rewritten by one script. Code unchanged, so every golden trace must stay
+byte-identical.
+
+### CORE.5 The `core` build
+`tools\build.bat core`: drivers, port, lib, core, the app glue and `src/core/example_main.c`
+- no lab file. It must link `-Wall -Wextra` clean. `example_main.c` brings the clock, the
+console and the stream up and leaves `sigproc_block()` to the customer.
+
+### CORE.6 Board run
+Flash the project build and the `core` build in turn: `chain all` (project build) against
+4c0cc55, grabs at 1/4/8 MSPS, `sigproc on`, the generator - and the `core` build answering
+`stream on`/`stream grab` for the GUI on its own.
+
+### CORE.7 Documentation
+`docs/CORE.md`: the customer's handover - which folders to copy, the three or four port
+functions to map onto his system, where his processing goes, how to build. CLAUDE.md,
+README, the architecture diagrams (a core/lab split in the layer view), HARDWARE-LOG.
+
+### Status (02.10.2026)
+
+CORE.1-CORE.7 done in one session, uncommitted at the time of writing:
+`hw`/`sim`/`nano`/`smoke`/`nanosmoke`/`core` all `-Wall -Wextra` clean, `make core` too,
+`trace.bat` 15/15 byte-identical after every step, `hosttest.bat` 20/20, both smoke runs
+PASS (the `expected*.log` regenerated once, on CORE.3, for `help`'s new order), the MPLAB X
+project built through `_test_mplabx.bat`. Deviations from the plan:
+`stats`/`dump`/`clear` stayed in the core (CORE.3, above); `sim.h` went to `src/core/`
+(core files include it, it is empty on silicon); `tri_eval` went to `src/lab/`.
+Found on the way: `__builtin_write_DISICTL(variable)` crashes xc-dsc at -O0 (the MPLAB X
+build), replaced by `src/drivers/disi.h`. CORE.6 on the board (HARDWARE-LOG 02.10.2026):
+`chain all` verdicts as 4c0cc55's, the core build serves stream/grab/sigproc/siggen on its
+own. Open from that run, not CORE's: the generator loop's grabs where DAC2 stands still.
+Not done: a `board_run.py` block that flashes the core build (`example_main.c`'s box stays
+grey until one does or it is marked by hand).
+
 ## Order and dependencies
 
 ```

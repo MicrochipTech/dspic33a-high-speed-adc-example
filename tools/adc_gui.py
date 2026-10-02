@@ -2765,7 +2765,7 @@ def main_gui(args):
                       "they match."),
         (sg_apply_btn, "Send the card to the board now (it also goes by itself, 0.8 s after a change)."),
         (sigproc_cb, "Switch the firmware's signal processing on or off ('sigproc on|off', "
-                     "src/app/sigproc.c). On, every completed half is processed in place, and the "
+                     "src/core/sigproc.c). On, every completed half is processed in place, and the "
                      "grab shows the processed data (the frame says proc=1); the triangle check "
                      "is skipped then. Off after every reset of the board."),
         (trig_cb, "Trigger the time plot: show every grab from the point where the signal "

@@ -13,13 +13,12 @@
 #ifndef GUI_LINK_H
 #define GUI_LINK_H
 
-/* Registers "snap", "rate", "blk" - called from cli_init() at exactly the
- * position link_register() occupied when it was still defined in cli.c. */
-void link_register(void);
+/* "snap"/"rate"/"blk" and their link_register() moved to the lab's
+ * b2b_link.c/.h on CORE.2 (02.10.2026); this header is the grab only. */
 
-/* "stream grab": one halt/transfer/restart cycle of the standing chain,
- * for the GUI. Called from cli.c's cmd_stream_fn() for the "grab"
- * sub-command. */
+/* "stream grab": one ping-pong pair to the GUI while the stream carries on
+ * in the other (since 01.10.2026; a halt/transfer/restart cycle before).
+ * Called from cli.c's cmd_stream_fn() for the "grab" sub-command. */
 void gui_link_stream_grab(void);
 
 #endif /* GUI_LINK_H */

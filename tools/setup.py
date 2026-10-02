@@ -26,13 +26,13 @@ MCU = "33AK512MPS512"
 PACK_NAME = "dsPIC33AK-MP_DFP"
 # The hardware build's source list, relative to the repo root (src/<folder>/,
 # P1.1); the same files build.bat compiles. SRC_DIRS go on the include path.
-SRC_DIRS = ["drivers", "app", "cli", "tests", "lib", "diag", "sim", "port", "link", "boards", "meter", "siggen"]
+SRC_DIRS = ["drivers", "app", "core", "lab", "lib", "sim", "port", "boards"]
 SOURCES = ["app/main.c", "app/config_bits.c", "app/port_impl.c", "drivers/clock.c", "drivers/adc.c", "drivers/dma.c",
-           "app/pingpong.c", "app/sigproc.c", "app/capture.c", "app/acquisition.c", "app/routing.c", "meter/meter.c", "lib/crc16.c", "lib/fmt.c", "lib/stats.c", "lib/tri_eval.c",
-           "lib/iir1.c", "lib/goertzel_f.c", "lib/goertzel_i.c", "lib/detect.c", "lib/wavegen.c", "siggen/siggen.c", "lib/frame.c",
-           "drivers/sccp.c", "drivers/led.c", "diag/diag.c",
-           "drivers/timebase.c", "drivers/dac.c", "drivers/uart.c", "tests/dactest.c", "tests/chaintest.c", "tests/bench.c",
-           "link/gui_link.c", "cli/cli.c", "cli/cmd_parser.c", "boards/ev74h48a.c"]
+           "core/pingpong.c", "core/sigproc.c", "core/capture.c", "core/acquisition.c", "core/routing.c", "lab/meter.c", "lib/crc16.c", "lib/fmt.c", "lib/stats.c", "lab/tri_eval.c",
+           "lib/iir1.c", "lib/goertzel_f.c", "lib/goertzel_i.c", "lib/detect.c", "lib/wavegen.c", "core/siggen.c", "lib/frame.c",
+           "drivers/sccp.c", "drivers/led.c", "core/diag.c",
+           "drivers/timebase.c", "drivers/dac.c", "drivers/uart.c", "lab/dactest.c", "lab/chaintest.c", "lab/bench.c",
+           "core/gui_link.c", "lab/b2b_link.c", "core/cli.c", "lab/cli_lab.c", "core/cmd_parser.c", "boards/ev74h48a.c"]
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent              # repo root: holds src/, tools/, the .X project

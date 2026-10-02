@@ -1572,7 +1572,7 @@ def selftest():
     target_a = ReplayTarget("A", has_route=False, timeout_block="test all",
                              grab_fault_at=(R4_RATES_KSPS[0], 5))
     # BR.6 (27.09.2026): B's real "status" always carries these extra
-    # fields now (src/cli/cli.c's cmd_status_fn()); A, the fixed pre-BR.6
+    # fields now (src/core/cli.c's cmd_status_fn()); A, the fixed pre-BR.6
     # baseline hex, never will - eval_board.py's own selftest (BR.2) is
     # where the field-by-field judgement (the stack rule, the guard-word
     # check) is exercised, this only proves the runner logs a status reply

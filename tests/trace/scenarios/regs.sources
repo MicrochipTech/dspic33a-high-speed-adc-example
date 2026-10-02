@@ -1,10 +1,10 @@
-src/diag/diag.c
+src/core/diag.c
 src/drivers/clock.c
 src/drivers/adc.c
 src/drivers/dma.c
-src/app/pingpong.c
-src/app/capture.c
-src/app/sigproc.c
+src/core/pingpong.c
+src/core/capture.c
+src/core/sigproc.c
 src/drivers/dac.c
 src/drivers/sccp.c
 src/drivers/timebase.c

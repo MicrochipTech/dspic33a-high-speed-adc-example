@@ -14,6 +14,10 @@ void console_early_init(void);
 /* After clock_init(): baud generator on the PLL clock, parser, banner,
  * receive interrupt. */
 void cli_init(void);
+/* The lab's commands, registered by cli_init() after the core's: strong in
+ * cli_lab.c, an empty weak default in cli.c for a build without the lab
+ * (CORE.3, 02.10.2026). */
+void cli_register_lab(void);
 /* Baud generator re-matched to the current CPU clock; used by fail(). */
 void console_sync_baud(void);
 /* Re-establish pins, PPS and UART from scratch, assuming nothing about

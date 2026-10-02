@@ -71,7 +71,7 @@ _GRAB_HEADER_RE = re.compile(
     r"GRAB n=(\d+) from=(\d+) ksps=(\d+) ov=(\d+) late=(\d+) missed=(\d+) "
     r"halves=(\d+) xfer=(\d+) slp=(\d+) dachz=(\d+)(?: proc=(\d+))?(?: load=(\d+))?")
 # proc= (01.10.2026): 1 = the payload is the firmware's signal processing
-# result (src/app/sigproc.h, "sigproc on"), 0 = raw samples. Optional, so a
+# result (src/core/sigproc.h, "sigproc on"), 0 = raw samples. Optional, so a
 # firmware from before it parses as proc 0. load= (02.10.2026): the
 # processing's mean share of a half period since the previous grab, per
 # mille (1000 = it just keeps up); None when the firmware does not send it.

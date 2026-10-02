@@ -11,15 +11,13 @@
 #include <stdbool.h>
 #include <stddef.h>
 /* capture_process_bench()/_selftest()/_clkoff_probe()/_measure_rate()/
- * _oneshot()/_oneshot_n() moved to src/meter/meter.c (P9.3, 27.09.2026).
- * Declared in meter.h, pulled in here so every existing caller of
- * capture.h keeps working unchanged - the smaller diff over adding
- * #include "meter.h" to cli.c/bench.c/gui_link.c/chaintest.c/dactest.c
- * individually. */
-#include "meter.h"
+ * _oneshot()/_oneshot_n() moved to src/lab/meter.c (P9.3, 27.09.2026),
+ * declared in meter.h. Until CORE.5 (02.10.2026) this header pulled
+ * meter.h in for every caller; the core must not include a lab header,
+ * so the lab files that call them include meter.h themselves now. */
 /* capture_set_pll()/_set_rate()/_set_clkdiv() and the variant matrix
  * (capture_select_variant() and its reporting functions) moved to
- * src/app/acquisition.c (P9.4, 27.09.2026), together with chaintest.c's
+ * src/core/acquisition.c (P9.4, 27.09.2026), together with chaintest.c's
  * chain_stream_*() - the standing stream is acquisition, not a test.
  * Declared in acquisition.h, pulled in here the same way meter.h is. */
 #include "acquisition.h"
@@ -133,7 +131,7 @@ uint8_t capture_samc(void);
  * through CLKGEN6, and PLL1 feeds nothing else (the CPU is on PLL2).
  *
  * capture_set_pll()/_set_rate()/_set_clkdiv() - the two knobs, only one of
- * which works - moved to src/app/acquisition.c (P9.4, 27.09.2026),
+ * which works - moved to src/core/acquisition.c (P9.4, 27.09.2026),
  * declared in acquisition.h, included above. What stays here reads back
  * what the hardware is set up for rather than changing it:
  *
@@ -148,7 +146,7 @@ uint32_t capture_nominal_ksps(uint32_t ignored);
 const struct pll_step *capture_sweep_steps(uint32_t *count);
 
 /* The variant matrix (capture_variant_t, capture_select_variant() and its
- * reporting functions) moved to src/app/acquisition.c with the rate
+ * reporting functions) moved to src/core/acquisition.c with the rate
  * setters above (P9.4, 27.09.2026); declared in acquisition.h, included
  * above. */
 

@@ -6,7 +6,7 @@
  * real src/lib/frame.c, src/lib/crc16.c and src/lib/fmt.c - not a
  * reimplementation. The two header builders below (build_bin_header(),
  * build_grab_header()) mirror cli.c's cmd_blk_fn()/cmd_stream_grab() and
- * what src/link/gui_link.c builds after P6.4 - same copy_str()/u32_to_str()
+ * what src/core/gui_link.c builds after P6.4 - same copy_str()/u32_to_str()
  * calls, same field order, same "\r\n" terminator - so a frame built here
  * is the same shape a colleague reading cli.c/gui_link.c would expect.
  *

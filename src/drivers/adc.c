@@ -256,6 +256,14 @@ void adc_ch0_irq(bool on, bool read_res)
     }
 }
 
+/* The event's owner is the chain test (lab, src/lab since CORE); a build
+ * without it - the customer's core build - links this do-nothing default
+ * (CORE.1, 02.10.2026; the clock_fail_hook() pattern, clock.c). */
+__attribute__((weak)) void adc_ch0_event(uint16_t result)
+{
+    (void)result;
+}
+
 void __attribute__((interrupt, no_auto_psv)) _AD5CH0Interrupt(void)
 {
     IFS7bits.AD5CH0IF = 0u;           /* first, see dma.c                */

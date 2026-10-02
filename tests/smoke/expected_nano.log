@@ -6,7 +6,7 @@
 ##   ADC/DMA TEST LOG  -  START OF RUN  (copy from here)    ##
 ##############################################################
 
-[boot] adc_dma_40msps Oct  2 2026 10:59:26 git 4d18dea+local changes (master)
+[boot] adc_dma_40msps Oct  2 2026 11:46:09 git 4c0cc55+local changes (master)
 [simtest] *** SIMULATOR BUILD - this log is not from hardware ***
 [simtest] Purpose: check that the program's buffer logic is right -
 [simtest] that the two halves of the ping-pong buffer are filled,
@@ -25,7 +25,7 @@
 adc_dma_40msps - ADC at 40 MSPS into RAM via DMA
 *** SIMULATOR BUILD: no hardware, ADC and DMA are software stand-ins, samples are a synthetic sine ***
 board: EV17P63A, dsPIC33AK512MPS506 Curiosity Nano
-build: adc_dma_40msps Oct  2 2026 10:59:42 git 4d18dea+local changes (master)
+build: adc_dma_40msps Oct  2 2026 11:46:25 git 4c0cc55+local changes (master)
 type 'help' for the commands
 please log this terminal from power-up and send it back
 > [boot] crc16/ccitt-false self-check: ok (0x29B1)
@@ -45,32 +45,32 @@ Available commands:
   route list - the active route(s) and the resource table
   siggen [set <p> <v> | on <dac> <n> <hz> [snap] [force] [oc] | off | regs]
   sigproc [on|off] - the signal processing (sigproc.c), in place
+  stats - min/max/mean of the completed half
+  dump [count] [offset] - samples of the buffer (snap first)
+  clear - zero the error counters
+  led on|off|auto - LED0
+  buf [n] - samples per buffer half (16..2048, even)
+  dac <1|2> <on|off> [low] [high] [slpdat] [force] - triangle on DACOUT1/2
+  stream on <ksps> [core pinsel [samc]]|off|grab - the chain streaming, main() processing, one halt/transfer/restart cycle
+  reset - software reset
   start - start the burst stream
   stop - stop after the current buffer
   samc <0..31> - sample time in TAD steps
   input <0..15> - analog input (PINSEL)
   selftest - sample the internal reference
-  stats - min/max/mean of the completed half
-  dump [count] [offset] - samples of the buffer (snap first)
-  clear - zero the error counters
-  led on|off|auto - LED0
   sweep [halves] - overrun vs sample rate over the clock ladder
   clk <100..1000> - CLKGEN6 divide ratio x 100 (does NOT change the rate)
   pll <p1> <p2> - PLL1 output dividers = the sample rate
   test [all|self|clock|clkoff|bursts|matrix|rate|sweep|dac] [n]
   core <1..5> [pinsel] - switch the ADC core
-  buf [n] - samples per buffer half (16..2048, even)
-  dac <1|2> <on|off> [low] [high] [slpdat] [force] - triangle on DACOUT1/2
   dactest [halves] - judge the running DAC's triangle through the chain
   snap - fill the buffer once and stop; then dump it
   rate <ksps> - the sample rate, 4000..40000
   blk [n] - the sample block as binary, with a CRC
   chain all|<n>|from <n>|run <ksps> [s] - the chain test
-  stream on <ksps> [core pinsel [samc]]|off|grab - the chain streaming, main() processing, one halt/transfer/restart cycle
-  reset - software reset
 > [smoke] > version
 version
-[build] adc_dma_40msps Oct  2 2026 10:59:38 git 4d18dea+local changes (master)
+[build] adc_dma_40msps Oct  2 2026 11:46:21 git 4c0cc55+local changes (master)
 [build] board: EV17P63A, dsPIC33AK512MPS506 Curiosity Nano
 [build] adc core: 1
 [build] default input (pinsel): 0

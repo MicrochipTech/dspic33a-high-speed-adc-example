@@ -86,8 +86,8 @@
       ],
       "open": [],
       "files": [
-        "src/cli/cli.c",
-        "src/cli/console.h"
+        "src/core/cli.c",
+        "src/core/console.h"
       ],
       "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
       "rev": "7b16260"
@@ -101,7 +101,7 @@
       ],
       "open": [],
       "files": [
-        "src/cli/cli.c"
+        "src/core/cli.c"
       ],
       "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
       "rev": "7b16260"
@@ -114,8 +114,8 @@
       ],
       "open": [],
       "files": [
-        "src/cli/cmd_parser.c",
-        "src/cli/cmd_parser.h"
+        "src/core/cmd_parser.c",
+        "src/core/cmd_parser.h"
       ],
       "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
       "rev": "7b16260"
@@ -131,8 +131,8 @@
         "snap, rate, blk"
       ],
       "files": [
-        "src/link/gui_link.c",
-        "src/link/gui_link.h"
+        "src/core/gui_link.c",
+        "src/core/gui_link.h"
       ],
       "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
       "rev": "7b16260"
@@ -146,7 +146,7 @@
       ],
       "open": [],
       "files": [
-        "src/link/gui_link.c"
+        "src/core/gui_link.c"
       ],
       "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
       "rev": "7b16260"
@@ -159,8 +159,8 @@
       ],
       "open": [],
       "files": [
-        "src/tests/chaintest.c",
-        "src/tests/chaintest.h"
+        "src/lab/chaintest.c",
+        "src/lab/chaintest.h"
       ],
       "evidence": "earlier: ran on silicon before N+1's restructuring"
     },
@@ -172,8 +172,8 @@
       ],
       "open": [],
       "files": [
-        "src/tests/bench.c",
-        "src/tests/bench.h"
+        "src/lab/bench.c",
+        "src/lab/bench.h"
       ],
       "evidence": "earlier: ran on silicon before N+1's restructuring"
     },
@@ -185,8 +185,8 @@
       ],
       "open": [],
       "files": [
-        "src/tests/dactest.c",
-        "src/tests/dactest.h"
+        "src/lab/dactest.c",
+        "src/lab/dactest.h"
       ],
       "evidence": "earlier: tested on silicon (no revision recorded)"
     },
@@ -198,10 +198,47 @@
       ],
       "open": [],
       "files": [
-        "src/meter/meter.c",
-        "src/meter/meter.h"
+        "src/lab/meter.c",
+        "src/lab/meter.h"
       ],
       "evidence": "earlier: ran on silicon before N+1's restructuring"
+    },
+    "tri_eval.c": {
+      "status": "pending",
+      "offboard": false,
+      "blocks": [
+        "R2"
+      ],
+      "open": [],
+      "files": [
+        "src/lab/tri_eval.c",
+        "src/lab/tri_eval.h"
+      ],
+      "evidence": "moved out of the library box on CORE.4 (02.10.2026)"
+    },
+    "cli_lab.c": {
+      "status": "pending",
+      "offboard": false,
+      "blocks": [
+        "R2",
+        "R3"
+      ],
+      "open": [],
+      "files": [
+        "src/lab/cli_lab.c"
+      ],
+      "evidence": "the lab commands, out of cli.c on CORE.3 (02.10.2026)"
+    },
+    "b2b_link.c": {
+      "status": "pending",
+      "offboard": false,
+      "blocks": [],
+      "open": [],
+      "files": [
+        "src/lab/b2b_link.c",
+        "src/lab/b2b_link.h"
+      ],
+      "evidence": "snap/rate/blk, out of gui_link.c on CORE.2 (02.10.2026)"
     },
     "siggen.c": {
       "status": "tested",
@@ -212,8 +249,8 @@
         "intermittent fail 8 after stream off with the generator on (HARDWARE-LOG 2026-09-29)"
       ],
       "files": [
-        "src/siggen/siggen.c",
-        "src/siggen/siggen.h"
+        "src/core/siggen.c",
+        "src/core/siggen.h"
       ],
       "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
       "rev": "7b16260"
@@ -233,6 +270,18 @@
       "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
       "rev": "7b16260"
     },
+    "example_main.c": {
+      "status": "pending",
+      "offboard": false,
+      "blocks": [],
+      "open": [
+        "no board-run block flashes the core build"
+      ],
+      "files": [
+        "src/core/example_main.c"
+      ],
+      "evidence": "the core build (CORE.5, 02.10.2026); ran on the board uncommitted (HARDWARE-LOG 02.10.2026, CORE)"
+    },
     "acquisition.c": {
       "status": "tested",
       "offboard": true,
@@ -246,9 +295,9 @@
         "intermittent fail 8 just after stream off with the generator on: 2 in ~176, not reproduced in 76 more (HARDWARE-LOG 2026-09-29)"
       ],
       "files": [
-        "src/app/acquisition.c",
-        "src/app/acquisition.h",
-        "src/app/acquisition_priv.h"
+        "src/core/acquisition.c",
+        "src/core/acquisition.h",
+        "src/core/acquisition_priv.h"
       ],
       "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
       "rev": "7b16260"
@@ -263,8 +312,8 @@
       ],
       "open": [],
       "files": [
-        "src/app/routing.c",
-        "src/app/routing.h"
+        "src/core/routing.c",
+        "src/core/routing.h"
       ],
       "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
       "rev": "7b16260"
@@ -278,7 +327,7 @@
       ],
       "open": [],
       "files": [
-        "src/app/routing.c"
+        "src/core/routing.c"
       ],
       "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
       "rev": "7b16260"
@@ -316,9 +365,9 @@
         "intermittent fail 8 just after stream off with the generator on: 2 in ~176, not reproduced in 76 more (HARDWARE-LOG 2026-09-29)"
       ],
       "files": [
-        "src/app/capture.c",
-        "src/app/capture.h",
-        "src/app/capture_priv.h"
+        "src/core/capture.c",
+        "src/core/capture.h",
+        "src/core/capture_priv.h"
       ],
       "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
       "rev": "7b16260"
@@ -331,8 +380,8 @@
         "the low-pass (fs/8 since 02.10.2026) ran on the board - frequency response within 0.7 dB of the design, grabs with proc=1 - but not with this committed version yet; it keeps up only to 2 MSPS (about 63 CPU cycles per sample)"
       ],
       "files": [
-        "src/app/sigproc.c",
-        "src/app/sigproc.h"
+        "src/core/sigproc.c",
+        "src/core/sigproc.h"
       ],
       "evidence": "HARDWARE-LOG 2026-10-02 (the low-pass entry); not marked tested - no board run of the committed revision",
       "rev": null
@@ -346,7 +395,7 @@
       ],
       "open": [],
       "files": [
-        "src/app/capture.c"
+        "src/core/capture.c"
       ],
       "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
       "rev": "7b16260"
@@ -361,8 +410,8 @@
       ],
       "open": [],
       "files": [
-        "src/app/capture.c",
-        "src/app/pingpong.h"
+        "src/core/capture.c",
+        "src/core/pingpong.h"
       ],
       "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
       "rev": "7b16260"
@@ -377,8 +426,8 @@
       ],
       "open": [],
       "files": [
-        "src/app/pingpong.c",
-        "src/app/pingpong.h"
+        "src/core/pingpong.c",
+        "src/core/pingpong.h"
       ],
       "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
       "rev": "7b16260"
@@ -396,7 +445,7 @@
       ],
       "evidence": ""
     },
-    "frame · crc16 · fmt · stats · tri_eval": {
+    "frame · crc16 · fmt · stats": {
       "status": "pending",
       "offboard": true,
       "blocks": [
@@ -411,8 +460,7 @@
         "src/lib/frame.c",
         "src/lib/crc16.c",
         "src/lib/fmt.c",
-        "src/lib/stats.c",
-        "src/lib/tri_eval.c"
+        "src/lib/stats.c"
       ],
       "evidence": ""
     },
@@ -426,8 +474,8 @@
       ],
       "open": [],
       "files": [
-        "src/diag/diag.c",
-        "src/diag/diag.h"
+        "src/core/diag.c",
+        "src/core/diag.h"
       ],
       "evidence": "HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user's GUI session",
       "rev": "7b16260"

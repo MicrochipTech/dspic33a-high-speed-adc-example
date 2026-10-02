@@ -1,5 +1,5 @@
 /*
- * test_sigproc.c - src/app/sigproc.c's 4th-order Butterworth low-pass at
+ * test_sigproc.c - src/core/sigproc.c's 4th-order Butterworth low-pass at
  * fs/8 (02.10.2026; fs/4 that morning) on a host gcc: the gain at DC, in
  * the pass band, at the cut-off and in the stop band against the design (the numbers in
  * sigproc.c's comment), no seam between blocks, the re-start on a gap, and

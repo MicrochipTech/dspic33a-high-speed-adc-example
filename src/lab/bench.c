@@ -18,6 +18,7 @@
 #include "board.h"
 #include "bench.h"
 #include "capture.h"
+#include "meter.h"     /* the back-to-back instruments (CORE.5) */
 #include "clock.h"
 #include "timebase.h"
 #include "dac.h"

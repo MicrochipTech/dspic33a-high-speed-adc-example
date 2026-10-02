@@ -10,7 +10,7 @@ the authoritative, current file-by-file description (who owns which register, wh
 call what). What follows is kept as it was written: the analysis of the *pre-N+1*
 state (`28e88fa`) that the restructuring was measured against, and the reasoning for
 the target layout. Two categories the analysis did not anticipate and that the actual
-work added: the **routing core** (`src/app/routing.c`, tracking resource conflicts
+work added: the **routing core** (`src/core/routing.c`, tracking resource conflicts
 across DMA/SCCP/DAC/UREF/RAM for a route such as `ROUTE_STREAM`) and **board
 configuration as data reduced to one field** (`src/boards/board_cfg.h` carries only
 the boot PLL dividers — P7.1 tried the wider move this document's V8 describes and

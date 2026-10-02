@@ -1,7 +1,7 @@
 /*
- * test_pingpong.c - host-side test for src/app/pingpong.c (see pingpong.h)
+ * test_pingpong.c - host-side test for src/core/pingpong.c (see pingpong.h)
  *
- * Built by tools\hosttest.bat against the real src/app/pingpong.c, not a
+ * Built by tools\hosttest.bat against the real src/core/pingpong.c, not a
  * reimplementation - including pingpong_on_half(), which lives entirely in
  * the header as `static inline` (P9.1: no cross-module call from the DMA
  * interrupt), so this file exercises the identical code capture.c's

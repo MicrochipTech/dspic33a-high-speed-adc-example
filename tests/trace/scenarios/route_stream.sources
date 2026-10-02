@@ -1,8 +1,8 @@
-src/app/routing.c
-src/app/pingpong.c
-src/app/capture.c
-src/app/sigproc.c
-src/app/acquisition.c
+src/core/routing.c
+src/core/pingpong.c
+src/core/capture.c
+src/core/sigproc.c
+src/core/acquisition.c
 src/drivers/adc.c
 src/drivers/dma.c
 src/drivers/clock.c
@@ -13,5 +13,5 @@ src/drivers/led.c
 src/lib/stats.c
 src/app/port_impl.c
 src/boards/ev74h48a.c
-src/siggen/siggen.c
+src/core/siggen.c
 src/lib/wavegen.c

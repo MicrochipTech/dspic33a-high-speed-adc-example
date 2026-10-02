@@ -3,7 +3,7 @@
  * the one file outside acquisition.c that reaches them
  *
  * NOT part of acquisition.h's public API - nothing outside acquisition.c
- * and src/tests/chaintest.c includes this. P9.4 (27.09.2026) had moved
+ * and src/lab/chaintest.c includes this. P9.4 (27.09.2026) had moved
  * chain_stream_on()/_on_input()/_off()/_streaming()/_state()/_grab_begin()/
  * _grab_end() into acquisition.c while leaving setup()/restore()/
  * triangle_for()/rate_hz()/ksps_of()/wait_ticks() in chaintest.c, reached

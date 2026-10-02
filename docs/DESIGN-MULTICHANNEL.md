@@ -174,12 +174,12 @@ upload of finished tables. The GUI only sends the parameters. WAV export and plo
 from the script are omitted in the firmware. The GUI can compute the table itself for
 display, using the same formula.
 
-**Output (`siggen/siggen.c`):**
+**Output (`core/siggen.c`):**
 
 ```c
 bool siggen_start(dac_t *dac, const uint16_t *table, uint32_t n, uint32_t play_hz);
 /* as built (SG.3): siggen_start(dac, n, play_hz, snap, force, pace) returns a result code;
- * the table is owned by siggen.c - see src/siggen/siggen.h */
+ * the table is owned by siggen.c - see src/core/siggen.h */
 void siggen_stop(void);
 uint32_t siggen_actual_hz(void);   /* after rounding of the clock divider */
 ```

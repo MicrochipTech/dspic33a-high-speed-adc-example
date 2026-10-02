@@ -24,9 +24,9 @@ TARGET   = adc_dma_40msps
 # The sources live under ../src/<folder>/ (P1.1, 27.09.2026); every folder is
 # on the include path (INC), so the sources include each other as "name.h".
 SRCDIR   = ../src
-INC      = -I$(SRCDIR)/drivers -I$(SRCDIR)/app -I$(SRCDIR)/cli -I$(SRCDIR)/tests -I$(SRCDIR)/lib -I$(SRCDIR)/diag -I$(SRCDIR)/sim -I$(SRCDIR)/port -I$(SRCDIR)/link -I$(SRCDIR)/boards -I$(SRCDIR)/meter -I$(SRCDIR)/siggen
-SRC      = $(SRCDIR)/app/main.c $(SRCDIR)/app/config_bits.c $(SRCDIR)/app/port_impl.c $(SRCDIR)/drivers/clock.c $(SRCDIR)/drivers/adc.c $(SRCDIR)/drivers/dma.c $(SRCDIR)/app/pingpong.c $(SRCDIR)/app/sigproc.c $(SRCDIR)/app/capture.c $(SRCDIR)/app/acquisition.c $(SRCDIR)/app/routing.c $(SRCDIR)/meter/meter.c $(SRCDIR)/lib/crc16.c $(SRCDIR)/lib/fmt.c $(SRCDIR)/lib/stats.c $(SRCDIR)/lib/tri_eval.c $(SRCDIR)/lib/iir1.c $(SRCDIR)/lib/goertzel_f.c $(SRCDIR)/lib/goertzel_i.c $(SRCDIR)/lib/detect.c $(SRCDIR)/lib/wavegen.c $(SRCDIR)/siggen/siggen.c $(SRCDIR)/lib/frame.c $(SRCDIR)/drivers/sccp.c $(SRCDIR)/drivers/led.c $(SRCDIR)/diag/diag.c $(SRCDIR)/drivers/timebase.c $(SRCDIR)/drivers/dac.c $(SRCDIR)/drivers/uart.c $(SRCDIR)/tests/dactest.c $(SRCDIR)/tests/chaintest.c $(SRCDIR)/tests/bench.c $(SRCDIR)/link/gui_link.c $(SRCDIR)/cli/cli.c $(SRCDIR)/cli/cmd_parser.c $(SRCDIR)/boards/ev74h48a.c
-HDR      = $(SRCDIR)/app/board.h $(SRCDIR)/boards/board_cfg.h $(SRCDIR)/drivers/clock.h $(SRCDIR)/drivers/adc.h $(SRCDIR)/drivers/dma.h $(SRCDIR)/app/pingpong.h $(SRCDIR)/app/sigproc.h $(SRCDIR)/app/capture.h $(SRCDIR)/app/capture_priv.h $(SRCDIR)/app/acquisition.h $(SRCDIR)/app/acquisition_priv.h $(SRCDIR)/app/routing.h $(SRCDIR)/meter/meter.h $(SRCDIR)/lib/crc16.h $(SRCDIR)/lib/fmt.h $(SRCDIR)/lib/stats.h $(SRCDIR)/lib/tri_eval.h $(SRCDIR)/lib/iir1.h $(SRCDIR)/lib/goertzel_f.h $(SRCDIR)/lib/goertzel_i.h $(SRCDIR)/lib/detect.h $(SRCDIR)/lib/wavegen.h $(SRCDIR)/siggen/siggen.h $(SRCDIR)/lib/frame.h $(SRCDIR)/port/log.h $(SRCDIR)/port/panic.h $(SRCDIR)/port/regs.h $(SRCDIR)/port/wait.h $(SRCDIR)/drivers/sccp.h $(SRCDIR)/drivers/led.h $(SRCDIR)/diag/diag.h $(SRCDIR)/cli/console.h $(SRCDIR)/sim/sim.h $(SRCDIR)/drivers/timebase.h $(SRCDIR)/drivers/dac.h $(SRCDIR)/drivers/uart.h $(SRCDIR)/tests/dactest.h $(SRCDIR)/tests/chaintest.h $(SRCDIR)/tests/bench.h $(SRCDIR)/link/gui_link.h $(SRCDIR)/cli/cmd_parser.h
+INC      = -I$(SRCDIR)/drivers -I$(SRCDIR)/app -I$(SRCDIR)/core -I$(SRCDIR)/lab -I$(SRCDIR)/lib -I$(SRCDIR)/sim -I$(SRCDIR)/port -I$(SRCDIR)/boards
+SRC      = $(SRCDIR)/app/main.c $(SRCDIR)/app/config_bits.c $(SRCDIR)/app/port_impl.c $(SRCDIR)/drivers/clock.c $(SRCDIR)/drivers/adc.c $(SRCDIR)/drivers/dma.c $(SRCDIR)/core/pingpong.c $(SRCDIR)/core/sigproc.c $(SRCDIR)/core/capture.c $(SRCDIR)/core/acquisition.c $(SRCDIR)/core/routing.c $(SRCDIR)/lab/meter.c $(SRCDIR)/lib/crc16.c $(SRCDIR)/lib/fmt.c $(SRCDIR)/lib/stats.c $(SRCDIR)/lab/tri_eval.c $(SRCDIR)/lib/iir1.c $(SRCDIR)/lib/goertzel_f.c $(SRCDIR)/lib/goertzel_i.c $(SRCDIR)/lib/detect.c $(SRCDIR)/lib/wavegen.c $(SRCDIR)/core/siggen.c $(SRCDIR)/lib/frame.c $(SRCDIR)/drivers/sccp.c $(SRCDIR)/drivers/led.c $(SRCDIR)/core/diag.c $(SRCDIR)/drivers/timebase.c $(SRCDIR)/drivers/dac.c $(SRCDIR)/drivers/uart.c $(SRCDIR)/lab/dactest.c $(SRCDIR)/lab/chaintest.c $(SRCDIR)/lab/bench.c $(SRCDIR)/core/gui_link.c $(SRCDIR)/lab/b2b_link.c $(SRCDIR)/core/cli.c $(SRCDIR)/lab/cli_lab.c $(SRCDIR)/core/cmd_parser.c $(SRCDIR)/boards/ev74h48a.c
+HDR      = $(SRCDIR)/app/board.h $(SRCDIR)/boards/board_cfg.h $(SRCDIR)/drivers/clock.h $(SRCDIR)/drivers/adc.h $(SRCDIR)/drivers/dma.h $(SRCDIR)/core/pingpong.h $(SRCDIR)/core/sigproc.h $(SRCDIR)/core/capture.h $(SRCDIR)/core/capture_priv.h $(SRCDIR)/core/acquisition.h $(SRCDIR)/core/acquisition_priv.h $(SRCDIR)/core/routing.h $(SRCDIR)/lab/meter.h $(SRCDIR)/lib/crc16.h $(SRCDIR)/lib/fmt.h $(SRCDIR)/lib/stats.h $(SRCDIR)/lab/tri_eval.h $(SRCDIR)/lib/iir1.h $(SRCDIR)/lib/goertzel_f.h $(SRCDIR)/lib/goertzel_i.h $(SRCDIR)/lib/detect.h $(SRCDIR)/lib/wavegen.h $(SRCDIR)/core/siggen.h $(SRCDIR)/lib/frame.h $(SRCDIR)/port/log.h $(SRCDIR)/port/panic.h $(SRCDIR)/port/regs.h $(SRCDIR)/port/wait.h $(SRCDIR)/drivers/sccp.h $(SRCDIR)/drivers/led.h $(SRCDIR)/core/diag.h $(SRCDIR)/core/console.h $(SRCDIR)/core/sim.h $(SRCDIR)/drivers/timebase.h $(SRCDIR)/drivers/dac.h $(SRCDIR)/drivers/uart.h $(SRCDIR)/drivers/disi.h $(SRCDIR)/lab/dactest.h $(SRCDIR)/lab/chaintest.h $(SRCDIR)/lab/bench.h $(SRCDIR)/core/gui_link.h $(SRCDIR)/lab/b2b_link.h $(SRCDIR)/core/cmd_parser.h
 SRC_SIM  = $(subst $(SRCDIR)/drivers/dma.c,$(SRCDIR)/sim/sim_dma.c,$(SRC))
 # Board configuration as data (P7.1): SRC links src/boards/ev74h48a.c for
 # the board and the simulator; the nano target swaps it for ev17p63a.c the
@@ -40,7 +40,7 @@ OUTDIR   = ../build
 CFLAGS   = -mcpu=$(MCU) -mdfp="$(DFP)" -O1 -Wall -Wextra $(INC)
 LDFLAGS  = -T"$(GLD)"
 
-.PHONY: all hex sim size clean version
+.PHONY: all hex sim core size clean version
 
 all: $(OUTDIR)/$(TARGET).elf
 
@@ -62,6 +62,17 @@ nano: $(OUTDIR)/$(TARGET)_nano.elf
 
 $(OUTDIR)/$(TARGET)_nano.elf: $(SRC_NANO) $(HDR) | $(OUTDIR)
 	"$(CC)" -mcpu=$(MCU_NANO) -mdfp="$(DFP)" -O1 -Wall -Wextra $(INC) -DBOARD=2 -T"$(GLD_NANO)" $(SRC_NANO) -o $@
+
+#          make core       the customer's core build (CORE.5, 02.10.2026): no file of
+#                          src/lab/ or src/sim/, example_main.c instead of main.c,
+#                          neither folder on the include path -> ../build/adc_dma_40msps_core.elf
+SRC_CORE = $(SRCDIR)/core/example_main.c $(filter-out $(SRCDIR)/app/main.c $(SRCDIR)/lab/%,$(SRC))
+INC_CORE = $(filter-out -I$(SRCDIR)/lab -I$(SRCDIR)/sim,$(INC))
+
+core: $(OUTDIR)/$(TARGET)_core.elf
+
+$(OUTDIR)/$(TARGET)_core.elf: $(SRC_CORE) $(HDR) version | $(OUTDIR)
+	"$(CC)" -mcpu=$(MCU) -mdfp="$(DFP)" -O1 -Wall -Wextra $(INC_CORE) $(LDFLAGS) $(SRC_CORE) -o $@
 
 sim: $(OUTDIR)/$(TARGET)_sim.elf
 

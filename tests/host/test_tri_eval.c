@@ -1,9 +1,9 @@
 /*
- * test_tri_eval.c - host-side test for lib/tri_eval.c (fit_line, tri_eval,
+ * test_tri_eval.c - host-side test for lab/tri_eval.c (fit_line, tri_eval,
  * tri_grid_ok), the chain test's triangle evaluator.
  *
  * Built by tools\hosttest.bat with the installed MinGW gcc, against the
- * real src/lib/tri_eval.c - not a reimplementation.
+ * real src/lab/tri_eval.c - not a reimplementation.
  *
  * Two jobs:
  *

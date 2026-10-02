@@ -1,5 +1,5 @@
 /*
- * test_siggen.c - host-side test for src/siggen/siggen.c (SG.3, 29.09.2026)
+ * test_siggen.c - host-side test for src/core/siggen.c (SG.3, 29.09.2026)
  *
  * Built by tools\hosttest.bat against the real siggen.c and lib/wavegen.c;
  * every driver it calls (dma.c channel 1, sccp.c SCCP2, dac.c, routing.c's

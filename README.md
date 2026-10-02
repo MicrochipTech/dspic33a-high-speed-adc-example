@@ -230,29 +230,34 @@ board user guide DS70005562D:
 AD1AN0 of this device sits on RA2, which the board routes to a capacitive touch pad
 (P38) — that is why the example uses ADC3 here and not ADC1.
 
-The sources sit under `src/`, one folder per role — `src/drivers/` (`clock`, `adc`,
-`dma`, `sccp`, `dac`, `timebase`, `led`, `uart`, one `.c/.h` pair each), `src/app/`
-(`main.c`, `capture.c/.h`, `config_bits.c`, `board.h`, `port_impl.c` — this project's
-implementation of the port layer — `pingpong.c/.h` — the ping-pong buffer's bookkeeping
-— `acquisition.c/.h` — the rate setters, the variant matrix and the standing chain
-stream — and `routing.c/.h` — the routing core, below), `src/boards/` (`board_cfg.h`
-and one `const board_cfg_t` per board, `ev74h48a.c`/`ev17p63a.c`, exactly one linked per
-build), `src/meter/` (`meter.c/.h`: the counters, processing cost and rate measurement,
-out of `capture.c`), `src/cli/` (`cli.c`, `console.h` and the parser pair
-`cmd_parser.c/.h`), `src/link/` (`gui_link.c/.h`, the GUI's binary transport — `blk`,
-`stream grab`), `src/tests/` (`chaintest`, `dactest`, `bench` — the back-to-back test
-suite), `src/lib/` (`crc16`, `fmt`, `stats`, `tri_eval`, `frame` — the hardware-free
-algorithms and the GUI frame writer, all with host tests under `tests/host/` — plus,
-included in every build but not yet called from anywhere, `iir1`, `goertzel_f`,
-`goertzel_i`, `detect`, `wavegen`, the building blocks for a future multi-channel
-signal chain), `src/port/` (`log.h`, `panic.h`, `wait.h`, `regs.h` — headers only: the
-one path by which a driver may log, wait or stop, implemented by `src/app/port_impl.c`),
-`src/diag/` (`diag`) and `src/sim/` (`sim.h`, `sim_dma.c`) — and the MPLAB X project
-references them there; nothing is duplicated. Every folder is on the include path, so
-the files include each other as `"name.h"`. `src/app/main.c` is the place to read
+The sources sit under `src/`, split since 02.10.2026 into a **core** — what a customer
+takes into their own project, `docs/CORE.md` — and the **lab** this project adds on top:
+
+- core: `src/drivers/` (`clock`, `adc`, `dma`, `sccp`, `dac`, `timebase`, `led`, `uart`,
+  one `.c/.h` pair each, plus `disi.h`), `src/port/` (`log.h`, `panic.h`, `wait.h`,
+  `regs.h` — headers only: the one path by which a driver may log, wait or stop),
+  `src/lib/` (`crc16`, `fmt`, `stats`, `frame`, `wavegen` — hardware-free, with host tests
+  under `tests/host/` — and the not yet called building blocks `iir1`, `goertzel_f`,
+  `goertzel_i`, `detect`), and `src/core/`: the stream (`capture`, `acquisition`,
+  `pingpong`), the processing callback (`sigproc`), the routing core (`routing`), the
+  signal generator (`siggen`), the console (`cli.c`, `console.h`, the parser pair
+  `cmd_parser.c/.h`), the GUI's grab (`gui_link`), fault handling (`diag`), `sim.h`, and
+  `example_main.c`, the core build's `main()`;
+- glue, which a customer writes for their own board: `src/app/` (`main.c`,
+  `config_bits.c`, `board.h`, `port_impl.c` — this project's implementation of the port
+  layer) and `src/boards/` (`board_cfg.h` and one `const board_cfg_t` per board,
+  `ev74h48a.c`/`ev17p63a.c`, exactly one linked per build);
+- lab: `src/lab/` (`chaintest`, `bench`, `dactest`, `meter`, `tri_eval`, the lab's
+  console commands `cli_lab.c`, and `snap`/`rate`/`blk` in `b2b_link`) and `src/sim/`
+  (`sim_dma.c`, the simulator's stand-in for `dma.c`).
+
+`tools\build.bat core` builds the core alone (no file of `src/lab/` or `src/sim/`, neither
+on the include path); every other build links the lab on top, and the MPLAB X project
+references the same files — nothing is duplicated. Every folder is on the include path,
+so the files include each other as `"name.h"`. `src/app/main.c` is the place to read
 first: it is the start-up order and the main loop, and nothing else.
 
-A **routing core** (`src/app/routing.c/.h`) tracks which resources — DMA channel, SCCP,
+A **routing core** (`src/core/routing.c/.h`) tracks which resources — DMA channel, SCCP,
 DAC output, UREF, RAM — a route such as `ROUTE_STREAM` needs, refuses a conflict or an
 unreachable pin before any driver call, and is what `stream on` goes through; `route
 list` prints the active route and the resource table. `CLAUDE.md`'s module table is the
@@ -636,7 +641,7 @@ the cause of the next overrun.
 
 ![CPU and counters](docs/04_cpu_and_counters.png)
 
-**Your own processing goes into `src/app/sigproc.c`** (`sigproc_block()`). Since 02.10.2026
+**Your own processing goes into `src/core/sigproc.c`** (`sigproc_block()`). Since 02.10.2026
 it holds a **4th-order Butterworth low-pass with its cut-off at fs/8** - a quarter of the
 useful band 0..fs/2 (fs/4 for a few hours the same day), so it follows the sample rate by
 itself: two biquad sections, float on the FPU, the state carried from block to block (the
@@ -650,7 +655,7 @@ after reset), with the half's samples, its length and which half it is. The resu
 back into the same half: `stream grab` then sends the processed data to the GUI (the frame
 says `proc=1`), with no second buffer. It has one half period to return (1024 samples at
 8 MSPS: 128 us, 25 CPU cycles per sample); `status`, the chain test's load figures and the
-GUI's "CPU load" chip (the GRAB frame's `load=`, per mille of a half period) show what it takes, and `missed` counts the halves it was too slow for. `src/app/sigproc.h` has
+GUI's "CPU load" chip (the GRAB frame's `load=`, per mille of a half period) show what it takes, and `missed` counts the halves it was too slow for. `src/core/sigproc.h` has
 the rules. `chain all` and `test` judge raw samples - switch the processing off for them.
 
 ## The console
@@ -676,10 +681,10 @@ already in the ring.
 | `version` | build id, git revision, board, configuration |
 | `status` | run state, counters, the clock, the receive diagnostics, and — since the board-run preparation (BR.6) — the stack high-water mark and its margin to `SPLIM`, the sample buffer's address/alignment/guard-word check, and the boot stage/trap/`chain all` stage of the current run |
 | `regs` | clock, ADC, DMA, DAC, UREF and UART registers |
-| `siggen` | the signal generator's status: on/off, DAC, table size, play rate (set and actual), the parameters, the table's min/max, DMA 1 and SCCP2 state, the measured transfers per second. A table computed on the target (`lib/wavegen`, the `tab_wave_gen.py` formula) is played by DMA channel 1 into a DAC, paced by SCCP2, with no CPU involvement |
+| `siggen` | the signal generator's status: on/off, DAC, table size, play rate (set and actual), the parameters, the table's min/max, DMA 2 and SCCP2 state, the measured transfers per second. A table computed on the target (`lib/wavegen`, the `tab_wave_gen.py` formula) is played by DMA channel 2 into a DAC, paced by SCCP2, with no CPU involvement |
 | `siggen set <f0\|h2..h7\|decay\|amp\|lo\|hi> <value>` | one generator parameter per line (the console line is 64 characters); decimals without an exponent, `lo`/`hi` are DAC codes. Takes effect with the next `siggen on` |
 | `siggen on <dac 1\|2> <n 2..8192> <play_hz 100..1000000> [snap] [force] [oc]` | compute the table and play it on DACOUT1 = RA1 or DACOUT2 = RA8; `snap` moves f0 to a whole number of periods in the table, `force` allows `lo`/`hi` outside the DAC's 205..3890, `oc` paces SCCP2 in 32-bit output compare (dead on silicon; the default is the dual 16-bit timer). Refused while a route uses the same DAC (`stream on` on DAC2) |
-| `siggen off` \| `siggen regs` | stop the generator; dump DMA 1 and SCCP2 registers |
+| `siggen off` \| `siggen regs` | stop the generator; dump DMA 2 and SCCP2 registers |
 | `route list` | the active route (source, core, pinsel, DAC, sink) and the resource table — which DMA channel, SCCP, DAC output and UREF are in use, RAM used vs. budget (`docs/DESIGN-MULTICHANNEL.md`'s routing core) |
 | `test [part] [halves]` | run a part of the measurement, or `all` — see below |
 | `pll <p1> <p2>` | **the sample rate**: PLL1 output dividers, 1600 MHz / (p1·p2), p1 ≥ p2, both 1…7 |
@@ -1028,29 +1033,33 @@ which file may call which. The table below is the reading order, not the full li
 | `src/drivers/clock.c/.h` | FRC → PLL1 320 MHz (ADC) and PLL2 200 MHz (CPU), the switching order, the clock-fail interrupt, the ADC clock's rate control (`clock_adc_set_pll()`, PLL1's output dividers — the knob that works) and `clock_adc_set_div()` (the CLKGEN6 divider, which does not change the rate on this silicon and is kept only so the behaviour can be reproduced) |
 | `src/drivers/adc.c/.h` | the ADC core: channel 0 in Integration mode, burst trigger, input/sample-time register |
 | `src/drivers/dma.c/.h` | DMA channel 0: address window, Repeated One-Shot mode, HALF/DONE interrupt, status flags — knows no ADC and no buffer |
-| `src/sim/sim_dma.c`, `src/sim/sim.h` | **simulator build only:** stand-in for `dma.c` that produces buffer halves (1 MHz sine) and the ping-pong check; see "In the MPLAB X simulator" |
-| `src/app/pingpong.c/.h` | the two-half buffer's bookkeeping on its own since P9.1: which half just completed, the guard-word check, the main-loop service counters — no driver include, the buffer is passed in |
-| `src/app/capture.c/.h` | the measurement: wires ADC and DMA together, the DMA event handler and the burst restart, start/stop/input, the buffer itself (with guard words), and `capture_chain_halt`/`_resume` — pausing and restarting the chain stream's trigger in place, for the GUI's grab cycle — what the console may read and control |
-| `src/meter/meter.c/.h` | the counters, processing cost and rate measurement, out of `capture.c` on P9.3 |
-| `src/app/acquisition.c/.h` | the rate setters, the variant matrix, and the standing chain stream `chain_stream_*()` (out of `chaintest.c` on P9.4) |
-| `src/app/routing.c/.h` | the routing core: which resources (DMA, SCCP, DAC output, UREF, RAM) a route needs, checked and refused before any driver call; `route list`'s data source |
+| `src/sim/sim_dma.c`, `src/core/sim.h` | **simulator build only:** stand-in for `dma.c` that produces buffer halves (1 MHz sine) and the ping-pong check; see "In the MPLAB X simulator" |
+| `src/core/pingpong.c/.h` | the two-half buffer's bookkeeping on its own since P9.1: which half just completed, the guard-word check, the main-loop service counters — no driver include, the buffer is passed in |
+| `src/core/capture.c/.h` | the measurement: wires ADC and DMA together, the DMA event handler and the burst restart, start/stop/input, the buffer itself (with guard words), and `capture_chain_halt`/`_resume` — pausing and restarting the chain stream's trigger in place, for the GUI's grab cycle — what the console may read and control |
+| `src/lab/meter.c/.h` | the counters, processing cost and rate measurement, out of `capture.c` on P9.3 |
+| `src/core/acquisition.c/.h` | the rate setters, the variant matrix, and the standing chain stream `chain_stream_*()` (out of `chaintest.c` on P9.4) |
+| `src/core/routing.c/.h` | the routing core: which resources (DMA, SCCP, DAC output, UREF, RAM) a route needs, checked and refused before any driver call; `route list`'s data source |
 | `src/lib/crc16.c/.h` | CRC-16 over a sample block, for the `blk`/`stream grab` binary transfer |
-| `src/lib/fmt.c/.h`, `src/lib/stats.c/.h`, `src/lib/tri_eval.c/.h` | the printf-free formatting helpers, min/max/mean over a completed half, and the chain test's triangle evaluator — hardware-free, each with a host test under `tests/host/` |
+| `src/lib/fmt.c/.h`, `src/lib/stats.c/.h`, `src/lab/tri_eval.c/.h` | the printf-free formatting helpers, min/max/mean over a completed half, and the chain test's triangle evaluator — hardware-free, each with a host test under `tests/host/` |
 | `src/lib/frame.c/.h` | the binary frame writer `blk`/`stream grab` share: header, chunked payload with the CRC folded in, CRC tail |
 | `src/lib/iir1.c/.h`, `goertzel_f.c/.h`, `goertzel_i.c/.h`, `detect.c/.h`, `wavegen.c/.h` | a first-order IIR filter, damped Goertzel in float and in Q16 fixed point, a hysteresis pulse detector, and a signal-generator table — included in every build, cross-checked against a Python reference on the host, and not yet called from anywhere: the building blocks for the multi-channel signal chain planned for N+4 |
 | `src/drivers/sccp.c/.h` | SCCP1 as the chain test's trigger source (clock, mode, event), its timer and compare interrupts as event counters |
-| `src/tests/chaintest.c/.h` | the chain test itself — `chain all`, the `@` log line format, and `chain_stream_grab_begin`/`_end` (in `src/app/acquisition.c` since P9.4) — one freeze/send/release cycle of a ping-pong pair for `stream grab`; see "The chain test" below |
-| `src/tests/bench.c/.h` | the back-to-back test suite (`test ...`, `sweep`, `matrix`), out of `cli.c` |
+| `src/lab/chaintest.c/.h` | the chain test itself — `chain all`, the `@` log line format, and `chain_stream_grab_begin`/`_end` (in `src/core/acquisition.c` since P9.4) — one freeze/send/release cycle of a ping-pong pair for `stream grab`; see "The chain test" below |
+| `src/lab/bench.c/.h` | the back-to-back test suite (`test ...`, `sweep`, `matrix`), out of `cli.c` |
 | `src/drivers/led.c/.h` | LED0 |
-| `src/diag/diag.c/.h` | stop codes (`fail()`), trap and unhandled-interrupt handler, boot-stage record, reset cause, the register-dump visitor |
+| `src/core/diag.c/.h` | stop codes (`fail()`), trap and unhandled-interrupt handler, boot-stage record, reset cause, the register-dump visitor |
 | `src/port/log.h`, `panic.h`, `wait.h`, `regs.h` | the port layer: the one path (`port_log*()`, `port_panic()`, `PORT_WAIT_WHILE`, a register visitor) by which a driver under `src/drivers/` may log, wait, stop or dump its registers, without including the console — implemented by `src/app/port_impl.c` |
 | `src/drivers/timebase.c/.h` | Timer1 as a 12.5 MHz stopwatch — the independent clock the delivered sample rate is measured against (`test rate`, `test sweep`, and the window length of the DAC test). It does **not** pace the ADC |
 | `src/drivers/dac.c/.h` | DAC1 and DAC2 in Triangle Wave mode on their pins DACOUT1 = RA1 and DACOUT2 = RA8 (CLKGEN7 as their shared clock), one table for both units. The DAC test itself instead routes DAC2 through `UREFCON` onto the chip's internal UREF line, where every ADC core can sample it as `ANn7` — no pin, no wire, no core switch |
-| `src/tests/dactest.c/.h` | captures one contiguous buffer with the stream stopped from the DMA interrupt, then judges whichever DAC is running (`dac_active()` picks DAC2 first if both run): a changing signal, even steps, no jump, and the triangle period measured from the data. `[dactest]` lines, PASS/FAIL |
-| `src/link/gui_link.c/.h` | the GUI's binary transport: `blk`/`snap`/`rate` and `stream grab`'s body, built on `frame.c`, out of `cli.c` |
-| `src/cli/cli.c`, `console.h` | the console: on top of `src/drivers/uart.c`, the receive callback, the commands and their reply framing |
+| `src/lab/dactest.c/.h` | captures one contiguous buffer with the stream stopped from the DMA interrupt, then judges whichever DAC is running (`dac_active()` picks DAC2 first if both run): a changing signal, even steps, no jump, and the triangle period measured from the data. `[dactest]` lines, PASS/FAIL |
+| `src/core/gui_link.c/.h` | the GUI's binary transport: `stream grab`'s body, built on `frame.c`, out of `cli.c` |
+| `src/lab/b2b_link.c/.h` | `snap`/`rate`/`blk`, the back-to-back mode's binary transfer, out of `gui_link.c` on 02.10.2026 |
+| `src/core/cli.c`, `console.h` | the console: on top of `src/drivers/uart.c`, the receive callback, the core's commands and their reply framing |
+| `src/lab/cli_lab.c` | the lab's commands (`start`, `stop`, `samc`, `input`, `core`, `clk`, `pll`, `selftest`, `dactest`, `chain`, and through their own files `sweep`/`test` and `snap`/`rate`/`blk`), registered after the core's through `cli_register_lab()` |
+| `src/core/example_main.c` | the core build's `main()`: the same start-up without the lab, then `capture_service()` in the loop — a customer's starting point |
+| `docs/CORE.md` | **taking the core into your own project**: what to copy, the glue to write, where the processing goes, how to build |
 | `src/drivers/uart.c/.h` | UART2 on the MCP2221A channel: pins/PPS, the baud generator, the non-blocking transmit and bounded flush, the receive interrupt — out of `cli.c` on P5.1 |
-| `src/cli/cmd_parser.c/.h` | the command parser, unchanged from [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser) (Apache 2.0) |
+| `src/core/cmd_parser.c/.h` | the command parser, unchanged from [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser) (Apache 2.0) |
 | `adc_dma_40msps.X/` | MPLAB X project — build, program and debug from here |
 | `tests/host/` | host-side (gcc) unit tests for every module in `src/lib/` plus `pingpong`/`routing`, run by `tools\hosttest.bat` |
 | `tests/trace/` | the register-trace harness: golden logs of every register write a driver makes, reproduced bit-for-bit after each change (`tools\trace.bat`) |

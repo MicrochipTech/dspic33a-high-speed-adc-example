@@ -2164,3 +2164,39 @@ grabs each: sigproc off 0 per mille at 1/2/3 MSPS; sigproc on (the fs/8 low-pass
 1 MSPS, 621 at 2 MSPS, 938 at 3 MSPS - 62 CPU cycles per sample every time, matching the
 "free cycles" figures; at 3 MSPS already 31 halves missed in 5 grabs (the rest of the
 service and the interrupts take the last 6 %).
+
+## 2026-10-02, the core/lab split (CORE.1-CORE.5): project build and core build - 4c0cc55 + local changes, local (COM26)
+
+Code moved, not changed (`docs/IMPLEMENTATION-PLAN.md` section CORE): `cli.c`/`gui_link.c`
+split into core and lab, the files moved into `src/core/` and `src/lab/`, the new core
+build (`tools\build.bat core`, `src/core/example_main.c`, no lab file). One real code
+change on the way: `__builtin_write_DISICTL(variable)` stops xc-dsc v3.21 and v3.31 at -O0
+with an internal compiler error, so the MPLAB X project (-O0) had not built since the
+UART ring buffer (01.10.2026). It is now `disi_set()` (`src/drivers/disi.h`), inline asm
+with the same `disictl wN` the builtin produced at -O1.
+
+Both images flashed with `ipecmd -TPPKOB4 -M -OL` and driven by one script over
+`tools/protocol.py`. The baseline 4c0cc55 was built from a worktree and flashed in between.
+
+- **Project build (all variants):** `help` lists 30 lines, the core's 14 commands first
+  and then the lab's (the new order). `chain all` reached `@END`, and every verdict
+  matches 4c0cc55's, run the same hour, except S4.11/S4.12/S6.6 at 16 MSPS. There
+  4c0cc55 raised the OVERRUN flag (390) with an exact transfer count and the new build
+  did not: the stochastic 16 MSPS flag of the previous entries, and S6.6 is SKIP whenever
+  S4 fails. Stream at 1/4/8 MSPS, 5 grabs each: overrun/late/missed 0, the triangle
+  complete (about 1000..3840). `sigproc on` at 1 MSPS: load 277..310 per mille (4c0cc55:
+  280..310).
+- **Core build:** `help` lists the 14 core commands. Stream at 1/4/8 MSPS, `sigproc on`
+  (load 279..311 per mille) and the generator loop give the same figures as the project
+  build. This is the GUI's whole command set, served by the core alone.
+- **Open, not CORE's:** the generator loop (`siggen on 2 1000 100000 snap`, f0 1 kHz, h3
+  0.3, `stream on 1000 5 3`) delivers grabs with the full swing (782..3501) and grabs
+  where RA8 stands nearly still for the whole half (e.g. 1593..1639, i.e. at least 2 ms),
+  in no fixed order. 4c0cc55 does the same (three grabs: 1603..3255, 1593..1639,
+  1603..1622), so it predates CORE. The fundamental comes out at 977 Hz whenever the
+  signal is there. Not explained yet. Candidates: DMA channel 2/SCCP2 pausing, or the
+  pair grab's freeze. The 29.09.2026 generator entry had a clean loop with one DMA
+  channel.
+- **GUI on the board (the user, same afternoon):** `tools/adc_gui.py` against the project
+  build of this entry, connected over COM26. The user tried several things and reported
+  that it worked; there is no protocol of which ones.

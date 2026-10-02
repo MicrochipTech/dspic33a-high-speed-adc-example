@@ -4,7 +4,7 @@ r"""test_tri_eval_xcheck.py - the C triangle evaluator against its Python port.
     python tests\host\test_tri_eval_xcheck.py [path\to\test_tri_eval.exe]
 
 P2.4 of docs/IMPLEMENTATION-PLAN.md. tools/eval_chain.py carries a Python
-port of tri_eval() (src/lib/tri_eval.c) so that `chain all` logs can be
+port of tri_eval() (src/lab/tri_eval.c) so that `chain all` logs can be
 judged on the host; the two must agree, or a log could be judged
 differently from the board. This script generates windows with
 eval_chain.synth() (the same synthetic triangle the GUI's fake target

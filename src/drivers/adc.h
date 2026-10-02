@@ -104,7 +104,7 @@ uint32_t adc_other_channels_armed(void);
 /* Core 5's channel-0 interrupt as an event counter (chain test, low
  * rates): adc_ch0_event() is called from it, priority 3, with the result
  * if read_res (DMA off) or 0 (DMA on the channel). Implemented by the
- * chain test. */
+ * chain test; adc.c's weak default does nothing (CORE.1). */
 void    adc_ch0_irq(bool on, bool read_res);
 void    adc_ch0_event(uint16_t result);
 

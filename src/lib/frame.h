@@ -40,7 +40,7 @@
  * be shorter. */
 #define FRAME_CHUNK 64u
 
-/* Output sink - exactly console_write_raw()'s signature (src/cli/console.h),
+/* Output sink - exactly console_write_raw()'s signature (src/core/console.h),
  * so the firmware caller passes it straight through with no wrapper and a
  * host test can pass one that appends to a memory buffer. Takes as many of
  * the `len` bytes as it can and returns how many it actually took. */

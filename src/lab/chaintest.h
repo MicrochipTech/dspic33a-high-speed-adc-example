@@ -7,7 +7,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-/* chain_stream_*() and chain_grab_t moved to src/app/acquisition.c on
+/* chain_stream_*() and chain_grab_t moved to src/core/acquisition.c on
  * 27.09.2026 (P9.4, docs/IMPLEMENTATION-PLAN.md): the standing stream the
  * GUI drives is acquisition, not a test, even though it grew inside this
  * file first. Declared in acquisition.h, pulled in here so every existing

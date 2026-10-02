@@ -54,6 +54,7 @@
 #include "board.h"
 #include "chaintest.h"
 #include "capture.h"
+#include "meter.h"     /* the back-to-back instruments (CORE.5) */
 #include "adc.h"
 #include "sccp.h"
 #include "dac.h"
@@ -281,7 +282,7 @@ static uint32_t mean_kept(uint32_t n)
 
 /* ------------------------------------------------------------------ *
  * The triangle evaluator (fit_line, tri_eval, tri_t, tri_grid_ok) lives
- * in src/lib/tri_eval.c since 27.09.2026 (P2.3): hardware-free, tested
+ * in src/lab/tri_eval.c since 27.09.2026 (P2.3): hardware-free, tested
  * on the host by tests/host/test_tri_eval.c and cross-checked against
  * tools/eval_chain.py's port. It used to be here.
  * ------------------------------------------------------------------ */

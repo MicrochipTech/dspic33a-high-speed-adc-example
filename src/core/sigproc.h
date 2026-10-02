@@ -38,7 +38,7 @@
  *   - "chain all", "test ..." and dactest judge the samples themselves:
  *     switch the processing off before running them.
  *
- * src/app/sigproc.c holds the body to fill in.
+ * src/core/sigproc.c holds the body to fill in.
  */
 #ifndef SIGPROC_H
 #define SIGPROC_H

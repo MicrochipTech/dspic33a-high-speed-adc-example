@@ -72,7 +72,7 @@ half: 512"), not by the grabs that followed. It now requires every grab to carry
 length `buf` set; `board_run.py --selftest` checks both a board that honours it and one
 that accepts `buf` and ignores it.
 
-## Drivers (`src/drivers/`, `src/sim/`)
+## Drivers (`src/drivers/`; `src/sim/` is lab, `sim.h` core since 02.10.2026)
 
 | Module | Before N+1 | N+1 change | Tested by | Off-board | Not reached |
 |---|---|---|---|---|---|
@@ -93,11 +93,12 @@ that accepts `buf` and ignores it.
 | `log.h`, `wait.h`, `regs.h` | never (new) | P4.1-P4.8 | every driver's start-up trace (R0), every register dump (R1) | trace, every driver scenario | - |
 | `panic.h` | never (new) | P4.1 | - | trace `fail` (`port_panic(10)` into the stubbed `fail()`) | `port_panic()` (fail codes 5, 8, 10) runs only on a fault |
 
-## Application (`src/app/`, `src/boards/`)
+## Core and app glue (`src/core/`, `src/app/`, `src/boards/`)
 
 | Module | Before N+1 | N+1 change | Tested by | Off-board | Not reached |
 |---|---|---|---|---|---|
 | `main.c` | proven | restructured - BR.6: `diag_stack_paint()` first; smoke path (`SIM_SMOKE`) preprocessor-guarded | R0 | [SMOKE] | - |
+| `example_main.c` (core) | never (new) | CORE.5 (02.10.2026): the core build's `main()` | none (no board-run block flashes the core build); by hand 02.10.2026: stream at 1/4/8 MSPS, `sigproc on`, the generator loop (HARDWARE-LOG) | `tools\build.bat core`/`make core`, link only | the core build under `board_run.py` |
 | `config_bits.c` | proven | none | R0 (the board boots) | build only | - |
 | `board.h`, `ev74h48a.c` | proven as `board.h` macros | restructured - P7.1: boot PLL dividers as `board_cfg` data | R0 (boot rate 7/7), R2 restore, R3 sweep/matrix | trace `b2b`, `clk`, `variants`, `stream_on*` | - |
 | `ev17p63a.c` | never | P7.1 | - | build only (`nano` trace uses `board.h`'s macros, not this file) | the whole Curiosity Nano profile: its own first run later (BR decision 3) |
@@ -109,15 +110,17 @@ that accepts `buf` and ignores it.
 | `siggen.c` | never (new, SG) | SG.3, 29.09.2026 - table in `.dma_buffer`, DMA1 -> DAC paced by SCCP2, claim in `routing.c` | none yet (SG.8: block R8 not written) | host `test_siggen` (stand-ins for dma/sccp/dac/routing); trace `sccp2` for the clock; [SMOKE] `help` | on silicon by hand only (COM26, 29.09.2026: 1 kHz loop matches the table to 11-14 LSB rms); SG.8 R8; an intermittent fail 8 after `stream off` with the generator on (HARDWARE-LOG 2026-09-29) |
 | `port_impl.c` | never (new, P4) | P4.1/P4.7 | indirectly by every block | trace, every scenario; `fail` proves the hook order | `clock_fail_hook()` (clock-fail only) |
 
-## Console and link (`src/cli/`, `src/link/`)
+## Console and link (`src/core/`; `cli_lab.c`, `b2b_link.c` in `src/lab/`)
 
 | Module | Before N+1 | N+1 change | Tested by | Off-board | Not reached |
 |---|---|---|---|---|---|
 | `cli.c` | proven | restructured - P5/P6: UART, bench, link split out; P11.5 `route`; BR.6 eleven new `status` fields; 29.09.2026 `dac ... force` and a precise refusal | R0, R6, R7 | [SMOKE] `help`, `version`, `status` | most single commands (see "Commands" below) |
 | `cmd_parser.c` | proven | none (32 slots as before) | every block | [SMOKE] | - |
-| `gui_link.c` | never as a file; `blk` never on silicon either | new - P6.4 | R4, R5 (`stream grab`) | none (the GUI's grab only against its Python stand-in) | `snap`, `rate`, `blk`: no block sends them |
+| `gui_link.c` | never as a file | new - P6.4; CORE.2 (02.10.2026): `stream grab` only, `snap`/`rate`/`blk` to `b2b_link.c` | R4, R5 (`stream grab`) | none (the GUI's grab only against its Python stand-in) | - |
+| `cli_lab.c` (lab) | proven as part of `cli.c` | CORE.3 (02.10.2026): the lab's commands moved verbatim out of `cli.c`, registered through `cli_register_lab()` | R2, R3 | [SMOKE] `help` (order: core first) | `start`/`stop`/`samc`/`input`/`core`/`clk`/`pll` as typed commands |
+| `b2b_link.c` (lab) | `blk` never on silicon | CORE.2 (02.10.2026): `snap`/`rate`/`blk` moved verbatim out of `gui_link.c` | - | none | `snap`, `rate`, `blk`: no block sends them |
 
-## Libraries and diagnosis (`src/lib/`, `src/diag/`)
+## Libraries and diagnosis (`src/lib/`; `diag.c` in `src/core/`, `tri_eval.c` in `src/lab/`)
 
 | Module | Before N+1 | N+1 change | Tested by | Off-board | Not reached |
 |---|---|---|---|---|---|
@@ -129,7 +132,7 @@ that accepts `buf` and ignores it.
 | `iir1`, `goertzel_f`, `goertzel_i`, `detect`, `wavegen` | n/a | P3: new, linked, not called | - (host tests only) | host tests against a Python reference (within 1 LSB) | everything, by design until N+3/N+4 |
 | `diag.c` | proven (boot record, trap report) | restructured - P4.8 `reg_print()`; BR.6 stack high-water mark | R0/R7 (`status`: stack, buffer placement, boot/trap state), R1 (`regs_dump()`) | trace `regs` (`regs_dump()`/`reg_print()`); [SMOKE] `status` fields | the trap handler (fault only) |
 
-## Tests and meters (`src/tests/`, `src/meter/`)
+## Lab: tests and meters (`src/lab/`)
 
 | Module | Before N+1 | N+1 change | Tested by | Off-board | Not reached |
 |---|---|---|---|---|---|

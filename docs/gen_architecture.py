@@ -91,9 +91,21 @@ def changed_since(rev, files):
     (committed or not) - the code a green box was tested with is gone."""
     if not rev or not files:
         return False
-    r = subprocess.run(["git", "-C", REPO, "diff", "--quiet", rev, "--", *files],
-                       capture_output=True)
-    return r.returncode == 1
+    # The whole tree with rename detection, not a pathspec: a file moved
+    # unchanged (CORE.4, 02.10.2026: src/app -> src/core, ...) is an R100 and
+    # keeps its box green; a pathspec of new paths would see it as added.
+    r = subprocess.run(["git", "-C", REPO, "diff", "-M", "--name-status", rev],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return True
+    wanted = set(files)
+    for line in r.stdout.splitlines():
+        parts = line.split("\t")
+        if parts[0] == "R100":
+            continue
+        if wanted.intersection(parts[1:]):
+            return True
+    return False
 
 
 def effective(box):
@@ -229,32 +241,36 @@ def layers():
     d.append('<path class="ar2" d="M300 72 V120"/>')
     d.append('<text class="an" x="312" y="100">UART2 · text commands with ACK/NAK, binary frames (blk, GRAB) with CRC-16</text>')
 
-    d.append(band(112, 86, "cli", "Console", ["src/cli/", "src/link/"]))
-    d.append(box(170, 124, 400, 62, "cli.c · console.h", ["29 commands + help in 32 parser slots", "stream on|off|grab · route list · siggen · sigproc · status"], "cli"))
+    d.append(band(112, 86, "cli", "Console", ["src/core/"]))
+    d.append(box(170, 124, 400, 62, "cli.c · console.h", ["14 core commands + help; the lab adds 15 through", "cli_register_lab() (weak) · 32 parser slots"], "cli"))
     d.append(box(582, 124, 250, 62, "cmd_parser.c", ["upstream zabooh/cmd_parser", "do not edit (MAX_COMMANDS only)"], "cli"))
-    d.append(box(844, 124, 296, 62, "gui_link.c", ["snap · rate · blk", "stream grab: halt → send → resume"], "cli"))
+    d.append(box(844, 124, 296, 62, "gui_link.c", ["stream grab: a frozen pair →", "GRAB frame, the stream runs on"], "cli"))
 
-    d.append(band(214, 86, "test", "Tests & meters", ["src/tests/", "src/meter/"]))
+    d.append(band(214, 86, "test", "Lab", ["src/lab/", "src/sim/", "not in the core build"]))
     for i, (t, l) in enumerate([
-            ("chaintest.c", ["chain all S0..S9 · chain run", "@ log for eval_chain.py"]),
-            ("bench.c", ["sweep · test self/clock/clkoff/", "bursts/rate/matrix/dac"]),
-            ("dactest.c", ["judges captured halves", "against the DAC triangle"]),
-            ("meter.c", ["selftest · oneshot", "measure_rate (back-to-back)"])]):
-        d.append(box(170 + i * 245, 226, 233, 62, t, l, "test"))
+            ("chaintest.c", ["chain all S0..S9", "chain run"]),
+            ("bench.c", ["sweep · test", "(back-to-back)"]),
+            ("dactest.c", ["captured halves vs", "the DAC triangle"]),
+            ("meter.c", ["selftest · oneshot", "measure_rate"]),
+            ("tri_eval.c", ["triangle evaluator", "(chain test)"]),
+            ("cli_lab.c", ["15 lab commands:", "start … chain"]),
+            ("b2b_link.c", ["snap · rate · blk", "(back-to-back)"])]):
+        d.append(box(170 + i * 140, 226, 130, 62, t, l, "test"))
 
-    d.append(band(316, 176, "app", "Application", ["src/app/", "src/boards/"]))
-    d.append(box(170, 328, 150, 48, "main.c", ["start-up order, loop"], "app"))
-    d.append(box(332, 328, 330, 48, "acquisition.c", ["rate (PLL1), variant matrix, stream on/off, chain setup"], "app"))
-    d.append(box(674, 328, 250, 48, "routing.c", ["route_t, resources, routing_apply()"], "app"))
-    d.append(box(936, 328, 204, 48, "board.h · board_cfg", ["EV74H48A | EV17P63A"], "app"))
+    d.append(band(316, 176, "app", "Core · app glue", ["src/core/", "glue: src/app/,", "src/boards/"]))
+    d.append(box(170, 328, 120, 48, "main.c", ["glue · the lab's"], "app"))
+    d.append(box(302, 328, 150, 48, "example_main.c", ["core · customer start"], "app"))
+    d.append(box(464, 328, 270, 48, "acquisition.c", ["rate (PLL1), stream on/off, chain setup"], "app"))
+    d.append(box(746, 328, 200, 48, "routing.c", ["route_t, resources, apply()"], "app"))
+    d.append(box(958, 328, 182, 48, "board.h · board_cfg", ["glue · EV74H48A | EV17P63A"], "app"))
     d.append(box(170, 384, 290, 44, "capture.c", ["pairs A/B + guards · dma0_event() · counters"], "app"))
     d.append(box(472, 384, 218, 44, "sigproc.c", ["IIR low-pass, 4th order, fc = fs/8"], "app"))
     d.append(box(702, 384, 160, 44, "pingpong.c", ["half bookkeeping"], "app"))
-    d.append(box(874, 384, 266, 44, "port_impl.c", ["port_* → console / fail(), clock_fail_hook()"], "app"))
-    d.append(box(170, 440, 970, 44, "siggen.c", ["src/siggen/ · wavegen table (8192 x 16 bit, .dma_buffer) → dma.c ch. 2 → dac.c, paced by sccp.c (SCCP2); claim in routing.c; no register"], "app"))
+    d.append(box(874, 384, 266, 44, "port_impl.c", ["glue · port_* → console / fail()"], "app"))
+    d.append(box(170, 440, 970, 44, "siggen.c", ["src/core/ · wavegen table (8192 x 16 bit, .dma_buffer) → dma.c ch. 2 → dac.c, paced by sccp.c (SCCP2); claim in routing.c; no register"], "app"))
 
-    d.append(band(508, 86, "lib", "Libraries", ["src/lib/", "src/diag/"]))
-    d.append(box(170, 520, 380, 62, "frame · crc16 · fmt · stats · tri_eval", ["hardware-free, tested on the host", "(tests/host, Python cross-checks)"], "lib"))
+    d.append(band(508, 86, "lib", "Libraries", ["src/lib/", "diag.c: src/core/"]))
+    d.append(box(170, 520, 380, 62, "frame · crc16 · fmt · stats", ["hardware-free, tested on the host", "(tests/host, Python cross-checks)"], "lib"))
     d.append(box(562, 520, 300, 62, "iir1 · goertzel_f/i · detect · wavegen", ["wavegen: called by siggen.c", "rest linked, not called yet (N+4)"], "lib"))
     d.append(box(874, 520, 266, 62, "diag.c", ["fail() codes, trap, boot record,", "reg_print(), stack high-water mark"], "diag"))
 
@@ -263,7 +279,7 @@ def layers():
                            "wait.h · PORT_WAIT_WHILE()", "regs.h · reg_visit_t"]):
         d.append(box(170 + i * 245, 618, 233, 34, t, (), "port"))
 
-    d.append(band(676, 86, "drv", "Drivers", ["src/drivers/", "src/sim/"]))
+    d.append(band(676, 86, "drv", "Drivers", ["src/drivers/"]))
     drv = [("clock.c", ["PLL1, PLL2", "CLKGEN6/7/13"]), ("adc.c", ["core 5, burst", "trigger, calib."]),
            ("dma.c", ["ch. 0+1 ping-pong,", "ch. 2 tx; sim_dma.c"]), ("sccp.c", ["SCCP1 trigger,", "SCCP2 play clock"]),
            ("dac.c", ["DAC1/2 triangle", "UREF route"]), ("uart.c", ["UART2, PPS", "RX ISR, TX ring"]),
@@ -278,8 +294,10 @@ def layers():
         d.append(box(x, 688, 110, 62, t, l, "drv"))
         d.append(f'<path class="ln1" d="M{x+55} 750 V790"/>')
         d.append(box(x, 790, 110, 62, ht, hl, "hw"))
-    d.append(legend(20, 890))
-    return svg(1160, 928, "Firmware layers and modules", "\n".join(d))
+    d.append('<text class="s" x="20" y="884">Core (CORE, 02.10.2026; docs/CORE.md): src/drivers/, src/port/, src/lib/, src/core/ - what a customer '
+             'takes over, with their own glue in place of src/app/ and src/boards/. Lab: src/lab/, src/sim/.</text>')
+    d.append(legend(20, 906))
+    return svg(1160, 944, "Firmware layers and modules", "\n".join(d))
 
 
 def datapath():

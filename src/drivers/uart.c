@@ -10,6 +10,7 @@
 #include <stddef.h>
 #include "board.h"
 #include "uart.h"
+#include "disi.h"
 
 /* ------------------------------------------------------------------ *
  * UART2 registers
@@ -174,13 +175,13 @@ static inline uint32_t tx_used_of(uint32_t head, uint32_t tail)
 static inline uint32_t tx_lock(void)
 {
     const uint32_t old = DISIIPL;
-    (void)__builtin_write_DISICTL((old > tx_prio) ? old : tx_prio);
+    disi_set((old > tx_prio) ? old : tx_prio);
     return old;
 }
 
 static inline void tx_unlock(uint32_t old)
 {
-    (void)__builtin_write_DISICTL(old);
+    disi_set(old);
 }
 
 /* Ring -> FIFO, as much as fits: the interrupt's body, and the polled

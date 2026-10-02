@@ -53,6 +53,7 @@
 #include <string.h>
 #include "dactest.h"
 #include "capture.h"
+#include "meter.h"     /* the back-to-back instruments (CORE.5) */
 #include "adc.h"
 #include "dac.h"
 #include "dma.h"

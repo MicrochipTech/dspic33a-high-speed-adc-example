@@ -2,7 +2,7 @@
  * dma_tx.h - DMA channel 2 (channel 1 until 01.10.2026) as a transmit channel, the signal generator's
  * transport (dma.c, SG.1, 29.09.2026)
  *
- * A header of its own, without <xc.h>, so that src/siggen/siggen.c - which
+ * A header of its own, without <xc.h>, so that src/core/siggen.c - which
  * knows no register - and its host test (tests/host/test_siggen.c) build
  * with a host gcc; dma.h includes it for everything else.
  */

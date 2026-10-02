@@ -16,6 +16,10 @@ rem                                              -> ..\build\adc_dma_40msps_smok
 rem                                                 (..._smokefault<n>.elf with n given)
 rem    build.bat nano     the EV17P63A Curiosity Nano (dsPIC33AK512MPS506)
 rem                                              -> ..\build\adc_dma_40msps_nano.elf/.hex
+rem    build.bat core     the customer's core build (CORE.5, 02.10.2026): drivers,
+rem                       port, lib, core, the app glue and src\core\example_main.c
+rem                       instead of main.c - no file of src\lab\ or src\sim\
+rem                                              -> ..\build\adc_dma_40msps_core.elf/.hex
 rem    build.bat nanosmoke  the smoke build for the Nano, for
 rem                       tools\sim_trap.py --smoke --nano
 rem                                              -> ..\build\adc_dma_40msps_nanosmoke.elf
@@ -99,8 +103,19 @@ if /i "%1"=="nanosmoke" (
   set BOARDFILE=..\src\boards\ev17p63a.c
 )
 set SRC=..\src
-set INC=-I%SRC%\drivers -I%SRC%\app -I%SRC%\cli -I%SRC%\tests -I%SRC%\lib -I%SRC%\diag -I%SRC%\sim -I%SRC%\port -I%SRC%\link -I%SRC%\boards -I%SRC%\meter -I%SRC%\siggen
-set SOURCES=%SRC%\app\main.c %SRC%\app\config_bits.c %SRC%\app\port_impl.c %SRC%\drivers\clock.c %SRC%\drivers\adc.c %DMA% %SRC%\app\pingpong.c %SRC%\app\sigproc.c %SRC%\app\capture.c %SRC%\app\acquisition.c %SRC%\app\routing.c %SRC%\meter\meter.c %SRC%\lib\crc16.c %SRC%\lib\fmt.c %SRC%\lib\stats.c %SRC%\lib\tri_eval.c %SRC%\lib\iir1.c %SRC%\lib\goertzel_f.c %SRC%\lib\goertzel_i.c %SRC%\lib\detect.c %SRC%\lib\wavegen.c %SRC%\siggen\siggen.c %SRC%\lib\frame.c %SRC%\drivers\sccp.c %SRC%\drivers\led.c %SRC%\diag\diag.c %SRC%\drivers\timebase.c %SRC%\drivers\dac.c %SRC%\drivers\uart.c %SRC%\tests\dactest.c %SRC%\tests\chaintest.c %SRC%\tests\bench.c %SRC%\link\gui_link.c %SRC%\cli\cli.c %SRC%\cli\cmd_parser.c %BOARDFILE%
+set MAIN=%SRC%\app\main.c
+set INC=-I%SRC%\drivers -I%SRC%\app -I%SRC%\core -I%SRC%\lab -I%SRC%\lib -I%SRC%\sim -I%SRC%\port -I%SRC%\boards
+rem  The lab (CORE, 02.10.2026): every file of src\lab\, on top of the core.
+set LAB=%SRC%\lab\meter.c %SRC%\lab\tri_eval.c %SRC%\lab\dactest.c %SRC%\lab\chaintest.c %SRC%\lab\bench.c %SRC%\lab\b2b_link.c %SRC%\lab\cli_lab.c
+rem  build.bat core: without the lab, src\lab\ and src\sim\ not even on the
+rem  include path, so a core file that reaches into the lab fails here.
+if /i "%1"=="core" (
+  set MAIN=%SRC%\core\example_main.c
+  set LAB=
+  set INC=-I%SRC%\drivers -I%SRC%\app -I%SRC%\core -I%SRC%\lib -I%SRC%\port -I%SRC%\boards
+  set OUT=..\build\%TARGET%_core
+)
+set SOURCES=%MAIN% %SRC%\app\config_bits.c %SRC%\app\port_impl.c %SRC%\drivers\clock.c %SRC%\drivers\adc.c %DMA% %SRC%\core\pingpong.c %SRC%\core\sigproc.c %SRC%\core\capture.c %SRC%\core\acquisition.c %SRC%\core\routing.c %SRC%\lib\crc16.c %SRC%\lib\fmt.c %SRC%\lib\stats.c %SRC%\lib\iir1.c %SRC%\lib\goertzel_f.c %SRC%\lib\goertzel_i.c %SRC%\lib\detect.c %SRC%\lib\wavegen.c %SRC%\core\siggen.c %SRC%\lib\frame.c %SRC%\drivers\sccp.c %SRC%\drivers\led.c %SRC%\core\diag.c %SRC%\drivers\timebase.c %SRC%\drivers\dac.c %SRC%\drivers\uart.c %SRC%\core\gui_link.c %SRC%\core\cli.c %SRC%\core\cmd_parser.c %BOARDFILE% %LAB%
 
 if not exist ..\build mkdir ..\build
 

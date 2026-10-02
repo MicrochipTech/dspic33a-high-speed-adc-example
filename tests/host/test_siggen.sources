@@ -1,2 +1,2 @@
-src/siggen/siggen.c
+src/core/siggen.c
 src/lib/wavegen.c

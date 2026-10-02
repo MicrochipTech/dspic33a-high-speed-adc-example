@@ -79,17 +79,17 @@ BLOCK_ORDER = ["R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7"]
 # R1, for instance), just the files a correction card for that block would
 # start reading.
 BLOCK_FILES = {
-    "R0": ["src/cli/cli.c", "src/diag/diag.c"],
-    "R1": ["src/diag/diag.c", "src/port/regs.h", "src/drivers/adc.c",
+    "R0": ["src/core/cli.c", "src/core/diag.c"],
+    "R1": ["src/core/diag.c", "src/port/regs.h", "src/drivers/adc.c",
            "src/drivers/dma.c", "src/drivers/clock.c"],
-    "R2": ["src/tests/chaintest.c", "src/tests/chaintest_priv.h", "tools/eval_chain.py"],
-    "R3": ["src/tests/bench.c"],
-    "R4": ["src/link/gui_link.c", "src/app/acquisition.c", "src/app/capture.c",
-           "src/app/pingpong.c", "tools/protocol.py"],
-    "R5": ["src/link/gui_link.c", "src/app/acquisition.c", "src/app/capture.c",
-           "src/app/pingpong.c", "tools/protocol.py"],
-    "R6": ["src/app/routing.c", "src/app/routing.h", "src/cli/cli.c"],
-    "R7": ["src/cli/cli.c", "src/diag/diag.c"],
+    "R2": ["src/lab/chaintest.c", "src/core/acquisition_priv.h", "tools/eval_chain.py"],
+    "R3": ["src/lab/bench.c", "src/lab/cli_lab.c"],
+    "R4": ["src/core/gui_link.c", "src/core/acquisition.c", "src/core/capture.c",
+           "src/core/pingpong.c", "tools/protocol.py"],
+    "R5": ["src/core/gui_link.c", "src/core/acquisition.c", "src/core/capture.c",
+           "src/core/pingpong.c", "tools/protocol.py"],
+    "R6": ["src/core/routing.c", "src/core/routing.h", "src/core/cli.c"],
+    "R7": ["src/core/cli.c", "src/core/diag.c"],
 }
 
 DEFAULT_EXPECTED_PATH = os.path.normpath(
@@ -148,7 +148,7 @@ def block_rx_lines(entries, block):
 
 # ---------------------------------------------------------------------------
 # "key: value" lines - regs (R1) and status (R0/R7): console_kv()/
-# console_kv_hex() (src/cli/cli.c) both print exactly "key: value".
+# console_kv_hex() (src/core/cli.c) both print exactly "key: value".
 # ---------------------------------------------------------------------------
 _KV_RE = re.compile(r"^([^:]+):\s*(\S+)$")
 

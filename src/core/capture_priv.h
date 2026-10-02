@@ -5,7 +5,7 @@
  * NOT part of capture.h's public, console-facing API - nothing outside
  * capture.c, meter.c and acquisition.c includes this. It exists because
  * P9.3 (27.09.2026) moved capture_selftest()/capture_clkoff_probe()/
- * capture_oneshot_n()/capture_measure_rate() into src/meter/meter.c, but
+ * capture_oneshot_n()/capture_measure_rate() into src/lab/meter.c, but
  * two things they need stay in capture.c on purpose:
  *
  *   process_buffer()   called by capture_service() (the main loop) until

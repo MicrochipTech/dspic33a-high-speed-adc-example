@@ -1,9 +1,9 @@
 src/drivers/clock.c
 src/drivers/timebase.c
 src/drivers/adc.c
-src/app/pingpong.c
-src/app/capture.c
-src/app/sigproc.c
+src/core/pingpong.c
+src/core/capture.c
+src/core/sigproc.c
 src/drivers/dma.c
 src/drivers/led.c
 src/drivers/sccp.c
