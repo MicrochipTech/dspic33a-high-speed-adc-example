@@ -45,7 +45,7 @@ The only calls that go upwards are hooks:
 
 | Hook | From | To |
 |---|---|---|
-| `dma0_event()` | `_DMA0Interrupt` in `dma.c` | `capture.c` |
+| `dma0_event()` | `_DMA0Interrupt`/`_DMA1Interrupt` in `dma.c` | `capture.c` |
 | `adc_ch0_event()` | `adc.c` | `chaintest.c` |
 | `clock_fail_hook()` | `clock.c` (weak default) | `port_impl.c` (strong) |
 | `uart_rx_hook()` | `uart.c` (weak default) | `cli.c` (strong) |
@@ -66,15 +66,30 @@ never by a driver. Every build links exactly one board file (`ev74h48a.c` or
 Top, the chain in silicon; bottom, what the firmware does with it. `stream on` sets the
 chain up through the routing core (`routing_apply()` -> `acq_chain_setup_input()`: DMA
 off, cores off, clock and trigger, cores on, DMA from scratch). SCCP1 paces the
-conversions, so its period is the sample rate. DMA0 moves one result per trigger into
-the ping-pong buffer and raises HALF/DONE; the interrupt books the completed half
-(`dma0_event()` -> `pingpong_on_half()`), and the main loop's `capture_service()`
-processes it while the DMA fills the other half. `stream grab` halts the trigger, sends
-the last completed half as a GRAB frame with CRC-16 and restarts the trigger - the DMA
-channel stays armed throughout.
+conversions, so its period is the sample rate.
+
+The buffer holds **two ping-pong pairs**, A and B, each a ping half and a pong half (up
+to 1024 samples per half, 8 KB in all). DMA channels 0 and 1 run as the controller's
+hardware ping-pong pair (DS70005591D 13.4.11): channel 0 fills the ping half, channel 1
+the pong half, one result per trigger, and the hardware hands over from one to the
+other without a lost sample. Each channel's DONE is one completed half; the interrupt
+books it (`dma0_event()` -> `pingpong_on_half()`) and the main loop's
+`capture_service()` processes it while the DMA fills the next one - with `sigproc on`,
+through `sigproc_block()`: a 4th-order Butterworth low-pass with its cut-off at fs/4,
+the middle of the useful band, its result written back into the same half.
+
+`stream grab` does not stop anything. It asks `dma0_event()` to move on to the other
+pair: the channel that is waiting at that moment is pointed at the other pair (a
+waiting channel can be moved at any time, a running one cannot), so after the next
+pong the pair just completed - ping then pong, contiguous - stands still. It goes out
+as one GRAB frame with CRC-16 while acquisition and processing carry on in the other
+pair, and is released for the next grab. The GUI therefore sees snapshots of the
+signal, one pair at a time, and the processing never sees a gap in its input. The
+back-to-back commands (`start`, `test`, `blk`) still use channel 0 alone on pair A.
 
 Solid arrows are clock, data and calls; dashed ones are configuration and the main
-loop's read access to the buffer.
+loop's read access to the buffer. The signal generator (`siggen.c`, not in this
+picture) plays its table through DMA channel 2.
 
 ## What has run on silicon
 
@@ -85,3 +100,10 @@ and missed all 0; the DAC triangle came through without a lost or repeated sampl
 has **not** run on silicon yet - the first board run to say whether it holds is phase BR
 (`docs/IMPLEMENTATION-PLAN.md`). Still open: DMA overruns from 10 MSPS and the ADC's
 triggered ceiling of about 18-20 MSPS (`docs/ANALYSIS.md`).
+
+Since then, on the EV74H48A (01./02.10.2026, `docs/HARDWARE-LOG.md`): the two-pair
+design - grabs of 2048 samples, the DAC triangle contiguous in every frame, overrun,
+late and missed 0 at 1/4/8/10 MSPS, the stream never stopped; at 16 and 20 MSPS the
+pair mode raises DMA overruns without losing data (open). The low-pass matches its
+design within 0.6 dB on the triangle's harmonics and costs about 43 CPU cycles per
+sample, so it keeps up to 2 MSPS; at 4 MSPS and above halves go unprocessed.

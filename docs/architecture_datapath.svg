@@ -71,14 +71,18 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 <text class="s" x="570" y="147">trigger 0x20 = SCCP1</text>
 <rect class="bx s-hw" x="780" y="80" width="150" height="84" rx="4"/>
 
-<text class="t" x="790" y="105">DMA0</text>
-<text class="s" x="790" y="119">repeated one-shot</text>
-<text class="s" x="790" y="133">TRMODE = 1</text>
-<text class="s" x="790" y="147">1 transfer / trigger</text>
-<text class="an" x="980" y="52">ping-pong buffer in RAM</text>
-<rect class="bx s-hw" x="980" y="60" width="170" height="52" rx="4"/><text class="t" x="990" y="91">half A</text>
-<rect class="bx s-hw" x="980" y="112" width="170" height="52" rx="4"/><text class="t" x="990" y="143">half B</text>
+<text class="t" x="790" y="105">DMA0 + DMA1</text>
+<text class="s" x="790" y="119">hardware ping-pong,</text>
+<text class="s" x="790" y="133">1 transfer / trigger</text>
+<text class="s" x="790" y="147">ch. 0 ping · ch. 1 pong</text>
+<text class="an" x="980" y="52">2 ping-pong pairs in RAM</text>
+<rect class="bx s-hw" x="980" y="60" width="85" height="52" rx="4"/><text class="t" x="990" y="91">A ping</text>
+<rect class="bx s-hw" x="1065" y="60" width="85" height="52" rx="4"/><text class="t" x="1075" y="91">A pong</text>
+<rect class="bx s-hw" x="980" y="112" width="85" height="52" rx="4"/><text class="t" x="990" y="143">B ping</text>
+<rect class="bx s-hw" x="1065" y="112" width="85" height="52" rx="4"/><text class="t" x="1075" y="143">B pong</text>
 <rect class="bx s-diag" x="980" y="164" width="170" height="20" rx="3"/><text class="s" x="990" y="178">guard words</text>
+<text class="an" x="980" y="200">the stream runs in one pair;</text>
+<text class="an" x="980" y="214">a grab freezes the other</text>
 <path class="ar" d="M140 118 H160 V62 H180"/>
 <path class="ar" d="M140 118 H160 V122 H180"/>
 <path class="ar" d="M140 118 H160 V182 H180"/>
@@ -110,7 +114,7 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 <rect class="bx s-app" x="980" y="290" width="170" height="56" rx="4"/>
 <circle class="st-pending" cx="1139" cy="301" r="5"><title>not tested with this version yet (changed since it was tested at 7b16260)</title></circle>
 <text class="t" x="990" y="308">dma0_event()</text>
-<text class="s" x="990" y="322">capture.c</text>
+<text class="s" x="990" y="322">capture.c · pair move</text>
 <text class="s" x="990" y="336">→ pingpong_on_half()</text>
 <rect class="bx s-host dash" x="200" y="390" width="200" height="56" rx="4"/>
 <circle class="st-pending" cx="389" cy="401" r="5"><title>not tested with this version yet (changed since it was tested at 86f4753); open: the GUI itself in a board-run block - checked by hand 29.09.2026 (DAC cards with force, buffer tile, DISCONNECT during LIVE), not by a block</title></circle>
@@ -128,8 +132,8 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 <rect class="bx s-app" x="980" y="390" width="170" height="56" rx="4"/>
 <circle class="st-pending" cx="1139" cy="401" r="5"><title>not tested with this version yet (changed since it was tested at 7b16260)</title></circle>
 <text class="t" x="990" y="408">capture_service()</text>
-<text class="s" x="990" y="422">main loop:</text>
-<text class="s" x="990" y="436">sigproc_block() if on</text>
+<text class="s" x="990" y="422">sigproc_block() if on:</text>
+<text class="s" x="990" y="436">IIR low-pass fs/4</text>
 <path class="ar" d="M400 318 H450"/>
 <path class="ar" d="M855 164 V290"/>
 <path class="ar" d="M930 318 H980"/>
@@ -141,8 +145,8 @@ svg{--bg:#f4f6f8;--ink:#17202b;--muted:#566273;--line:#b9c2cd;--surface:#fff;--a
 <path class="ar dash" d="M640 290 V164"/>
 <path class="ar dash" d="M1150 150 H1168 V418 H1150"/>
 <text class="an" x="648" y="244">sets up</text>
-<text class="an" x="862" y="244">HALF / DONE</text>
-<text class="an" x="1072" y="372">ready_half</text>
+<text class="an" x="862" y="244">ping / pong DONE</text>
+<text class="an" x="1072" y="372">ready_off</text>
 <text class="an" x="308" y="372">command</text>
 <text class="s" x="20" y="494">Test status, 30.09.2026 (docs/TEST-COVERAGE.md):</text>
 <circle class="st-tested" cx="26" cy="510" r="5"/>

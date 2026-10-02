@@ -247,9 +247,9 @@ def layers():
     d.append(box(332, 328, 330, 48, "acquisition.c", ["rate (PLL1), variant matrix, stream on/off, chain setup"], "app"))
     d.append(box(674, 328, 250, 48, "routing.c", ["route_t, resources, routing_apply()"], "app"))
     d.append(box(936, 328, 204, 48, "board.h · board_cfg", ["EV74H48A | EV17P63A"], "app"))
-    d.append(box(170, 384, 300, 44, "capture.c", ["buffer + guards · dma0_event() · counters"], "app"))
-    d.append(box(482, 384, 128, 44, "sigproc.c", ["per half, in place"], "app"))
-    d.append(box(622, 384, 240, 44, "pingpong.c", ["completed half, missed, block count"], "app"))
+    d.append(box(170, 384, 290, 44, "capture.c", ["pairs A/B + guards · dma0_event() · counters"], "app"))
+    d.append(box(472, 384, 218, 44, "sigproc.c", ["IIR low-pass, 4th order, fc = fs/4"], "app"))
+    d.append(box(702, 384, 160, 44, "pingpong.c", ["half bookkeeping"], "app"))
     d.append(box(874, 384, 266, 44, "port_impl.c", ["port_* → console / fail(), clock_fail_hook()"], "app"))
     d.append(box(170, 440, 970, 44, "siggen.c", ["src/siggen/ · wavegen table (8192 x 16 bit, .dma_buffer) → dma.c ch. 2 → dac.c, paced by sccp.c (SCCP2); claim in routing.c; no register"], "app"))
 
@@ -295,11 +295,16 @@ def datapath():
     g.append(box(360, 40, 150, 44, "SCCP1", ["period = sample rate"], "hw"))
     g.append(box(360, 160, 150, 44, "DAC2", ["triangle, test signal"], "hw"))
     g.append(box(560, 80, 170, 84, "ADC core 5", ["single mode", "PINSEL 3 = AD5AN3", "trigger 0x20 = SCCP1"], "hw"))
-    g.append(box(780, 80, 150, 84, "DMA0", ["repeated one-shot", "TRMODE = 1", "1 transfer / trigger"], "hw"))
-    g.append('<text class="an" x="980" y="52">ping-pong buffer in RAM</text>')
-    g.append('<rect class="bx s-hw" x="980" y="60" width="170" height="52" rx="4"/><text class="t" x="990" y="91">half A</text>')
-    g.append('<rect class="bx s-hw" x="980" y="112" width="170" height="52" rx="4"/><text class="t" x="990" y="143">half B</text>')
+    g.append(box(780, 80, 150, 84, "DMA0 + DMA1", ["hardware ping-pong,", "1 transfer / trigger", "ch. 0 ping · ch. 1 pong"], "hw"))
+    g.append('<text class="an" x="980" y="52">2 ping-pong pairs in RAM</text>')
+    for row, (pair, y) in enumerate((("A", 60), ("B", 112))):
+        for col, half in enumerate(("ping", "pong")):
+            x = 980 + col * 85
+            g.append(f'<rect class="bx s-hw" x="{x}" y="{y}" width="85" height="52" rx="4"/>'
+                     f'<text class="t" x="{x + 10}" y="{y + 31}">{pair} {half}</text>')
     g.append('<rect class="bx s-diag" x="980" y="164" width="170" height="20" rx="3"/><text class="s" x="990" y="178">guard words</text>')
+    g.append('<text class="an" x="980" y="200">the stream runs in one pair;</text>')
+    g.append('<text class="an" x="980" y="214">a grab freezes the other</text>')
     for p in ["M140 118 H160 V62 H180", "M140 118 H160 V122 H180", "M140 118 H160 V182 H180",
               "M320 62 H360", "M320 182 H360", "M320 122 H560", "M510 62 H535 V96 H560",
               "M510 182 H535 V148 H560", "M730 122 H780", "M930 122 H980"]:
@@ -311,19 +316,19 @@ def datapath():
     g.append(box(200, 290, 200, 56, "cli.c", ["stream on <ksps> [core pinsel]"], "cli"))
     g.append(box(450, 290, 280, 56, "routing_apply()", ["→ acq_chain_setup_input()", "DMA off, cores off, clock, cores on, DMA anew"], "app"))
     g.append(box(780, 290, 150, 56, "_DMA0Interrupt", ["dma.c · + _DMA1Interrupt", "46 / 41 instr."], "drv"))
-    g.append(box(980, 290, 170, 56, "dma0_event()", ["capture.c", "→ pingpong_on_half()"], "app"))
+    g.append(box(980, 290, 170, 56, "dma0_event()", ["capture.c · pair move", "→ pingpong_on_half()"], "app"))
     g.append(box(200, 390, 200, 56, "adc_gui.py (host)", ["time signal, FFT, tri_eval"], "host", True))
     g.append(box(450, 390, 200, 56, "uart.c · UART2", ["GRAB header, data, CRC"], "drv"))
     g.append(box(700, 390, 250, 56, "gui_link_stream_grab()", ["freeze a pair → frame_send()", "→ release; the stream runs on"], "cli"))
-    g.append(box(980, 390, 170, 56, "capture_service()", ["main loop:", "sigproc_block() if on"], "app"))
+    g.append(box(980, 390, 170, 56, "capture_service()", ["sigproc_block() if on:", "IIR low-pass fs/4"], "app"))
     for p in ["M400 318 H450", "M855 164 V290", "M930 318 H980", "M1065 346 V390", "M980 418 H950",
               "M700 418 H650", "M450 418 H400", "M300 390 V346"]:
         g.append(f'<path class="ar" d="{p}"/>')
     g.append('<path class="ar dash" d="M640 290 V164"/>')
     g.append('<path class="ar dash" d="M1150 150 H1168 V418 H1150"/>')
     g.append('<text class="an" x="648" y="244">sets up</text>')
-    g.append('<text class="an" x="862" y="244">HALF / DONE</text>')
-    g.append('<text class="an" x="1072" y="372">ready_half</text>')
+    g.append('<text class="an" x="862" y="244">ping / pong DONE</text>')
+    g.append('<text class="an" x="1072" y="372">ready_off</text>')
     g.append('<text class="an" x="308" y="372">command</text>')
     g.append(legend(20, 490))
     return svg(1190, 528, "Data path while streaming", "\n".join(g))

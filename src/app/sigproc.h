@@ -52,6 +52,11 @@ typedef struct {
                          * were missed                                     */
     uint32_t missed;    /* halves the main loop never got to, since the
                          * counters were last cleared (proc_missed)        */
+    uint32_t gap;       /* 1: this block does NOT follow the last one this
+                         * function saw - the first after "sigproc on", the
+                         * first of a (re)started stream, or halves missed
+                         * in between. A filter re-starts its state here
+                         * instead of carrying it across the gap.        */
 } sigproc_info_t;
 
 /* x: the completed half, n samples (capture_half_len()); read it, and

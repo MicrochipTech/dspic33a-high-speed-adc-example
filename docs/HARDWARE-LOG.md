@@ -2106,3 +2106,32 @@ changes` in the banner.
 
 Not run: `test all`, the GUI against this image (gui_ui_test only with --fake), the
 Nano, longer runs at 16-20 MSPS.
+
+## 2026-10-02, 4th-order IIR low-pass at fs/4 in sigproc_block() - 2481e31 + local changes, local (COM26)
+
+`sigproc_block()` (src/app/sigproc.c) got its first processing: a Butterworth low-pass,
+4th order, cut-off at fs/4 - the middle of the useful band 0..fs/2. Bilinear transform
+with pre-warp tan(pi/4) = 1: two sections g (1 + 2z^-1 + z^-2) / (1 + a2 z^-2),
+g1 = 0.361616, a2 = 0.446463 and g2 = 0.259892, a2 = 0.039566 (a1 = 0 in both, unity DC
+gain each); computed by hand (no scipy on this PC) and checked numerically: -3.01 dB at
+fs/4, -30.6 dB at 0.375 fs. New `sigproc_info_t.gap` (first block after `sigproc on` or a
+stream start, or halves missed): the filter re-settles on the block's first sample.
+`tests/host/test_sigproc.c` checks DC, pass band, cut-off, stop band, no seam between
+blocks, the gap and the clamp.
+
+- **Frequency response on the board:** `stream on 100` (the DAC2 test triangle, odd
+  harmonics at 0.022, 0.066, ... fs), the same stationary signal grabbed with
+  `sigproc off` and `on`, the ratio at every harmonic against the design: 0.00 dB up to
+  0.15 fs, -0.37 dB at 0.199 fs (design -0.30), -2.37 at 0.243 fs (-2.28), -8.76 at
+  0.287 fs (-8.79), -30.78 at 0.375 fs (-30.63); worst deviation 0.6 dB where the design
+  is above -40 dB. Below that the 12-bit output's own noise floor (about -40 dB here).
+- **Cost** (`stream`'s "free CPU cycles per sample", 10 grabs each with sigproc on):
+  59 cycles per sample with the state in statics (1 MSPS 141 free, 2 MSPS 41 free,
+  4 MSPS missed 2637 halves), 43 with the state in locals and the section gains folded
+  into one output multiply (1 MSPS 157, 2 MSPS 57, 4 MSPS 7 free and 50 halves missed,
+  5/6/8 MSPS missed many); two samples per pass (the even and odd recursions are
+  independent since a1 = 0) gave nothing more - kept, it is no slower. So: up to
+  2 MSPS with the low-pass on; overrun 0 at every rate, the data stay contiguous, only
+  halves go unprocessed above that.
+
+Not run: a faster fixed-point version; the GUI against this image.

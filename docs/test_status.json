@@ -328,13 +328,13 @@
       "offboard": true,
       "blocks": [],
       "open": [
-        "not run on silicon: 'sigproc on', the held-back console bytes and the processed grab (proc=1) are new on 01.10.2026; the body is still an empty stub - covered off the board by the simulator smoke/acceptance runs (with it off) and adc_gui.py --selftest (FakeTarget)"
+        "the low-pass (02.10.2026) ran on the board - frequency response within 0.6 dB of the design, grabs with proc=1 - but not with this committed version yet; it keeps up only to 2 MSPS (about 43 CPU cycles per sample)"
       ],
       "files": [
         "src/app/sigproc.c",
         "src/app/sigproc.h"
       ],
-      "evidence": "none on silicon yet",
+      "evidence": "HARDWARE-LOG 2026-10-02 (the low-pass entry); not marked tested - no board run of the committed revision",
       "rev": null
     },
     "capture_service()": {

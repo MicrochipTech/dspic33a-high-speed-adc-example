@@ -197,6 +197,12 @@ static volatile bool     pair_req    = false;
 static volatile bool     pair_moving = false;
 static volatile uint32_t pair_frozen = PAIR_NONE;
 
+/* For sigproc_info_t.gap: the block number last handed to sigproc_block(),
+ * and "nothing handed over since the processing was switched on or the
+ * counters cleared" (every stream start clears them). */
+static uint32_t      sp_last_seq  = 0u;
+static volatile bool sp_fresh     = true;
+
 /* Channel reconfiguration requested by the console or the self-test,
  * applied by the ISR between two bursts, when the channel is idle. */
 static volatile bool    switch_pending = false;
@@ -797,6 +803,7 @@ void capture_pair_release(void)
 
 void counters_clear(void)
 {
+    sp_fresh      = true;             /* sigproc: the next block is a gap */
     overrun_abort = false;            /* re-arm the brake               */
     overrun_run   = 0;
     isr_entries = 0; half_events = 0; done_events = 0; burst_starts = 0;
@@ -880,7 +887,7 @@ void process_buffer(const volatile uint16_t *b, uint32_t n)
 static volatile bool sigproc_on   = false;
 static volatile bool sigproc_busy = false;
 
-void capture_sigproc_enable(bool on) { sigproc_on = on; }
+void capture_sigproc_enable(bool on) { if (on && !sigproc_on) { sp_fresh = true; } sigproc_on = on; }
 bool capture_sigproc_enabled(void)   { return sigproc_on; }
 bool capture_sigproc_busy(void)      { return sigproc_busy; }
 
@@ -919,11 +926,15 @@ static bool service_once(bool processing)
     const uint32_t h = ((off / n) & 1u);  /* ping or pong, from the same read */
     const volatile uint16_t *half = &buf[off];
     SIM_CHECK_HALF(half, n);          /* simulator: is this really the next half? */
-    const sigproc_info_t info = { h, pp.seen_blocks, proc_missed };
+    const uint32_t seq = pp.seen_blocks;
+    const sigproc_info_t info = { h, seq, proc_missed,
+                                  (sp_fresh || (seq != sp_last_seq + 1u)) ? 1u : 0u };
     __asm__ volatile ("" ::: "memory");
     const uint32_t t0 = timebase_ticks();
     if (processing) {
         sigproc_block((uint16_t *)(volatile void *)half, n, &info);
+        sp_last_seq = seq;
+        sp_fresh    = false;
     }
     __asm__ volatile ("" ::: "memory");
     const uint32_t dt = timebase_ticks() - t0;
