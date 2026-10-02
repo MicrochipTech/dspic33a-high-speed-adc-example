@@ -135,9 +135,11 @@ def summary(path, text):
         files = sorted(e.text for e in root.find("logicalFolder").iter("itemPath"))
         confs = []
         for c in root.find("confs"):
-            props = {p.get("key"): p.get("value") for p in c.iter("property")
+            # the configuration's own C30 section only (MPLAB X also writes
+            # empty ones into every file's <item>), an empty value = absent
+            props = {p.get("key"): p.get("value") for p in c.find("C30").findall("property")
                      if p.get("key") in ("extra-include-directories", "optimization-level",
-                                         "preprocessor-macros")}
+                                         "preprocessor-macros") and p.get("value")}
             confs.append((c.get("name"), c.findtext("toolsSet/targetDevice"),
                           c.findtext("toolsSet/platformTool"),
                           sorted(i.get("path") for i in c.findall("item") if i.get("ex") == "true"),
