@@ -45,6 +45,11 @@
     "slope": "rising",
     "hyst": 16
   },
+  "sigproc": {
+    "filter": "off",
+    "gz": false,
+    "thr": 100
+  },
   "buffer": {
     "size": 4096
   },

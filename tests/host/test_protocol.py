@@ -45,7 +45,9 @@ def build_grab_frame(samples, **meta):
               f"halves={meta.get('halves', 2)} xfer={meta.get('xfer', 2 * n)} "
               f"slp={meta.get('slp', 8)} dachz={meta.get('dachz', 320000000)}"
               + (f" proc={meta['proc']}" if "proc" in meta else "")
-              + (f" load={meta['load']}" if "load" in meta else "") + "\r\n")
+              + (f" load={meta['load']}" if "load" in meta else "")
+              + (f" gz={meta['gz'][0]} gzs={meta['gz'][1]} gzd={meta['gz'][2]}" if "gz" in meta else "")
+              + "\r\n")
     payload = b"".join(int(v & 0x0FFF).to_bytes(2, "little") for v in samples)
     crc = protocol.crc16_ccitt_false(payload)
     tail = f"\r\nCRC {crc:04X}\r\n> ".encode("ascii") + protocol.ACK
@@ -186,6 +188,14 @@ def main() -> int:
     ok_all &= check("GRAB frame load= read, None when absent",
                      meta_l["load_pm"] == 634 and meta_l["proc"] == 1 and meta_old["load_pm"] is None,
                      f"load={meta_l['load_pm']} absent={meta_old['load_pm']}")
+
+    # proc= names the filter and gz=/gzs=/gzd= the Goertzel (02.10.2026)
+    _, _, meta_g = protocol.parse_grab_frame(*build_grab_frame(samples, proc=3, load=600, gz=(812, 997, 1)))
+    ok_all &= check("GRAB frame proc=3 and the Goertzel fields read, gz None when absent",
+                     meta_g["proc"] == 3 and protocol.PROC_NAMES[3] == "band-pass"
+                     and meta_g["gz"] == dict(amp=812, share_pm=997, detected=1)
+                     and meta_l["gz"] is None and meta_g["load_pm"] == 600,
+                     f"proc={meta_g['proc']} gz={meta_g['gz']} absent={meta_l['gz']}")
 
     # n=0 is the NAK shape ("stream on" not running / halt-restart failed) -
     # the same frame FakeTarget.grab() and the firmware send for that case.

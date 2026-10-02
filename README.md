@@ -641,19 +641,27 @@ the cause of the next overrun.
 
 ![CPU and counters](docs/04_cpu_and_counters.png)
 
-**Your own processing goes into `src/core/sigproc.c`** (`sigproc_block()`). Since 02.10.2026
-it holds a **4th-order Butterworth low-pass with its cut-off at fs/8** - a quarter of the
-useful band 0..fs/2 (fs/4 for a few hours the same day), so it follows the sample rate by
-itself: two biquad sections, float on the FPU, the state carried from block to block (the
-ping-pong stream has no gaps) and restarted where the firmware reports one (`info->gap`).
-On the board it matches its design within 0.7 dB (-1.26 dB at 0.110 fs, -9.05 dB at
-0.154 fs, -29.2 dB at 0.243 fs) and costs about 63 CPU cycles per sample: it keeps up to
-2 MSPS, at 3 MSPS and above halves go unprocessed. Replace it with your own processing as
-you need. The firmware calls it from the main loop once per completed half - ping and pong
-alike - while `sigproc on` is set (console, or the GUI's "signal processing" switch; off
-after reset), with the half's samples, its length and which half it is. The result goes
+**Your own processing goes into `src/core/sigproc.c`** (`sigproc_block()`). As an example
+it holds, selectable since 02.10.2026 (`sigproc lp|hp|bp|off`, the GUI's **signal
+processing** card), one of three **4th-order Butterworth filters at fs/8** - low-pass,
+high-pass, or a band-pass one octave wide around fs/8 (high- and band-pass centred on
+mid-scale, 2048) - and, independently, a **Goertzel detector for a tone at fs/16**
+(`sigproc gz on|off`, `sigproc gz thr <lsb>`), which measures the input before the filter
+and reports the tone's amplitude, its share of the signal's power and detected or not
+(GRAB `gz=`/`gzs=`/`gzd=`, the card's fs/16 chip). Being fractions of fs, all of them
+follow the sample rate by themselves. Coefficients: `tools/sigproc_design.py`. Each filter
+is two biquad sections, float on the FPU, the state carried from block to block (the
+ping-pong stream has no gaps) and restarted where the firmware reports one (`info->gap`) or
+the filter changes. On the board (02.10.2026, the signal generator through DAC2 -> RA8 at
+400 kSPS) all three match their design to three decimals at fs/32, fs/16, fs/8 and fs/4,
+and the Goertzel finds a tone at fs/16 (1341 LSB, 100 % of the power) and nothing at the
+other three. A filter costs about 63-67 CPU cycles per sample (33 % at 1 MSPS: up to
+2 MSPS), the Goertzel up to about 55 more. Replace it with your own processing as you need.
+The firmware calls it from the main loop once per completed half - ping and pong alike -
+while a filter or the Goertzel is on (off after reset), with the half's samples, its
+length and which half it is. The result goes
 back into the same half: `stream grab` then sends the processed data to the GUI (the frame
-says `proc=1`), with no second buffer. It has one half period to return (1024 samples at
+says which filter: `proc=1` low-pass, `2` high-pass, `3` band-pass), with no second buffer. It has one half period to return (1024 samples at
 8 MSPS: 128 us, 25 CPU cycles per sample); `status`, the chain test's load figures and the
 GUI's "CPU load" chip (the GRAB frame's `load=`, per mille of a half period) show what it takes, and `missed` counts the halves it was too slow for. `src/core/sigproc.h` has
 the rules. `chain all` and `test` judge raw samples - switch the processing off for them.
@@ -685,6 +693,8 @@ already in the ring.
 | `siggen set <f0\|h2..h7\|decay\|amp\|lo\|hi> <value>` | one generator parameter per line (the console line is 64 characters); decimals without an exponent, `lo`/`hi` are DAC codes. Takes effect with the next `siggen on` |
 | `siggen on <dac 1\|2> <n 2..8192> <play_hz 100..1000000> [snap] [force] [oc]` | compute the table and play it on DACOUT1 = RA1 or DACOUT2 = RA8; `snap` moves f0 to a whole number of periods in the table, `force` allows `lo`/`hi` outside the DAC's 205..3890, `oc` paces SCCP2 in 32-bit output compare (dead on silicon; the default is the dual 16-bit timer). Refused while a route uses the same DAC (`stream on` on DAC2) |
 | `siggen off` \| `siggen regs` | stop the generator; dump DMA 2 and SCCP2 registers |
+| `sigproc [lp\|hp\|bp\|off]` | the filter at fs/8 on every completed half, in place (`on` = `lp`); `sigproc` alone = status: filter, Goertzel on/off, its threshold and last result |
+| `sigproc gz on\|off` \| `sigproc gz thr <lsb>` | the Goertzel detector for a tone at fs/16 on the input, and its threshold (1..4095, default 100 LSB) |
 | `route list` | the active route (source, core, pinsel, DAC, sink) and the resource table — which DMA channel, SCCP, DAC output and UREF are in use, RAM used vs. budget (`docs/DESIGN-MULTICHANNEL.md`'s routing core) |
 | `test [part] [halves]` | run a part of the measurement, or `all` — see below |
 | `pll <p1> <p2>` | **the sample rate**: PLL1 output dividers, 1600 MHz / (p1·p2), p1 ≥ p2, both 1…7 |

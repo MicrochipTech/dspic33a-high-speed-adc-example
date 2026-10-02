@@ -264,7 +264,7 @@ def layers():
     d.append(box(746, 328, 200, 48, "routing.c", ["route_t, resources, apply()"], "app"))
     d.append(box(958, 328, 182, 48, "board.h · board_cfg", ["glue · EV74H48A | EV17P63A"], "app"))
     d.append(box(170, 384, 290, 44, "capture.c", ["pairs A/B + guards · dma0_event() · counters"], "app"))
-    d.append(box(472, 384, 218, 44, "sigproc.c", ["IIR low-pass, 4th order, fc = fs/8"], "app"))
+    d.append(box(472, 384, 218, 44, "sigproc.c", ["lp | hp | bp at fs/8, Goertzel fs/16"], "app"))
     d.append(box(702, 384, 160, 44, "pingpong.c", ["half bookkeeping"], "app"))
     d.append(box(874, 384, 266, 44, "port_impl.c", ["glue · port_* → console / fail()"], "app"))
     d.append(box(170, 440, 970, 44, "siggen.c", ["src/core/ · wavegen table (8192 x 16 bit, .dma_buffer) → dma.c ch. 2 → dac.c, paced by sccp.c (SCCP2); claim in routing.c; no register"], "app"))
@@ -338,7 +338,7 @@ def datapath():
     g.append(box(200, 390, 200, 56, "adc_gui.py (host)", ["time signal, FFT, tri_eval"], "host", True))
     g.append(box(450, 390, 200, 56, "uart.c · UART2", ["GRAB header, data, CRC"], "drv"))
     g.append(box(700, 390, 250, 56, "gui_link_stream_grab()", ["freeze a pair → frame_send()", "→ release; the stream runs on"], "cli"))
-    g.append(box(980, 390, 170, 56, "capture_service()", ["sigproc_block() if on:", "IIR low-pass fs/8"], "app"))
+    g.append(box(980, 390, 170, 56, "capture_service()", ["sigproc_block() if on:", "filter fs/8, Goertzel fs/16"], "app"))
     for p in ["M400 318 H450", "M855 164 V290", "M930 318 H980", "M1065 346 V390", "M980 418 H950",
               "M700 418 H650", "M450 418 H400", "M300 390 V346"]:
         g.append(f'<path class="ar" d="{p}"/>')

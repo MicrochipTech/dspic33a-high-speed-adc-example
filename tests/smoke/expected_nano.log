@@ -6,7 +6,7 @@
 ##   ADC/DMA TEST LOG  -  START OF RUN  (copy from here)    ##
 ##############################################################
 
-[boot] adc_dma_40msps Oct  2 2026 11:46:09 git 4c0cc55+local changes (master)
+[boot] adc_dma_40msps Oct  2 2026 15:14:40 git a4bca6e+local changes (master)
 [simtest] *** SIMULATOR BUILD - this log is not from hardware ***
 [simtest] Purpose: check that the program's buffer logic is right -
 [simtest] that the two halves of the ping-pong buffer are filled,
@@ -25,7 +25,7 @@
 adc_dma_40msps - ADC at 40 MSPS into RAM via DMA
 *** SIMULATOR BUILD: no hardware, ADC and DMA are software stand-ins, samples are a synthetic sine ***
 board: EV17P63A, dsPIC33AK512MPS506 Curiosity Nano
-build: adc_dma_40msps Oct  2 2026 11:46:25 git 4c0cc55+local changes (master)
+build: adc_dma_40msps Oct  2 2026 15:14:52 git a4bca6e+local changes (master)
 type 'help' for the commands
 please log this terminal from power-up and send it back
 > [boot] crc16/ccitt-false self-check: ok (0x29B1)
@@ -44,7 +44,7 @@ Available commands:
   regs - clock, ADC, DMA and UART registers
   route list - the active route(s) and the resource table
   siggen [set <p> <v> | on <dac> <n> <hz> [snap] [force] [oc] | off | regs]
-  sigproc [on|off] - the signal processing (sigproc.c), in place
+  sigproc [lp|hp|bp|off] | gz on|off | gz thr <lsb> - filter at fs/8, Goertzel at fs/16
   stats - min/max/mean of the completed half
   dump [count] [offset] - samples of the buffer (snap first)
   clear - zero the error counters
@@ -70,7 +70,7 @@ Available commands:
   chain all|<n>|from <n>|run <ksps> [s] - the chain test
 > [smoke] > version
 version
-[build] adc_dma_40msps Oct  2 2026 11:46:21 git 4c0cc55+local changes (master)
+[build] adc_dma_40msps Oct  2 2026 15:14:50 git a4bca6e+local changes (master)
 [build] board: EV17P63A, dsPIC33AK512MPS506 Curiosity Nano
 [build] adc core: 1
 [build] default input (pinsel): 0
@@ -110,11 +110,11 @@ rx_bytes: 0
 rx_last: 0
 rx_cr: 0
 rx_lf: 0
-stack_size: 23248
+stack_size: 23204
 stack_used: 192
-stack_hwm_addr: 58784
+stack_hwm_addr: 58828
 stack_free_pct: 99
-buf_addr: 33260
+buf_addr: 33276
 buf_align_mod4: 0
 buf_len: 4096
 buf_guard_ok: 1

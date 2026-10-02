@@ -4,6 +4,13 @@
  * the pass band, at the cut-off and in the stop band against the design (the numbers in
  * sigproc.c's comment), no seam between blocks, the re-start on a gap, and
  * the clamp to 0..4095.
+ * Since 02.10.2026 also the selectable filters - high-pass and band-pass
+ * at fs/8 against the analog Butterworth magnitude, computed here from the
+ * formula, not from sigproc.c's coefficients (tools/sigproc_design.py made
+ * those) - the mid-scale offset of both, the switch between filters, and
+ * the Goertzel at fs/16: amplitude, share, detection, its threshold, that
+ * it sees the input before the filter, and that a DC level does not leak
+ * into it at a block length that is no multiple of 16.
  */
 #include <stdint.h>
 #include <stdbool.h>
@@ -48,8 +55,28 @@ static double gain_at(double f)
     return amplitude(buf, 256u, N) / AMP;
 }
 
+/* |H| of the analog prototype at the pre-warped frequency f (units of fs). */
+static double analog(int kind, double f)
+{
+    const double w = tan(PI * f), wc = tan(PI / 8.0);
+    if (kind == 1) { return 1.0 / sqrt(1.0 + pow(w / wc, 8.0)); }
+    if (kind == 2) { return 1.0 / sqrt(1.0 + pow(wc / w, 8.0)); }
+    const double w1 = tan(PI / 8.0 / sqrt(2.0)), w2 = tan(PI / 8.0 * sqrt(2.0));
+    const double x = (w * w - w1 * w2) / ((w2 - w1) * w);
+    return 1.0 / sqrt(1.0 + pow(x, 4.0));
+}
+
+/* A sine of amplitude amp at frequency f around level dc, length n. */
+static void tone(uint16_t *b, uint32_t n, double f, double amp, double dc)
+{
+    for (uint32_t i = 0; i < n; i++) {
+        b[i] = (uint16_t)lround(dc + amp * sin(2.0 * PI * f * (double)i + 0.7));
+    }
+}
+
 int main(void)
 {
+    sigproc_set_filter(SIGPROC_LP);      /* off after reset since 02.10.2026 */
     /* ---- DC passes unchanged, from the very first sample (settled state) */
     for (uint32_t i = 0; i < N; i++) { buf[i] = 2000u; }
     run(buf, N, true, 1u);
@@ -108,6 +135,104 @@ int main(void)
         CHECK_EQ(low_after, 0u);
         CHECK_EQ(buf[N - 1u], 4095u);
     }
+
+    /* ---- high-pass and band-pass at fs/8 against the analog magnitude ---- */
+    {
+        static const double fr[] = { 0.03, 0.0625, 0.0884, 0.10, 0.125, 0.15, 0.1768, 0.20, 0.25, 0.35 };
+        for (int kind = 2; kind <= 3; kind++) {
+            sigproc_set_filter((sigproc_filter_t)kind);
+            for (uint32_t k = 0; k < sizeof fr / sizeof fr[0]; k++) {
+                const double g = gain_at(fr[k]), want = analog(kind, fr[k]);
+                if (fabs(g - want) >= 0.004) {
+                    fprintf(stderr, "kind %d f %.4f: %.4f want %.4f\n", kind, fr[k], g, want);
+                }
+                CHECK(fabs(g - want) < 0.004);
+            }
+        }
+        /* the low-pass, through the same formula */
+        sigproc_set_filter(SIGPROC_LP);
+        CHECK(fabs(gain_at(0.1768) - analog(1, 0.1768)) < 0.004);
+    }
+
+    /* ---- hp/bp block DC: a constant comes out at mid-scale, from the
+     *      first sample (settled), and so does a fresh filter switch ---- */
+    for (int kind = 2; kind <= 3; kind++) {
+        sigproc_set_filter((sigproc_filter_t)kind);
+        for (uint32_t i = 0; i < N; i++) { buf[i] = 3000u; }
+        run(buf, N, false, 60u + (uint32_t)kind);      /* no gap: the switch restarts it */
+        bool all = true;
+        for (uint32_t i = 0; i < N; i++) { if (buf[i] != 2048u) { all = false; } }
+        CHECK(all);
+    }
+
+    /* ---- off: the block passes unchanged ---- */
+    sigproc_set_filter(SIGPROC_OFF);
+    sine(buf, N, 0.2, 0u);
+    {
+        static uint16_t ref[N];
+        for (uint32_t i = 0; i < N; i++) { ref[i] = buf[i]; }
+        run(buf, N, true, 70u);
+        bool same = true;
+        for (uint32_t i = 0; i < N; i++) { if (buf[i] != ref[i]) { same = false; } }
+        CHECK(same);
+    }
+    CHECK(!sigproc_active());
+
+    /* ---- Goertzel at fs/16 ---- */
+    sigproc_set_goertzel(true);
+    CHECK(sigproc_active());
+    {
+        sigproc_gz_t gz;
+        sigproc_goertzel_get(&gz);
+        CHECK_EQ(gz.valid, 0u);                         /* nothing seen yet   */
+
+        tone(buf, 1024u, 1.0 / 16.0, 800.0, 2000.0);    /* the tone, n = 64 x 16 */
+        run(buf, 1024u, true, 80u);
+        sigproc_goertzel_get(&gz);
+        CHECK_EQ(gz.valid, 1u);
+        CHECK(gz.amp >= 798u && gz.amp <= 802u);
+        CHECK(gz.rms >= 563u && gz.rms <= 569u);        /* 800 / sqrt2 = 566 */
+        CHECK(gz.share_pm >= 995u);
+        CHECK_EQ(gz.detected, 1u);
+        CHECK_EQ(gz.thr, 100u);
+        CHECK_EQ(gz.seq, 80u);
+
+        tone(buf, 1024u, 1.0 / 8.0, 800.0, 2000.0);     /* another tone: no   */
+        run(buf, 1024u, true, 81u);
+        sigproc_goertzel_get(&gz);
+        CHECK(gz.amp <= 2u);
+        CHECK(gz.share_pm <= 2u);
+        CHECK_EQ(gz.detected, 0u);
+
+        /* a block length that is no multiple of 16 (1000): the 2000-LSB DC
+         * level must not leak into the bin - the mean is taken out first */
+        for (uint32_t i = 0; i < 1000u; i++) { buf[i] = 2000u; }
+        run(buf, 1000u, true, 82u);
+        sigproc_goertzel_get(&gz);
+        CHECK(gz.amp <= 1u);
+        CHECK_EQ(gz.detected, 0u);
+
+        /* the threshold */
+        sigproc_set_threshold(900u);
+        tone(buf, 1024u, 1.0 / 16.0, 800.0, 2000.0);
+        run(buf, 1024u, true, 83u);
+        sigproc_goertzel_get(&gz);
+        CHECK_EQ(gz.thr, 900u);
+        CHECK_EQ(gz.detected, 0u);
+        sigproc_set_threshold(100u);
+
+        /* the Goertzel sees the input before the filter: with the
+         * high-pass on (|H(fs/16)| = 0.053) the tone still reads 800 */
+        sigproc_set_filter(SIGPROC_HP);
+        tone(buf, 1024u, 1.0 / 16.0, 800.0, 2000.0);
+        run(buf, 1024u, true, 84u);
+        sigproc_goertzel_get(&gz);
+        CHECK(gz.amp >= 798u && gz.amp <= 802u);
+        CHECK(amplitude(buf, 256u, 1024u) < 0.06 * 800.0 + 3.0);   /* and the filter did run */
+    }
+    sigproc_set_goertzel(false);
+    sigproc_set_filter(SIGPROC_OFF);
+    CHECK(!sigproc_active());
 
     return check_summary();
 }

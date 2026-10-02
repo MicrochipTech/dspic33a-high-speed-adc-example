@@ -82,7 +82,7 @@ from eval_chain import synth as chain_synth  # noqa: E402
 # serial console client) moved out to tools/protocol.py (P6.5), so a
 # host-side tool can talk to the board's console without pulling in NiceGUI.
 # ACK/NAK stay in use here too, for FakeTarget and the self-test below.
-from protocol import ACK, NAK, crc16_ccitt_false, format_rtt, parse_grab_frame, Target  # noqa: E402
+from protocol import ACK, NAK, PROC_NAMES, crc16_ccitt_false, format_rtt, parse_grab_frame, Target  # noqa: E402
 # "Remote" connection choice (below): a bench_client tunnel (tools/remote.py)
 # instead of a local COM port - see RemoteBench's own docstring for the
 # fixed contract this codes against. No flashing here: that stays in
@@ -95,6 +95,9 @@ from trigger import RISING, FALLING, find_trigger, find_triggers, trigger_window
 # zero-order-hold playback and the loop alignment - one model shared with
 # tests/ref/wavegen_ref.py and this file's FakeTarget.
 import wavegen_model  # noqa: E402
+# The firmware's filters (src/core/sigproc.c) come from this script's
+# coefficients; FakeTarget runs the same ones on its samples.
+import sigproc_design  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +171,9 @@ SETTINGS_DEFAULTS = {
     },
     # TRG: the time plot's trigger (display only, tools/trigger.py)
     "trigger": {"on": False, "level": 2048, "slope": "rising", "hyst": 16},
+    # the signal processing card (02.10.2026, sigproc.c): filter at fs/8
+    # ("off", "lp", "hp", "bp"), Goertzel at fs/16 and its threshold
+    "sigproc": {"filter": "off", "gz": False, "thr": 100},
     # SG.6: the signal generator card - tab_wave_gen.py's defaults (500 kHz,
     # 0.01 s = 5000 entries, 10 kHz, 0.2/0.4/0.1, decay 1000), the range
     # 800..3500 where the board's DAC follows (HARDWARE-LOG 29.09.2026)
@@ -1008,7 +1014,13 @@ class FakeTarget:
         self.on_log = on_log  # optional callable(str): the console transcript
         self.board = board if board in self.FAKE_BOARD_NAMES else "EV74H48A"
         self.fake_source = None                    # see FAKE_SOURCES; None = what the input reads
-        self.sigproc = False                       # "sigproc on|off" (cli.c, 01.10.2026)
+        # "sigproc ..." (cli.c, 02.10.2026): the filter at fs/8 (0 off, 1 lp,
+        # 2 hp, 3 bp - the GRAB frame's proc=), the Goertzel at fs/16 and
+        # its threshold, and the Goertzel's last result
+        self.sp_filter = 0
+        self.sp_gz = False
+        self.sp_thr = 100
+        self.sp_last_gz = None
         self.port = "fake"
         # Both DACs, as dac.c has them - only ever touched by the 'dac'
         # command, never by 'stream on' itself (the test form's own
@@ -1060,9 +1072,9 @@ class FakeTarget:
 
     def _fake_load_pm(self) -> int:
         """The GRAB header's load= as the board reports it (02.10.2026):
-        the low-pass costs about 63 CPU cycles per sample at 200 MHz when
-        "sigproc on", the service alone next to nothing."""
-        per_sample = 63.0 if self.sigproc else 0.3
+        a filter costs about 63 CPU cycles per sample at 200 MHz, the
+        Goertzel a few more, the service alone next to nothing."""
+        per_sample = (63.0 if self.sp_filter else 0.3) + (8.0 if self.sp_gz else 0.0)
         return int(per_sample * self.chain_ksps * 1e3 / CPU_HZ * 1000)
 
     def _chain_slpdat(self) -> int:
@@ -1291,14 +1303,30 @@ class FakeTarget:
                         "[<samc 0..31>]] | stream off | stream grab | stream"]
         try:
             if c == "sigproc":
-                # cli.c's cmd_sigproc_fn(): the board's sigproc_block() stub does
-                # nothing yet, so the stand-in only keeps the flag and reports it
-                # in the GRAB header - the data stay what they were
-                if len(args) == 1 and args[0] in ("on", "off"):
-                    self.sigproc = args[0] == "on"
+                # cli.c's cmd_sigproc_fn() (02.10.2026): the filter at fs/8 and
+                # the Goertzel at fs/16; grab() runs both on the stand-in's
+                # samples the way sigproc.c does (fake_filter(), fake_goertzel())
+                names = {"off": 0, "on": 1, "lp": 1, "hp": 2, "bp": 3}
+                if len(args) == 1 and args[0] in names:
+                    self.sp_filter = names[args[0]]
+                elif len(args) == 2 and args[0] == "gz" and args[1] in ("on", "off"):
+                    self.sp_gz = args[1] == "on"
+                    if self.sp_gz:
+                        self.sp_last_gz = None
+                elif (len(args) == 3 and args[:2] == ["gz", "thr"] and args[2].isdigit()
+                      and 1 <= int(args[2]) <= 4095):
+                    self.sp_thr = int(args[2])
                 elif args:
-                    return False, ["usage: sigproc [on|off]"]
-                return True, [f"sigproc: {'on' if self.sigproc else 'off'}", "rx_held_lost: 0"]
+                    return False, ["usage: sigproc [lp|hp|bp|off|on] | sigproc gz on|off | sigproc gz thr <lsb>"]
+                on = bool(self.sp_filter) or self.sp_gz
+                lines = [f"sigproc: {'on' if on else 'off'}",
+                         f"filter: {['off', 'lp', 'hp', 'bp'][self.sp_filter]}",
+                         f"goertzel: {'on' if self.sp_gz else 'off'}", f"gz_thr: {self.sp_thr}"]
+                if self.sp_gz and self.sp_last_gz:
+                    g = self.sp_last_gz
+                    lines += [f"gz_amp: {g['amp']}", f"gz_rms: {g['rms']}",
+                              f"gz_share_pm: {g['share_pm']}", f"gz_detected: {g['detected']}"]
+                return True, lines + ["rx_held_lost: 0"]
             if c == "dac":
                 usage = ["usage: dac <1|2> <on|off> [low] [high] [slpdat] [force]"]
                 if len(args) < 2 or args[0] not in ("1", "2"):
@@ -1465,14 +1493,21 @@ class FakeTarget:
             slp = 0
             v = (self._siggen_samples(n) if self._siggen_on_input()
                  else self._custom_input_samples(n))
+        gz_txt = ""
+        if self.sp_gz:                     # on the input, before the filter (sigproc.c)
+            self.sp_last_gz = fake_goertzel(v, self.sp_thr)
+            g = self.sp_last_gz
+            gz_txt = f" gz={g['amp']} gzs={g['share_pm']} gzd={g['detected']}"
+        if self.sp_filter:
+            v = fake_filter(v, self.sp_filter)
         if self.grab_fault == "overrun":
             ov = max(ov, 3)
         if self.grab_fault == "missed":
             missed = max(missed, 2)
         header_line = (f"GRAB n={n} from={frm} ksps={self.chain_ksps} ov={ov} late=0 "
                         f"missed={missed} halves=2 xfer={2 * n} slp={slp} dachz={int(DAC_CLK_HZ)} "
-                        f"proc={1 if self.sigproc else 0} "
-                        f"load={self._fake_load_pm()}\r\n")
+                        f"proc={self.sp_filter} "
+                        f"load={self._fake_load_pm()}{gz_txt}\r\n")
         self._log(f"< {header_line.rstrip()}")
         payload = np.asarray(v, dtype="<u2").tobytes()
         self._log(f"< [binary payload, {len(payload)} bytes, not shown]")
@@ -1483,6 +1518,47 @@ class FakeTarget:
         self._log("< [ACK]")
         tail = f"\r\nCRC {crc:04X}\r\n> ".encode("ascii") + ACK
         return parse_grab_frame(header_line, payload, tail)
+
+
+SP_FILTERS = {"off": "off", "lp": "low-pass, -3 dB at fs/8", "hp": "high-pass, -3 dB at fs/8",
+              "bp": "band-pass at fs/8, one octave"}
+_SP_SECTIONS = {}
+
+
+def fake_filter(v, kind: int):
+    """sigproc.c's filter on the stand-in's samples: the same two biquads
+    (tools/sigproc_design.py), settled on the first sample like a gap on the
+    board, high- and band-pass around mid-scale, clamped to 0..4095."""
+    name = {1: "lp", 2: "hp", 3: "bp"}[kind]
+    if name not in _SP_SECTIONS:
+        _SP_SECTIONS[name] = (sigproc_design.lp_hp(name) if name != "bp" else sigproc_design.bp())
+    b0, b1, b2 = sigproc_design.NUM[name]
+    out = [float(u) for u in v]
+    for g, a1, a2 in _SP_SECTIONS[name]:
+        x1 = x2 = out[0]
+        y1 = y2 = g * (b0 + b1 + b2) / (1.0 + a1 + a2) * out[0]      # settled
+        res = []
+        for u in out:
+            y = g * (b0 * u + b1 * x1 + b2 * x2) - a1 * y1 - a2 * y2
+            x2, x1, y2, y1 = x1, u, y1, y
+            res.append(y)
+        out = res
+    offset = 0.0 if kind == 1 else 2048.0
+    return np.clip(np.round(np.asarray(out) + offset), 0, 4095).astype(int)
+
+
+def fake_goertzel(v, thr: int):
+    """sigproc.c's Goertzel at fs/16 on the stand-in's samples: amplitude,
+    rms around the mean, the tone's share of the power, detected."""
+    x = np.asarray(v, dtype=float)
+    d = x - x.mean()
+    n = len(d)
+    amp = 2.0 * abs(np.sum(d * np.exp(-2j * np.pi * np.arange(n) / 16.0))) / n
+    var = float(np.mean(d * d))
+    share = amp * amp * 0.5 / var if var > 0 else 0.0
+    a = int(round(amp))
+    return dict(amp=a, rms=int(round(math.sqrt(var))), share_pm=min(1000, int(round(share * 1000))),
+                detected=1 if a >= thr else 0)
 
 
 def spectrum(samples: np.ndarray, fs_hz: float):
@@ -1670,17 +1746,38 @@ def selftest() -> int:
     print(f"grab (custom input, core 3 pin 5): slp={meta['slpdat']} (expect 0) ->",
           "PASS" if ok_custom else "FAIL")
 
-    # ---- 'sigproc on|off' (01.10.2026): the frame's proc= follows it ----
+    # ---- 'sigproc ...' (02.10.2026): proc= names the filter, gz= the Goertzel ----
     ok_on, _ = t.cmd("sigproc on")
     okp1, _, meta_p1 = t.grab()
+    ok_hp, _ = t.cmd("sigproc hp")
+    okp2, s_hp, meta_p2 = t.grab()
+    ok_gz, _ = t.cmd("sigproc gz on")
+    okg, _, meta_g = t.grab()
     ok_off, _ = t.cmd("sigproc off")
+    ok_goff, _ = t.cmd("sigproc gz off")
     okp0, _, meta_p0 = t.grab()
     ok_bad, _ = t.cmd("sigproc maybe")
-    ok_sp = (ok_on and okp1 and meta_p1.get("proc") == 1 and ok_off and okp0
-             and meta_p0.get("proc") == 0 and not ok_bad)
+    ok_sp = (ok_on and okp1 and meta_p1.get("proc") == 1 and ok_hp and okp2 and meta_p2.get("proc") == 2
+             and abs(float(np.mean(s_hp)) - 2048.0) < 100.0
+             and ok_gz and okg and isinstance(meta_g.get("gz"), dict)
+             and ok_off and ok_goff and okp0 and meta_p0.get("proc") == 0 and meta_p0.get("gz") is None
+             and not ok_bad)
     ok_all &= ok_sp
-    print(f"sigproc on/off: proc={meta_p1.get('proc')} then {meta_p0.get('proc')}, a bad argument refused ->",
+    print(f"sigproc lp/hp/gz/off: proc={meta_p1.get('proc')},{meta_p2.get('proc')},{meta_p0.get('proc')} "
+          f"hp mean {float(np.mean(s_hp)):.0f}, gz={meta_g.get('gz')}, a bad argument refused ->",
           "PASS" if ok_sp else "FAIL")
+    # the stand-in's processing against the firmware's design: a tone at
+    # fs/16 is found, one at fs/8 not; the band-pass passes fs/8 whole
+    tn = np.arange(1024)
+    tone16 = 2000 + 800 * np.sin(2 * np.pi * tn / 16 + 0.7)
+    tone8 = 2000 + 800 * np.sin(2 * np.pi * tn / 8 + 0.7)
+    g16, g8 = fake_goertzel(np.round(tone16), 100), fake_goertzel(np.round(tone8), 100)
+    bp8 = fake_filter(np.round(tone8), 3)[256:]
+    ok_fp = (798 <= g16["amp"] <= 802 and g16["detected"] == 1 and g8["amp"] <= 2 and g8["detected"] == 0
+             and abs((bp8.max() - bp8.min()) / 2 - 800) < 10)
+    ok_all &= ok_fp
+    print(f"fake Goertzel/filter: fs/16 amp {g16['amp']}, fs/8 amp {g8['amp']}, band-pass at fs/8 "
+          f"{(bp8.max() - bp8.min()) / 2:.0f} of 800 ->", "PASS" if ok_fp else "FAIL")
     f2, db2 = spectrum(np.asarray(samples), meta["ksps"] * 1e3)
     metrics = analyze_spectrum(f2, db2)
     ok_peak = bool(metrics) and abs(metrics["fund_freq"] - 250e3) < meta["ksps"] * 1e3 / len(samples)
@@ -2314,14 +2411,24 @@ def main_gui(args):
                                                value=RISING, label="edge").props("dense outlined")                         .classes("flex-grow")
                     trig_hyst_in = ui.number("hysteresis, LSB", value=16, min=0, max=2048, step=1,
                                              format="%d").props("dense outlined").classes("flex-grow")
-                # sigproc.c on the board: off after reset; on, every half is
-                # processed in place and 'stream grab' sends the result
-                with ui.row().classes("w-full gap-2 items-center"):
-                    sigproc_cb = ui.checkbox("signal processing", value=False)
-                    sigproc_lbl = ui.label("").classes("text-xs text-slate-400")
                 with ui.row().classes("w-full gap-2"):
                     single_btn = ui.button("single", icon="camera").props("unelevated").classes("flex-grow")
                     live_btn = ui.button("live", icon="play_arrow").props("unelevated").classes("flex-grow")
+
+            # 02.10.2026: the firmware's signal processing (sigproc.c) - one
+            # filter at fs/8 on every half, in place, and a Goertzel detector
+            # for a tone at fs/16 on the input; both off after a board reset
+            with ui.card().classes("tile w-full rounded-xl p-4 gap-2"):
+                ui.label("signal processing").classes("card-title")
+                sp_filter_sel = ui.select(SP_FILTERS, value="off",
+                                          label="filter (4th-order Butterworth, in the firmware)"
+                                          ).props("dense outlined").classes("w-full")
+                with ui.row().classes("w-full gap-2 items-center"):
+                    sp_gz_cb = ui.checkbox("Goertzel at fs/16", value=False)
+                    sp_thr_in = ui.number("threshold, LSB", value=100, min=1, max=4095, step=10,
+                                          format="%d").props("dense outlined").classes("flex-grow")
+                sp_gz_chip = ui.chip("fs/16: Goertzel off", color="grey-8").props("dense outline")
+                sigproc_lbl = ui.label("").classes("text-xs text-slate-400")
 
             with ui.card().classes("tile w-full rounded-xl p-4 gap-2"):
                 ui.label("fake target signal").classes("card-title")
@@ -2764,10 +2871,19 @@ def main_gui(args):
                       "draws the expected signal over the grab and the 'loop' chip says how well "
                       "they match."),
         (sg_apply_btn, "Send the card to the board now (it also goes by itself, 0.8 s after a change)."),
-        (sigproc_cb, "Switch the firmware's signal processing on or off ('sigproc on|off', "
-                     "src/core/sigproc.c). On, every completed half is processed in place, and the "
-                     "grab shows the processed data (the frame says proc=1); the triangle check "
-                     "is skipped then. Off after every reset of the board."),
+        (sp_filter_sel, "The firmware's filter (src/core/sigproc.c, 'sigproc lp|hp|bp|off'): a "
+                        "4th-order Butterworth at fs/8 - low-pass, high-pass, or a band-pass one "
+                        "octave wide around fs/8. Every completed half is filtered in place and the "
+                        "grab shows the result; high- and band-pass are centred on mid-scale (2048). "
+                        "Follows the sample rate by itself. The triangle check is skipped while a "
+                        "filter is on. Off after every reset of the board."),
+        (sp_gz_cb, "A Goertzel detector in the firmware ('sigproc gz on|off'): the amplitude of a "
+                   "tone at exactly fs/16 in each half, measured on the input before the filter. "
+                   "Try the signal generator with f0 = fs/16."),
+        (sp_thr_in, "Detection threshold for the Goertzel, in LSB of the tone's amplitude "
+                    "('sigproc gz thr <lsb>')."),
+        (sp_gz_chip, "The Goertzel's result for the last half before the grab: the tone's amplitude, "
+                     "its share of the signal's power, detected or not."),
         (trig_cb, "Trigger the time plot: show every grab from the point where the signal "
                   "first crosses the level, so a periodic signal stands still. Display only - "
                   "the stream, the FFT and the triangle verdict keep the whole half. The plot "
@@ -2871,6 +2987,8 @@ def main_gui(args):
             "trigger": {"on": bool(trig_cb.value), "level": int(trig_level_in.value or 0),
                         "slope": trig_slope_sel.value or RISING,
                         "hyst": int(trig_hyst_in.value or 0)},
+            "sigproc": {"filter": sp_filter_sel.value or "off", "gz": bool(sp_gz_cb.value),
+                        "thr": int(sp_thr_in.value or 100)},
             "buffer": {"size": int(buf_in.value or 2 * BUF_HALF_MAX)},
             "dac": {str(u): {"on": dac_mode(u) if dac_mode(u) == "auto" else dac_mode(u) == "on",
                              "low": int(c["low"].value or 0),
@@ -2929,6 +3047,10 @@ def main_gui(args):
         trig_level_in.value = int(trg.get("level", 2048))
         trig_slope_sel.value = trg.get("slope") if trg.get("slope") in (RISING, FALLING) else RISING
         trig_hyst_in.value = int(trg.get("hyst", 16))
+        spc = cfg.get("sigproc", {})
+        sp_filter_sel.value = spc.get("filter") if spc.get("filter") in SP_FILTERS else "off"
+        sp_gz_cb.value = bool(spc.get("gz", False))
+        sp_thr_in.value = int(spc.get("thr", 100))
         buf_in.value = int(cfg.get("buffer", {}).get("size", 2 * BUF_HALF_MAX))
         for unit, c in dac_ui.items():
             d = cfg.get("dac", {}).get(str(unit), {})
@@ -3615,20 +3737,37 @@ def main_gui(args):
     buf_btn.on_click(apply_buf)
 
     async def apply_sigproc(e=None):
-        """cli.c: sigproc on|off - the checkbox's state to the board. Also
-        sent once after connecting, because the board starts with it off."""
+        """cli.c: 'sigproc <filter>', 'sigproc gz on|off', 'sigproc gz thr <n>'
+        - the card's state to the board (02.10.2026). Also sent once after
+        connecting, because the board starts with both off. A firmware from
+        before 02.10.2026 knows only 'sigproc on|off' and refuses the rest."""
         t = state["target"]
-        want = "on" if sigproc_cb.value else "off"
+        filt = sp_filter_sel.value or "off"
+        gz = bool(sp_gz_cb.value)
+        thr = int(sp_thr_in.value or 100)
         if not t:
             sigproc_lbl.text = "not connected"
             return
         while state["busy"]:
             await asyncio.sleep(0.05)
+        refused = None
         async with port_lock:
-            ok, lines = await port_cmd(t, f"sigproc {want}")
-        sigproc_lbl.text = (f"sigproc {want}" if ok
-                            else "not in this firmware: " + " ".join(lines)[:60])
-    sigproc_cb.on_value_change(apply_sigproc)
+            for line in (f"sigproc {filt}", f"sigproc gz {'on' if gz else 'off'}", f"sigproc gz thr {thr}"):
+                ok, lines = await port_cmd(t, line)
+                if not ok:
+                    refused = (line, lines)
+                    break
+        if refused:
+            sigproc_lbl.text = f"'{refused[0]}' refused - not in this firmware? " + " ".join(refused[1])[:50]
+        else:
+            sigproc_lbl.text = (f"filter: {SP_FILTERS[filt] if filt in SP_FILTERS else filt}; Goertzel "
+                                + (f"on, threshold {thr} LSB" if gz else "off"))
+        if not gz:
+            sp_gz_chip.text = "fs/16: Goertzel off"
+            sp_gz_chip.props("color=grey-8")
+    sp_filter_sel.on_value_change(apply_sigproc)
+    sp_gz_cb.on_value_change(apply_sigproc)
+    sp_thr_in.on_value_change(apply_sigproc)
 
     # ---- acquisition: configure, start/keep the chain, grab, repeat ----
     def current_acq_cfg():
@@ -3782,12 +3921,33 @@ def main_gui(args):
             else:
                 src_txt = f"RA8: the firmware's test triangle, SLPDAT {meta['slpdat']}"
             if meta.get("proc", 0):
-                src_txt += " - processed by the firmware (sigproc on)"
+                src_txt += f" - {PROC_NAMES.get(meta['proc'], 'processed')} at fs/8 in the firmware"
             sig_src_lbl.text = (f"source: {src_txt}   |   grab {state['cycles']}: "
                                 f"min {int(np.min(samples))}  max {int(np.max(samples))}")
             fft_chart.options["series"][0]["data"] = [[float(fx) / 1e3, float(d)] for fx, d in zip(f, db)]
             fft_chart.options["xAxis"][0]["max"] = float(f[-1]) / 1e3 if len(f) else 1
+            # the signal processing's frequencies (sigproc.c): the filter's
+            # fs/8, the Goertzel's fs/16 - emptied, not removed, when off
+            gzm = meta.get("gz")
+            marks = []
+            if meta.get("proc", 0) and meta["ksps"]:
+                marks.append({"xAxis": meta["ksps"] / 8.0, "label": {"formatter": "fs/8"}})
+            if gzm is not None and meta["ksps"]:
+                marks.append({"xAxis": meta["ksps"] / 16.0, "label": {"formatter": "fs/16"}})
+            fft_chart.options["series"][0]["markLine"] = {
+                "silent": True, "symbol": "none",
+                "lineStyle": {"type": "dashed", "color": "#a78bfa", "width": 1}, "data": marks}
             fft_chart.update()
+            if gzm is None:
+                sp_gz_chip.text = ("fs/16: no result in the frame" if sp_gz_cb.value
+                                   else "fs/16: Goertzel off")
+                sp_gz_chip.props("color=grey-8")
+            else:
+                fs16 = meta["ksps"] / 16.0
+                sp_gz_chip.text = (f"fs/16 = {fs16:g} kHz: {gzm['amp']} LSB, "
+                                   f"{gzm['share_pm'] / 10:.1f} % of the signal - "
+                                   + ("DETECTED" if gzm["detected"] else "not detected"))
+                sp_gz_chip.props("color=" + ("positive" if gzm["detected"] else "grey-8"))
 
             # Grabs per second between the first grab and this one, while
             # LIVE runs only: counted from 'stream on' a SINGLE (one grab a

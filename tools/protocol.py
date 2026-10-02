@@ -69,12 +69,19 @@ assert crc16_ccitt_false(b"123456789") == 0x29B1, "CRC-16/CCITT-FALSE check valu
 # ---------------------------------------------------------------------------
 _GRAB_HEADER_RE = re.compile(
     r"GRAB n=(\d+) from=(\d+) ksps=(\d+) ov=(\d+) late=(\d+) missed=(\d+) "
-    r"halves=(\d+) xfer=(\d+) slp=(\d+) dachz=(\d+)(?: proc=(\d+))?(?: load=(\d+))?")
+    r"halves=(\d+) xfer=(\d+) slp=(\d+) dachz=(\d+)(?: proc=(\d+))?(?: load=(\d+))?"
+    r"(?: gz=(\d+) gzs=(\d+) gzd=(\d+))?")
 # proc= (01.10.2026): 1 = the payload is the firmware's signal processing
 # result (src/core/sigproc.h, "sigproc on"), 0 = raw samples. Optional, so a
 # firmware from before it parses as proc 0. load= (02.10.2026): the
 # processing's mean share of a half period since the previous grab, per
 # mille (1000 = it just keeps up); None when the firmware does not send it.
+# Since 02.10.2026 proc= names the filter (0 none, 1 low-pass, 2 high-pass,
+# 3 band-pass at fs/8, PROC_NAMES), and gz=/gzs=/gzd= - present only while
+# the firmware's Goertzel at fs/16 runs - are its amplitude (LSB), the tone's
+# share of the block's power (per mille) and detected (0/1): meta['gz'] is
+# then a dict with amp/share_pm/detected, None otherwise.
+PROC_NAMES = {0: "off", 1: "low-pass", 2: "high-pass", 3: "band-pass"}
 
 
 def parse_grab_frame(header_line: str, payload: bytes, tail: bytes):
@@ -92,7 +99,9 @@ def parse_grab_frame(header_line: str, payload: bytes, tail: bytes):
                 late=int(m.group(5)), missed=int(m.group(6)), halves=int(m.group(7)),
                 transfers=int(m.group(8)), slpdat=int(m.group(9)), dac_hz=int(m.group(10)),
                 proc=int(m.group(11) or 0),
-                load_pm=int(m.group(12)) if m.group(12) is not None else None)
+                load_pm=int(m.group(12)) if m.group(12) is not None else None,
+                gz=(dict(amp=int(m.group(13)), share_pm=int(m.group(14)), detected=int(m.group(15)))
+                    if m.group(13) is not None else None))
     m2 = _CRC_LINE_RE.search(tail)
     if not m2:
         raise RuntimeError(f"grab: no CRC line, got {tail!r}")

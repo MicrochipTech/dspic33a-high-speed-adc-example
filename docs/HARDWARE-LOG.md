@@ -2215,3 +2215,31 @@ xc-dsc v3.21) and flashed with ipecmd; the same script as the CORE entry above.
   (`tools/gen_core_project.py`), and `docs/CORE.md` tells the customer to keep it.
 - Not measured: `adc_dma_40msps.X` itself also builds at -O0, so a colleague who builds
   and flashes from the IDE gets the slower firmware too. Left as it is for now.
+
+## 2026-10-02, selectable filters (low-, high-, band-pass at fs/8) and a Goertzel at fs/16 - a4bca6e + local changes, local (COM26)
+
+`sigproc lp|hp|bp|off` and `sigproc gz on|off` (sigproc.c, coefficients from
+`tools/sigproc_design.py`), and the GUI's new "signal processing" card. Measured over the
+console with the signal generator, DAC2 -> RA8 -> core 5 / PINSEL 3. The stream ran at
+400 kSPS (fs/16 = 25 kHz, fs/8 = 50 kHz); the generator played a sine (2000 entries at
+1 MHz, range 800..3500, no harmonics). Each point is the best of 5 grabs, because some
+generator grabs stand still (open, see the CORE entry). Gain = filtered amplitude over
+unfiltered, design = `sigproc_design.response()`:
+
+| f | lp meas / design | hp meas / design | bp meas / design | Goertzel |
+|---|---|---|---|---|
+| 12.5 kHz (fs/32) | 1.000 / 1.000 | 0.003 / 0.003 | 0.039 / 0.039 | 11 LSB, not detected |
+| 25 kHz (fs/16) | 0.999 / 0.999 | 0.053 / 0.053 | 0.230 / 0.230 | 1341 LSB, 100 %, detected |
+| 50 kHz (fs/8) | 0.707 / 0.707 | 0.707 / 0.707 | 1.000 / 1.000 | 1 LSB, not detected |
+| 100 kHz (fs/4) | 0.029 / 0.029 | 1.000 / 1.000 | 0.164 / 0.164 | 1 LSB, not detected |
+
+The largest difference between measurement and design is below 0.0005. On the test
+triangle at 1 MSPS, `proc=` follows the filter (0/1/2/3), and high- and band-pass output
+centres on 2048. CPU load at 1 MSPS: off 0, lp 123..326, hp 329..336, bp 335..336 per
+mille (the low ends are the grabs right after a switch). Goertzel alone: 136..274.
+Low-pass plus Goertzel: 174..462. A filter costs about 66 CPU cycles per sample and the
+Goertzel up to about 55, more than its arithmetic needs; it is not optimised (two passes,
+int-to-float per sample). Off-board: `tests/host/test_sigproc.c` 56/56, the GUI
+`--selftest` (FakeTarget runs the same filters and Goertzel), trace 15/15 unchanged, both
+smoke runs (help line and memory layout re-recorded), ISRs 46/41/55/48 unchanged, one
+`.dma_buffer` of 0x6040.

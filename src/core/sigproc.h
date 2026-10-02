@@ -44,6 +44,7 @@
 #define SIGPROC_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 typedef struct {
     uint32_t half;      /* 0 = ping (first half of the buffer), 1 = pong   */
@@ -62,5 +63,42 @@ typedef struct {
 /* x: the completed half, n samples (capture_half_len()); read it, and
  * write the result back into it. */
 void sigproc_block(uint16_t *x, uint32_t n, const sigproc_info_t *info);
+
+/* What sigproc_block() does (02.10.2026, sigproc.c; console "sigproc ...",
+ * the GUI's signal processing card): one filter at fs/8 on the block, in
+ * place, and independently a Goertzel detector for a tone at fs/16 in the
+ * block as it came in. Both off after reset. The console runs a command
+ * never while sigproc_block() runs (cli.c's uart_rx_hook()), so a change
+ * lands between two blocks. */
+typedef enum {
+    SIGPROC_OFF = 0,    /* the block passes unchanged                       */
+    SIGPROC_LP  = 1,    /* low-pass,  -3 dB at fs/8 ("sigproc on" = this)   */
+    SIGPROC_HP  = 2,    /* high-pass, -3 dB at fs/8, output + 2048          */
+    SIGPROC_BP  = 3     /* band-pass, centre fs/8, one octave, output + 2048 */
+} sigproc_filter_t;
+
+void sigproc_set_filter(sigproc_filter_t f);     /* restarts the filter state */
+sigproc_filter_t sigproc_filter(void);
+const char *sigproc_filter_name(sigproc_filter_t f);  /* "off" "lp" "hp" "bp" */
+
+/* The Goertzel's result for the last block it saw. */
+typedef struct {
+    uint32_t amp;       /* the fs/16 tone's amplitude, LSB                  */
+    uint32_t rms;       /* the block's rms around its mean, LSB             */
+    uint32_t share_pm;  /* the tone's share of that power, per mille        */
+    uint32_t thr;       /* the detection threshold, LSB                     */
+    uint32_t detected;  /* 1: amp >= thr                                    */
+    uint32_t seq;       /* the block it was computed on (info->seq)         */
+    uint32_t valid;     /* 0: no block since it was switched on             */
+} sigproc_gz_t;
+
+void sigproc_set_goertzel(bool on);
+bool sigproc_goertzel_on(void);
+void sigproc_set_threshold(uint32_t lsb);         /* default 100 LSB */
+void sigproc_goertzel_get(sigproc_gz_t *out);
+
+/* true when either a filter or the Goertzel is on: capture.c then calls
+ * sigproc_block() (capture_sigproc_enable(), set by the console). */
+bool sigproc_active(void);
 
 #endif

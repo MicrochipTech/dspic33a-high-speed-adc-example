@@ -22,6 +22,7 @@
 
 #include "adc.h"
 #include "capture.h"
+#include "sigproc.h"     /* filter and Goertzel selection (02.10.2026) */
 #include "clock.h"
 #include "timebase.h"
 #include "acquisition.h"
@@ -88,8 +89,10 @@ void gui_link_stream_grab(void)
      * 1 digit, load up to 5 (capped at 99999, acquisition.c), CRLF and the
      * terminator - 75 + 100 + 1 + 5 + 2 + 1 = 184. Was char[128] until
      * 01.10.2026, too short for ten fields at their largest even before
-     * proc= (165 + 1); char[176] until load= came (02.10.2026). */
-    char head[192];
+     * proc= (165 + 1); char[176] until load= came (02.10.2026), char[192]
+     * until the Goertzel's three fields came the same day: " gz=" and
+     * " gzs=" with up to 10 digits each, " gzd=" with 1 - 35 more, 219. */
+    char head[224];
     char *p = copy_str(head, "GRAB n=");
     p = u32_to_str(p, got ? g.win_len : 0u);
     p = copy_str(p, " from=");   p = u32_to_str(p, got ? g.from : 0u);
@@ -103,6 +106,18 @@ void gui_link_stream_grab(void)
     p = copy_str(p, " dachz=");  p = u32_to_str(p, got ? g.dac_hz : 0u);
     p = copy_str(p, " proc=");   p = u32_to_str(p, got ? g.proc : 0u);
     p = copy_str(p, " load=");   p = u32_to_str(p, got ? g.load_pm : 0u);
+    /* The Goertzel at fs/16 (sigproc.c), only while it runs and once it has
+     * seen a block: amplitude (LSB), share of the power (per mille),
+     * detected (0/1) - absent otherwise, so the GUI shows it as off. */
+    if (got && capture_sigproc_enabled() && sigproc_goertzel_on()) {
+        sigproc_gz_t gz;
+        sigproc_goertzel_get(&gz);
+        if (gz.valid) {
+            p = copy_str(p, " gz=");  p = u32_to_str(p, gz.amp);
+            p = copy_str(p, " gzs="); p = u32_to_str(p, gz.share_pm);
+            p = copy_str(p, " gzd="); p = u32_to_str(p, gz.detected);
+        }
+    }
     p = copy_str(p, "\r\n");
     const size_t head_len = (size_t)(p - head);
 

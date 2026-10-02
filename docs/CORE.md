@@ -85,8 +85,12 @@ that matter:
 - `info->gap` = 1 means this block does not follow the previous one (first block, restart,
   or a missed half): reset your filter state there.
 
-The example's body is a 4th-order Butterworth low-pass at fs/8. It costs about 63 cycles
-per sample, so it keeps up to about 2 MSPS. Replace it with your own.
+The example's body is selectable (`sigproc lp|hp|bp|off`): a 4th-order Butterworth low-,
+high- or band-pass at fs/8, and independently a Goertzel detector for a tone at fs/16
+(`sigproc gz on|off`). The coefficients come from `tools/sigproc_design.py`. A filter costs
+about 63-67 cycles per sample, so it keeps up to about 2 MSPS; the Goertzel adds up to
+about 55. Replace it with your own; the console command and the GRAB fields (`proc=`,
+`gz=`) can stay or go with it.
 
 ## 4. Building
 

@@ -1,87 +1,132 @@
 /*
  * sigproc.c - the body of the signal processing, called once per completed
- * half of the ping-pong buffer (ping and pong) while "sigproc on" is set.
+ * half of the ping-pong buffer (ping and pong) while the processing is on.
  * See sigproc.h for when it is called, how much time it has, what it must
  * not do, and why the result goes back into the same half.
  *
- * A 4th-order Butterworth low-pass with its cut-off at fs/8 - a quarter of
- * the useful band 0..fs/2 (fs/4, the middle of the band, from 02.10.2026
- * until it was halved the same day). Being a fraction of fs, the
- * coefficients do not depend on the sample rate: the filter follows
- * "stream on <ksps>" by itself.
+ * Selectable since 02.10.2026 ("sigproc lp|hp|bp|off", the GUI's signal
+ * processing card): one of three 4th-order Butterworth filters at fs/8, and
+ * independently of it a Goertzel detector for a tone at fs/16. Being
+ * fractions of fs, none of the coefficients depends on the sample rate: they
+ * follow "stream on <ksps>" by themselves.
  *
- * Design (bilinear transform, pre-warped): the analogue 4th-order
- * Butterworth prototype is two sections 1 / (s^2 + c s + 1) with
- * c1 = 2 sin(pi/8) and c2 = 2 sin(3 pi/8). With the pre-warp factor
- * K = tan(pi fc / fs) = tan(pi/8) = 0.414214 each section becomes
+ *   lp   low-pass,  -3 dB at fs/8                  (the filter of the
+ *        morning of 02.10.2026, fs/4 before that, numbers unchanged)
+ *   hp   high-pass, -3 dB at fs/8
+ *   bp   band-pass, centre fs/8, one octave: -3 dB at fs/8/sqrt2, fs/8*sqrt2
  *
- *     H(z) = g (1 + 2 z^-1 + z^-2) / (1 + a1 z^-1 + a2 z^-2),
- *     a0 = 1 + c K + K^2,  g = K^2 / a0,
- *     a1 = 2 (K^2 - 1) / a0,  a2 = (1 - c K + K^2) / a0
+ * Design: tools/sigproc_design.py (bilinear transform, pre-warped, checked
+ * there against the analog Butterworth magnitude to 1e-6). Each filter is
+ * two biquad sections g (b0 + b1 z^-1 + b2 z^-2) / (1 + a1 z^-1 + a2 z^-2)
+ * with the numerator fixed per kind - (1, 2, 1) low-pass, (1, -2, 1)
+ * high-pass, (1, 0, -1) band-pass - and the two gains applied once to the
+ * cascade's output. |H| from the script:
  *
- * - each section's gain at DC is exactly 1. Checked numerically
- * (02.10.2026): 0 dB at DC, -0.58 dB at 0.1 fs, -3.01 dB at 0.125 fs,
- * -7.95 dB at 0.15 fs, -19.6 dB at 0.2 fs, -30.6 dB at 0.25 fs, -41.7 dB at
- * 0.3 fs, a double zero at fs/2. (At fs/4, K was 1 and a1 0; with a1 not
- * 0 the even and odd samples are no longer independent recursions, so
- * the loop does one sample per pass again.)
+ *   f/fs   0.02    0.0625  0.0884  0.10    0.125   0.15    0.1768  0.20    0.25
+ *   lp     1.0000  0.9986  0.9758  0.9352  0.7071  0.4002  0.1948  0.1051  0.0294
+ *   hp     0.0005  0.0531  0.2188  0.3541  0.7071  0.9164  0.9808  0.9945  0.9996
+ *   bp     0.0149  0.2299  0.7071  0.9194  1.0000  0.9736  0.7071  0.4343  0.1638
+ *
+ * The high- and band-pass block DC, so their output is centred on mid-scale:
+ * result + 2048, clamped to 0..4095 like the low-pass's - the GUI reads
+ * 12-bit values (sigproc.h).
  *
  * The state is carried from one block to the next - the ping-pong stream
- * has no gaps (two pairs, dma.c), so neither does the filter's input.
- * Where the capture says there is one (info->gap: the first block after
- * "sigproc on" or a stream start, or halves missed), the state is set to
- * the steady state of the block's first sample, so the filter starts
- * without a transient instead of filtering the jump. Output rounded and
- * clamped to the ADC's 0..4095 (the step response overshoots by about
- * 10 %), and written back in place.
+ * has no gaps (two pairs, dma.c), so neither does the filter's input. On a
+ * gap (info->gap) or a change of filter it restarts as if the block's first
+ * sample had been there forever: the low-pass then outputs it unchanged,
+ * high- and band-pass output mid-scale.
+ *
+ * The Goertzel (when on) runs on the block BEFORE the filter - it detects a
+ * tone at fs/16 in the input, whatever the filter then does to it. Two
+ * passes over the half: the mean, then the Goertzel recursion
+ *     s = (x - mean) + 2 cos(2 pi / 16) s1 - s2
+ * together with the variance. Its result: the tone's amplitude
+ *     A = 2 sqrt(s1^2 + s2^2 - 2 cos(2 pi/16) s1 s2) / n   (LSB),
+ * exact for a sine at fs/16 when n is a multiple of 16 (buf's default 1024
+ * is; another n leaks a little), the signal's rms around its mean, the
+ * tone's share of the signal's power (A^2/2 over the variance, per mille),
+ * and "detected" = A >= the threshold (default 100 LSB, "sigproc gz thr").
+ * Subtracting the mean first keeps a 2000-LSB DC level from leaking into the
+ * bin when n is not a multiple of 16.
  */
+#include <stdbool.h>
+#include <math.h>
 #include "sigproc.h"
 
-#define LP_G1   0.115258015f    /* section 1: c = 2 sin(pi/8) = 0.765367   */
-#define LP_C1  -1.113029854f    /*            a1                           */
-#define LP_D1   0.574061915f    /*            a2                           */
-#define LP_G2   0.088579356f    /* section 2: c = 2 sin(3pi/8) = 1.847759  */
-#define LP_C2  -0.855397933f    /*            a1                           */
-#define LP_D2   0.209715358f    /*            a2                           */
-#define LP_G    (LP_G1 * LP_G2) /* both sections' gains, applied once      */
+/* tools/sigproc_design.py */
+#define LP_G1   0.115258015f
+#define LP_C1  -1.113029854f
+#define LP_D1   0.574061915f
+#define LP_G2   0.088579356f
+#define LP_C2  -0.855397933f
+#define LP_D2   0.209715358f
+#define HP_G1   0.671772942f
+#define HP_C1  -1.113029854f
+#define HP_D1   0.574061915f
+#define HP_G2   0.516278323f
+#define HP_C2  -0.855397933f
+#define HP_D2   0.209715358f
+#define BP_G1   0.264190631f
+#define BP_C1  -1.418769755f
+#define BP_D1   0.731414325f
+#define BP_G2   0.207189199f
+#define BP_C2  -0.845887980f
+#define BP_D2   0.624616423f
+
+#define GZ_COEF        1.847759065f   /* 2 cos(2 pi / 16)                */
+#define GZ_THR_DEFAULT 100u           /* LSB                             */
+#define MID            2048.0f        /* hp/bp output offset             */
 
 /* Each section runs WITHOUT its gain g, as a direct form I:
- *     y[n] = x[n] + 2 x[n-1] + x[n-2] - a1 y[n-1] - a2 y[n-2]
+ *     y[n] = b0 x[n] + b1 x[n-1] + b2 x[n-2] - a1 y[n-1] - a2 y[n-2]
  * and the product g1 g2 multiplies the cascade's output once - the same
  * filter, one multiply less per section. The state lives in locals for the
- * block and goes back to `lp` at its end (kept in statics per sample it
+ * block and goes back to `st` at its end (kept in statics per sample it
  * cost a load and a store each time - 59 instead of 43 CPU cycles per
- * sample at fs/4, board, 02.10.2026). Unscaled, the values grow by
- * 1/g1 = 8.7 and 1/(g1 g2) = 98 - for a float that is a rounding error
- * below a thousandth of an LSB at the output. */
+ * sample at fs/4, board, 02.10.2026). Unscaled, the values grow by up to
+ * 1/(g1 g2) (98 for the low-pass) - for a float a rounding error below a
+ * thousandth of an LSB at the output. */
 typedef struct {
     float x1, x2;       /* input, one and two samples back                  */
     float p1, p2;       /* section 1 output, one and two samples back       */
     float q1, q2;       /* section 2 output, one and two samples back       */
-} lp_state_t;
-static lp_state_t lp;
+} fstate_t;
+static fstate_t st;
 
-/* The state after a long constant input x: each unscaled section's DC
- * gain is 4 / (1 + a1 + a2) = 1 / g. */
-static void lp_settle(float x)
+static volatile sigproc_filter_t filter = SIGPROC_OFF;  /* off after reset; "sigproc on" = lp */
+static volatile bool restart = true;    /* a new filter: settle on the next block */
+static volatile bool gz_on   = false;
+static volatile uint32_t gz_thr = GZ_THR_DEFAULT;
+static sigproc_gz_t gz;                 /* the last block's result         */
+
+/* The state after a long constant input u: each unscaled section's gain at
+ * DC is b(1) / (1 + a1 + a2) - 1/g for the low-pass, 0 for the others. */
+static void settle(sigproc_filter_t f, float u)
 {
-    const float p = x / LP_G1;
-    const float q = p / LP_G2;
-    lp.x1 = x;  lp.x2 = x;
-    lp.p1 = p;  lp.p2 = p;
-    lp.q1 = q;  lp.q2 = q;
+    st.x1 = u;  st.x2 = u;
+    if (f == SIGPROC_LP) {
+        st.p1 = st.p2 = u / LP_G1;
+        st.q1 = st.q2 = u / LP_G1 / LP_G2;
+    } else {
+        st.p1 = st.p2 = 0.0f;
+        st.q1 = st.q2 = 0.0f;
+    }
 }
 
-void sigproc_block(uint16_t *x, uint32_t n, const sigproc_info_t *info)
+/* The cascade, specialised per filter: always inlined with constant
+ * arguments, so the numerator's 2 / -2 / 0 and the offset fold away and the
+ * low-pass loop is the one it was before the other two came. */
+static inline __attribute__((always_inline))
+void cascade(uint16_t *x, uint32_t n, float b1, float b2,
+             float c1, float d1, float c2, float d2, float g, float offset)
 {
-    if (n == 0u) { return; }
-    if (info->gap) { lp_settle((float)x[0]); }
-    float x1 = lp.x1, x2 = lp.x2, p1 = lp.p1, p2 = lp.p2, q1 = lp.q1, q2 = lp.q2;
+    float x1 = st.x1, x2 = st.x2, p1 = st.p1, p2 = st.p2, q1 = st.q1, q2 = st.q2;
     for (uint32_t i = 0; i < n; i++) {
         const float u = (float)x[i];
-        const float p = (u + x2) + (x1 + x1) - LP_C1 * p1 - LP_D1 * p2;   /* section 1 */
-        const float q = (p + p2) + (p1 + p1) - LP_C2 * q1 - LP_D2 * q2;   /* section 2 */
-        int32_t v = (int32_t)(LP_G * q + 0.5f);
+        const float p = (u + b2 * x2) + b1 * x1 - c1 * p1 - d1 * p2;   /* section 1 */
+        const float q = (p + b2 * p2) + b1 * p1 - c2 * q1 - d2 * q2;   /* section 2 */
+        int32_t v = (int32_t)(g * q + offset + 0.5f);
         if (v < 0)    { v = 0; }
         if (v > 4095) { v = 4095; }
         x[i] = (uint16_t)v;
@@ -89,5 +134,86 @@ void sigproc_block(uint16_t *x, uint32_t n, const sigproc_info_t *info)
         p2 = p1; p1 = p;
         q2 = q1; q1 = q;
     }
-    lp.x1 = x1; lp.x2 = x2; lp.p1 = p1; lp.p2 = p2; lp.q1 = q1; lp.q2 = q2;
+    st.x1 = x1; st.x2 = x2; st.p1 = p1; st.p2 = p2; st.q1 = q1; st.q2 = q2;
 }
+
+static void goertzel(const uint16_t *x, uint32_t n, uint32_t seq)
+{
+    uint32_t sum = 0u;
+    for (uint32_t i = 0; i < n; i++) { sum += x[i]; }
+    const float mean = (float)sum / (float)n;
+    float s1 = 0.0f, s2 = 0.0f, var = 0.0f;
+    for (uint32_t i = 0; i < n; i++) {
+        const float d = (float)x[i] - mean;
+        const float s = d + GZ_COEF * s1 - s2;
+        s2 = s1; s1 = s;
+        var += d * d;
+    }
+    float pw = s1 * s1 + s2 * s2 - GZ_COEF * s1 * s2;
+    if (pw < 0.0f) { pw = 0.0f; }               /* rounding at a zero result */
+    const float amp = 2.0f * sqrtf(pw) / (float)n;
+    var /= (float)n;
+    const float share = (var > 0.0f) ? (amp * amp * 0.5f / var) : 0.0f;
+    gz.amp       = (uint32_t)(amp + 0.5f);
+    gz.rms       = (uint32_t)(sqrtf(var) + 0.5f);
+    gz.share_pm  = (share >= 1.0f) ? 1000u : (uint32_t)(share * 1000.0f + 0.5f);
+    gz.thr       = gz_thr;
+    gz.detected  = (gz.amp >= gz_thr) ? 1u : 0u;
+    gz.seq       = seq;
+    gz.valid     = 1u;
+}
+
+void sigproc_block(uint16_t *x, uint32_t n, const sigproc_info_t *info)
+{
+    if (n == 0u) { return; }
+    if (gz_on) { goertzel(x, n, info->seq); }
+    const sigproc_filter_t f = filter;          /* one reading per block */
+    if (f == SIGPROC_OFF) { return; }
+    if (info->gap || restart) { settle(f, (float)x[0]); restart = false; }
+    switch (f) {
+    case SIGPROC_LP:
+        cascade(x, n, 2.0f, 1.0f, LP_C1, LP_D1, LP_C2, LP_D2, LP_G1 * LP_G2, 0.0f);
+        break;
+    case SIGPROC_HP:
+        cascade(x, n, -2.0f, 1.0f, HP_C1, HP_D1, HP_C2, HP_D2, HP_G1 * HP_G2, MID);
+        break;
+    case SIGPROC_BP:
+        cascade(x, n, 0.0f, -1.0f, BP_C1, BP_D1, BP_C2, BP_D2, BP_G1 * BP_G2, MID);
+        break;
+    default:
+        break;
+    }
+}
+
+void sigproc_set_filter(sigproc_filter_t f)
+{
+    if (f > SIGPROC_BP) { return; }
+    if (f != filter) { restart = true; }
+    filter = f;
+}
+
+sigproc_filter_t sigproc_filter(void) { return filter; }
+
+const char *sigproc_filter_name(sigproc_filter_t f)
+{
+    static const char *const names[] = { "off", "lp", "hp", "bp" };
+    return (f <= SIGPROC_BP) ? names[f] : "?";
+}
+
+void sigproc_set_goertzel(bool on)
+{
+    if (on && !gz_on) { gz.valid = 0u; }        /* no stale result from before */
+    gz_on = on;
+}
+
+bool sigproc_goertzel_on(void) { return gz_on; }
+
+void sigproc_set_threshold(uint32_t lsb) { gz_thr = lsb; }
+
+void sigproc_goertzel_get(sigproc_gz_t *out)
+{
+    *out = gz;
+    out->thr = gz_thr;
+}
+
+bool sigproc_active(void) { return (filter != SIGPROC_OFF) || gz_on; }

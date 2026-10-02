@@ -68,6 +68,7 @@
 #include "timebase.h"
 #include "clock.h"
 #include "capture.h"
+#include "sigproc.h"     /* filter and Goertzel selection (02.10.2026) */
 #include "adc.h"
 #include "dac.h"
 #include "led.h"
@@ -645,26 +646,53 @@ static void cmd_siggen_fn(int argc, char **argv)
 CMD_DEFINE(siggen, "siggen", cmd_siggen_fn, "siggen [set <p> <v> | on <dac> <n> <hz> [snap] [force] [oc] | off | regs]");
 
 /* ------------------------------------------------------------------ *
- * "sigproc" - the signal processing switch (01.10.2026, sigproc.h):
- *   sigproc on | sigproc off    sigproc_block() per completed half, in
- *                               place, or not at all (off after reset)
- *   sigproc                     status
- * The GUI's "signal processing" switch sends the first two. One parser
- * slot. Longest reply line: "rx_held_lost: " + 10 digits + CRLF = 26. */
+ * "sigproc" - the signal processing (01.10.2026, selectable since
+ * 02.10.2026, sigproc.h):
+ *   sigproc lp | hp | bp | off   the filter at fs/8, in place (off after reset)
+ *   sigproc on                   = lp (the switch of 01.10.2026)
+ *   sigproc gz on | off          the Goertzel detector at fs/16
+ *   sigproc gz thr <lsb>         its threshold, 1..4095 (default 100)
+ *   sigproc                      status
+ * capture.c calls sigproc_block() while either runs (sigproc_active()).
+ * The GUI's signal processing card sends these. One parser slot. Longest
+ * reply line: "rx_held_lost: " + 10 digits + CRLF = 26. */
 static void cmd_sigproc_fn(int argc, char **argv)
 {
+    static const char use[] = "sigproc [lp|hp|bp|off|on] | sigproc gz on|off | sigproc gz thr <lsb>";
     if (argc == 2) {
-        if (strcmp(argv[1], "on") == 0)       { capture_sigproc_enable(true); }
-        else if (strcmp(argv[1], "off") == 0) { capture_sigproc_enable(false); }
-        else { usage("sigproc [on|off]"); return; }
+        if (strcmp(argv[1], "on") == 0 || strcmp(argv[1], "lp") == 0) { sigproc_set_filter(SIGPROC_LP); }
+        else if (strcmp(argv[1], "hp") == 0)  { sigproc_set_filter(SIGPROC_HP); }
+        else if (strcmp(argv[1], "bp") == 0)  { sigproc_set_filter(SIGPROC_BP); }
+        else if (strcmp(argv[1], "off") == 0) { sigproc_set_filter(SIGPROC_OFF); }
+        else { usage(use); return; }
+    } else if (argc == 3 && strcmp(argv[1], "gz") == 0) {
+        if (strcmp(argv[2], "on") == 0)       { sigproc_set_goertzel(true); }
+        else if (strcmp(argv[2], "off") == 0) { sigproc_set_goertzel(false); }
+        else { usage(use); return; }
+    } else if (argc == 4 && strcmp(argv[1], "gz") == 0 && strcmp(argv[2], "thr") == 0) {
+        uint32_t thr;
+        if (!arg_u32(argv[3], 1u, 4095u, &thr)) { usage(use); return; }
+        sigproc_set_threshold(thr);
     } else if (argc != 1) {
-        usage("sigproc [on|off]");
+        usage(use);
         return;
     }
+    if (argc > 1) { capture_sigproc_enable(sigproc_active()); }
     put_kv_str("sigproc", capture_sigproc_enabled() ? "on" : "off");
+    put_kv_str("filter", sigproc_filter_name(sigproc_filter()));
+    put_kv_str("goertzel", sigproc_goertzel_on() ? "on" : "off");
+    sigproc_gz_t gz;
+    sigproc_goertzel_get(&gz);
+    put_kv("gz_thr", gz.thr);
+    if (sigproc_goertzel_on() && gz.valid) {
+        put_kv("gz_amp", gz.amp);
+        put_kv("gz_rms", gz.rms);
+        put_kv("gz_share_pm", gz.share_pm);
+        put_kv("gz_detected", gz.detected);
+    }
     put_kv("rx_held_lost", rx_held_lost);
 }
-CMD_DEFINE(sigproc, "sigproc", cmd_sigproc_fn, "sigproc [on|off] - the signal processing (sigproc.c), in place");
+CMD_DEFINE(sigproc, "sigproc", cmd_sigproc_fn, "sigproc [lp|hp|bp|off] | gz on|off | gz thr <lsb> - filter at fs/8, Goertzel at fs/16");
 
 
 static void cmd_buf_fn(int argc, char **argv)

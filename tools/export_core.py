@@ -44,7 +44,7 @@ PATHS = ["src/drivers", "src/port", "src/lib", "src/core", "src/app", "src/board
          "docs/architecture_datapath.svg", "docs/architecture_datapath_dark.svg",
          "tools/adc_gui.py", "tools/boards.py", "tools/eval_chain.py", "tools/pins128.py",
          "tools/pins64.py", "tools/protocol.py", "tools/remote.py", "tools/trigger.py",
-         "tools/wavegen_model.py", "tools/adc_gui.bat", "tools/gui_setup.bat",
+         "tools/wavegen_model.py", "tools/sigproc_design.py", "tools/adc_gui.bat", "tools/gui_setup.bat",
          "tools/requirements-gui.txt", "tools/adc_gui_defaults.json"]
 LEAVE_OUT = {"src/app/main.c", "src/app/version.h"}
 

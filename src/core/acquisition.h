@@ -218,7 +218,8 @@ typedef struct {
     uint32_t transfers;
     uint16_t slpdat;
     uint32_t dac_hz;
-    uint32_t proc;      /* 1: win holds sigproc_block()'s result (sigproc.h) */
+    uint32_t proc;      /* the filter win went through: 0 none, 1 lp, 2 hp,
+                         * 3 bp (sigproc.h; 0/1 only until 02.10.2026)     */
     uint32_t load_pm;   /* the processing's mean share of a half period since
                          * the previous grab, per mille (1000 = it just keeps
                          * up) - capture_service()'s own proc_ticks_* deltas */

@@ -144,7 +144,7 @@ svg{--bg:#11161c;--ink:#e3e8ee;--muted:#9aa6b4;--line:#3a4552;
 <rect class="bx s-app" x="472" y="384" width="218" height="44" rx="4"/>
 <circle class="st-pending" cx="679" cy="395" r="5"><title>not tested with this version yet (HARDWARE-LOG 2026-10-02 (the low-pass entry); not marked tested - no board run of the committed revision); open: the low-pass (fs/8 since 02.10.2026) ran on the board - frequency response within 0.7 dB of the design, grabs with proc=1 - but not with this committed version yet; it keeps up only to 2 MSPS (about 63 CPU cycles per sample)</title></circle>
 <text class="t" x="482" y="403">sigproc.c</text>
-<text class="s" x="482" y="417">IIR low-pass, 4th order, fc = fs/8</text>
+<text class="s" x="482" y="417">lp | hp | bp at fs/8, Goertzel fs/16</text>
 <rect class="bx s-app" x="702" y="384" width="160" height="44" rx="4"/>
 <circle class="st-tested" cx="851" cy="395" r="5"><title>functionally tested on silicon with this version (at 7b16260 - HARDWARE-LOG 2026-09-29: 7b16260 flashed on the EV74H48A (COM26) - siggen/stream on-off/grab cycles, 76-cycle hunt, the user&#x27;s GUI session)</title></circle>
 <text class="t" x="712" y="403">pingpong.c</text>

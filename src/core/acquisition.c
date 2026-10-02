@@ -64,6 +64,7 @@
 #include "acquisition_priv.h"
 #include "routing.h"         /* route_t: ROUTE_STREAM/ROUTE_B2B are defined here (P11.3) */
 #include "capture.h"
+#include "sigproc.h"     /* filter and Goertzel selection (02.10.2026) */
 #include "capture_priv.h"
 #include "adc.h"
 #include "clock.h"
@@ -565,7 +566,9 @@ bool chain_stream_grab_begin(chain_grab_t *g)
     if (!capture_pair_freeze(4u * half_ticks + TIMEBASE_HZ / 1000u, &g->win, &n, &from)) {
         return false;
     }
-    g->proc    = capture_sigproc_enabled() ? 1u : 0u;
+    /* proc: which filter the payload went through (sigproc.h, 0 = none -
+     * also when only the Goertzel runs, which leaves the samples alone) */
+    g->proc    = capture_sigproc_enabled() ? (uint32_t)sigproc_filter() : 0u;
     g->win_len = n;
     g->from    = from;
     g->ksps    = acq_ksps_of(s_ticks);
