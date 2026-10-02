@@ -2200,3 +2200,18 @@ Both images flashed with `ipecmd -TPPKOB4 -M -OL` and driven by one script over
 - **GUI on the board (the user, same afternoon):** `tools/adc_gui.py` against the project
   build of this entry, connected over COM26. The user tried several things and reported
   that it worked; there is no protocol of which ones.
+
+## 2026-10-02, core_example.X (the core as an MPLAB X project) - 72a8b9f + local changes, local (COM26)
+
+`core_example.X` built through MPLAB X's own makefile generator (`_test_mplabx.bat core`,
+xc-dsc v3.21) and flashed with ipecmd; the same script as the CORE entry above.
+
+- **At MPLAB X's default -O0:** stream at 1/4 MSPS clean, **at 8 MSPS up to 13 missed
+  halves per grab interval with no processing on**; `sigproc on` at 1 MSPS: load 618..687
+  per mille, twice the -O1 figure. Not a fault of the code: the optimization level.
+- **With `optimization-level` 1 set in the project (-O1, as `tools\build.bat`):** stream at
+  1/4/8 MSPS overrun/late/missed 0, `sigproc on` 278..310 per mille, the generator loop
+  as before - the figures of `build.bat core`. The project now sets -O1
+  (`tools/gen_core_project.py`), and `docs/CORE.md` tells the customer to keep it.
+- Not measured: `adc_dma_40msps.X` itself also builds at -O0, so a colleague who builds
+  and flashes from the IDE gets the slower firmware too. Left as it is for now.

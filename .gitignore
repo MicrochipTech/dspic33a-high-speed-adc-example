@@ -13,6 +13,10 @@ adc_dma_40msps.X/build/
 adc_dma_40msps.X/dist/
 adc_dma_40msps.X/debug/
 adc_dma_40msps.X/.generated_files/
+core_example.X/build/
+core_example.X/dist/
+core_example.X/debug/
+core_example.X/.generated_files/
 
 # MPLAB X generated makefile fragments and per-user settings.
 #
@@ -29,6 +33,9 @@ adc_dma_40msps.X/.generated_files/
 adc_dma_40msps.X/nbproject/Makefile-*.mk
 adc_dma_40msps.X/nbproject/Makefile-genesis.properties
 adc_dma_40msps.X/nbproject/private/
+core_example.X/nbproject/Makefile-*.mk
+core_example.X/nbproject/Makefile-genesis.properties
+core_example.X/nbproject/private/
 
 # Command-line build output (tools/build.bat)
 build/

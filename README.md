@@ -1061,6 +1061,8 @@ which file may call which. The table below is the reading order, not the full li
 | `src/drivers/uart.c/.h` | UART2 on the MCP2221A channel: pins/PPS, the baud generator, the non-blocking transmit and bounded flush, the receive interrupt — out of `cli.c` on P5.1 |
 | `src/core/cmd_parser.c/.h` | the command parser, unchanged from [zabooh/cmd_parser](https://github.com/zabooh/cmd_parser) (Apache 2.0) |
 | `adc_dma_40msps.X/` | MPLAB X project — build, program and debug from here |
+| `tools/export_core.py` | the customer's handover from one commit: `build\core-<rev>.zip` with the core, the glue templates, `core_example.X`, `docs/CORE.md` and the GUI, compiled from the unpacked ZIP as a check |
+| `core_example.X/` | the core alone as an MPLAB X project (EV74H48A and EV17P63A, `example_main.c`, -O1) — a customer's starting point, `docs/CORE.md`; generated from `adc_dma_40msps.X` by `tools/gen_core_project.py` |
 | `tests/host/` | host-side (gcc) unit tests for every module in `src/lib/` plus `pingpong`/`routing`, run by `tools\hosttest.bat` |
 | `tests/trace/` | the register-trace harness: golden logs of every register write a driver makes, reproduced bit-for-bit after each change (`tools\trace.bat`) |
 | `docs/TROUBLESHOOTING.md` | **what to do when it does not work** — including where we doubt our own code |

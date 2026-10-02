@@ -203,7 +203,21 @@ tools\trace.bat        15 scenarios (tests/trace/scenarios/*.c), register-write/
                         stub golden diff against tests/trace/golden, incremental (~7-28 s)
 tools\hosttest.bat     tests/host/test_*.c on a host MinGW gcc, plus the Python cross-checks
                         it chains after them (test_frame_xcheck.py, test_tri_eval_xcheck.py, ...)
+tools\build.bat core   the customer's core build (no lab file, src/lab and src/sim not on the
+                        include path) - must stay -Wall -Wextra clean
+python tools\gen_core_project.py --check
+                        core_example.X still matches adc_dma_40msps.X; "stale" -> run it
+                        without --check and commit the result with the change
 ```
+
+**Since 02.10.2026 the lab is where we develop and test, and the customer's example is
+derived from it** (`docs/CORE.md`): the core files are shared, not copied, so these two
+checks are what keeps the example in step - a core file that reaches into the lab fails
+`build.bat core`, a file-list or setting change in the main project shows as "stale".
+A handover to a customer is `python tools\export_core.py [--rev <commit>]`: the core, the
+glue templates, `core_example.X`, `docs/CORE.md` and the GUI from that commit (`git
+archive`, never the working tree) as `build\core-<rev>.zip`, with a `version.h` naming the
+revision, compiled from the unpacked ZIP before it says PASS.
 
 `trace.bat` must reproduce every golden trace unless the task says one changes and why;
 `hosttest.bat` must stay all green (`docs/IMPLEMENTATION-PLAN.md` rules 3 and 4). A change
@@ -228,6 +242,17 @@ MPLAB X 6.35: do **not** put the step into `configurations.xml`
 `cmd /c "$(subst /,\,$(CURDIR))\..\tools\version.bat"` - the IDE's make reports
 `SHELL=sh.exe` without having one, and neither a quoted relative path nor
 `cd ../tools &&` reached cmd intact (`'..' is not recognized`).
+
+**`core_example.X` (02.10.2026)** is the core build as an MPLAB X project for the customer
+(`docs/CORE.md` section 4): the two hardware configurations, the core's files plus the app
+glue, `src/core/example_main.c`, no `src/lab/`/`src/sim/`, and `optimization-level` 1
+(-O1 - at MPLAB X's default -O0 the board measured twice the sigproc load and missed halves
+at 8 MSPS; in the C30 section the value is a bare digit, `"-O1"` is silently ignored). It
+is **generated** from `adc_dma_40msps.X` by `python tools/gen_core_project.py` - never
+edited by hand; a change to the main project's file list or settings is followed by
+running it, and `--check` says whether it is stale - by content (files, exclusions, include path, optimization, device, debugger, macros), not by text: MPLAB X rewrites the file in its own layout as soon as someone opens the project, and that alone is not stale. `tools\_test_mplabx.bat core [nano]`
+builds it; after that run `gen_core_project.py` once more, which puts back the
+`languageToolchainVersion` the makefile generator rewrote.
 
 MPLAB X project: configurations `EV74H48A_Curiosity_Platform_MPS512` (the Curiosity
 Platform board, PKOB4, `dma.c`), `EV17P63A_Curiosity_Nano_MPS506` (the Curiosity Nano:

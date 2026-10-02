@@ -5,6 +5,11 @@ simulator stand-ins next to the code that does the work. The part you need for y
 product is split out as the **core**. This project builds from the same core files
 (`tools\build.bat core`), so the core is the same code that was tested on the board.
 
+You receive it as `core-<revision>.zip` (made by this project's `tools/export_core.py`):
+the folders below, the MPLAB X project `core_example.X`, this document and the GUI. The
+revision is in the file name and in the board's boot banner (`version`), so a question
+about a behaviour can always name the code it is about.
+
 What the core does, in one sentence: **at a sample rate you choose, the ADC streams samples
 through the DMA into RAM continuously, and your code processes each completed half of a
 ping-pong buffer while the DMA fills the other.** Around that sits a console with a binary
@@ -85,8 +90,21 @@ per sample, so it keeps up to about 2 MSPS. Replace it with your own.
 
 ## 4. Building
 
-The command line this project uses for the core build (`tools\build.bat core`, or
-`make core` in `tools/`):
+**In MPLAB X:** open **`core_example.X`**. It is the core build as an MPLAB X project: two
+configurations (`EV74H48A_Curiosity_Platform_MPS512`, `EV17P63A_Curiosity_Nano_MPS506`),
+only the core's files plus the app glue, `example_main.c` as `main()`, and `src/lab/` and
+`src/sim/` not on the include path. It refers to the sources as `../src/...`, so keep it
+next to `src/`. Alternatively, make your own project and copy its file list and its
+compiler settings. This project generates it from `adc_dma_40msps.X`
+(`tools/gen_core_project.py`).
+
+**Optimization -O1, not MPLAB X's default -O0.** `core_example.X` sets -O1. Keep it in your
+own project. At -O0 the same code took twice the CPU time on the board: the example
+low-pass used 62-69 % of the budget at 1 MSPS instead of 31 %, and at 8 MSPS halves were
+missed with no processing switched on at all.
+
+**On the command line**, as this project's `tools\build.bat core` (or `make core` in
+`tools/`) does:
 
 ```
 xc-dsc-gcc -mcpu=33AK512MPS512 -mdfp="<DFP>/xc16" -O1 -Wall -Wextra
@@ -100,8 +118,8 @@ xc-dsc-gcc -mcpu=33AK512MPS512 -mdfp="<DFP>/xc16" -O1 -Wall -Wextra
 
 The sources include each other as `"name.h"` without folder prefixes, so every folder must
 be on the include path. Tested with xc-dsc v3.31 (and v3.21 in MPLAB X) and the
-dsPIC33AK-MP DFP 1.4.260. The core links clean at `-Wall -Wextra`, at -O1 and at MPLAB X's
-default -O0. Its footprint: about 60 KB flash and 35 KB RAM. Of the RAM, 24.6 KB are the
+dsPIC33AK-MP DFP 1.4.260. The core links clean at `-Wall -Wextra`, at -O1 and at -O0.
+Its footprint: about 60 KB flash and 35 KB RAM. Of the RAM, 24.6 KB are the
 DMA area (the ADC buffer, 2 pairs × 2 halves × 1024 samples, and the generator's
 8192-entry table) and 8 KB the console's transmit ring.
 
