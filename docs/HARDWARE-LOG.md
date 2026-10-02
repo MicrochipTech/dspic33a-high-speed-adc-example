@@ -2135,3 +2135,21 @@ blocks, the gap and the clamp.
   halves go unprocessed above that.
 
 Not run: a faster fixed-point version; the GUI against this image.
+
+## 2026-10-02, the low-pass cut-off halved to fs/8 - 9f98b29 + local changes, local (COM26)
+
+The same 4th-order Butterworth, cut-off fs/8 instead of fs/4. Pre-warp K = tan(pi/8) =
+0.414214, so a1 is no longer 0: section 1 g = 0.115258, a1 = -1.113030, a2 = 0.574062;
+section 2 g = 0.088579, a1 = -0.855398, a2 = 0.209715 (unity DC gain each; -3.01 dB at
+0.125 fs, -19.6 dB at 0.2 fs, -30.6 dB at 0.25 fs, computed and checked numerically).
+Direct form I per section, gains folded into one output multiply, one sample per pass
+(the even/odd split of fs/4 needed a1 = 0). `tests/host/test_sigproc.c` with the new
+gains: PASS.
+
+- **Frequency response** (`stream on 100`, the DAC triangle's harmonics, sigproc off vs
+  on): -0.10 dB at 0.088 fs (design -0.21), -1.26 at 0.110 fs (-1.25), -9.05 at 0.154 fs
+  (-8.94), -19.18 at 0.199 fs (-19.28), -29.21 at 0.243 fs (-29.03), -37.99 at 0.287 fs
+  (-38.69); worst 0.7 dB where the design is above -40 dB, below that the noise floor.
+- **Cost:** 1 MSPS 137 free CPU cycles per sample, 2 MSPS 37, missed 0 in 10 grabs each;
+  3 MSPS 4 free and 70 halves missed, 4 MSPS 3563 - about 63 cycles per sample (43 at
+  fs/4), still up to 2 MSPS.

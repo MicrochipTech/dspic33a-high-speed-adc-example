@@ -637,13 +637,14 @@ the cause of the next overrun.
 ![CPU and counters](docs/04_cpu_and_counters.png)
 
 **Your own processing goes into `src/app/sigproc.c`** (`sigproc_block()`). Since 02.10.2026
-it holds a **4th-order Butterworth low-pass with its cut-off at fs/4** - the middle of the
-useful band 0..fs/2, so it follows the sample rate by itself: two biquad sections, float on
-the FPU, the state carried from block to block (the ping-pong stream has no gaps) and
-restarted where the firmware reports one (`info->gap`). On the board it matches its design
-within 0.6 dB (-2.4 dB at 0.243 fs, -30.8 dB at 0.375 fs) and costs about 43 CPU cycles per
-sample: it keeps up to 2 MSPS, at 4 MSPS and above halves go unprocessed. Replace it with
-your own processing as you need. The firmware calls it from the main loop once per completed half - ping and pong
+it holds a **4th-order Butterworth low-pass with its cut-off at fs/8** - a quarter of the
+useful band 0..fs/2 (fs/4 for a few hours the same day), so it follows the sample rate by
+itself: two biquad sections, float on the FPU, the state carried from block to block (the
+ping-pong stream has no gaps) and restarted where the firmware reports one (`info->gap`).
+On the board it matches its design within 0.7 dB (-1.26 dB at 0.110 fs, -9.05 dB at
+0.154 fs, -29.2 dB at 0.243 fs) and costs about 63 CPU cycles per sample: it keeps up to
+2 MSPS, at 3 MSPS and above halves go unprocessed. Replace it with your own processing as
+you need. The firmware calls it from the main loop once per completed half - ping and pong
 alike - while `sigproc on` is set (console, or the GUI's "signal processing" switch; off
 after reset), with the half's samples, its length and which half it is. The result goes
 back into the same half: `stream grab` then sends the processed data to the GUI (the frame

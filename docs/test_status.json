@@ -328,7 +328,7 @@
       "offboard": true,
       "blocks": [],
       "open": [
-        "the low-pass (02.10.2026) ran on the board - frequency response within 0.6 dB of the design, grabs with proc=1 - but not with this committed version yet; it keeps up only to 2 MSPS (about 43 CPU cycles per sample)"
+        "the low-pass (fs/8 since 02.10.2026) ran on the board - frequency response within 0.7 dB of the design, grabs with proc=1 - but not with this committed version yet; it keeps up only to 2 MSPS (about 63 CPU cycles per sample)"
       ],
       "files": [
         "src/app/sigproc.c",

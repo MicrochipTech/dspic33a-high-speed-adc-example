@@ -75,8 +75,8 @@ the pong half, one result per trigger, and the hardware hands over from one to t
 other without a lost sample. Each channel's DONE is one completed half; the interrupt
 books it (`dma0_event()` -> `pingpong_on_half()`) and the main loop's
 `capture_service()` processes it while the DMA fills the next one - with `sigproc on`,
-through `sigproc_block()`: a 4th-order Butterworth low-pass with its cut-off at fs/4,
-the middle of the useful band, its result written back into the same half.
+through `sigproc_block()`: a 4th-order Butterworth low-pass with its cut-off at fs/8,
+a quarter of the useful band, its result written back into the same half.
 
 `stream grab` does not stop anything. It asks `dma0_event()` to move on to the other
 pair: the channel that is waiting at that moment is pointed at the other pair (a
@@ -104,6 +104,6 @@ triggered ceiling of about 18-20 MSPS (`docs/ANALYSIS.md`).
 Since then, on the EV74H48A (01./02.10.2026, `docs/HARDWARE-LOG.md`): the two-pair
 design - grabs of 2048 samples, the DAC triangle contiguous in every frame, overrun,
 late and missed 0 at 1/4/8/10 MSPS, the stream never stopped; at 16 and 20 MSPS the
-pair mode raises DMA overruns without losing data (open). The low-pass matches its
-design within 0.6 dB on the triangle's harmonics and costs about 43 CPU cycles per
-sample, so it keeps up to 2 MSPS; at 4 MSPS and above halves go unprocessed.
+pair mode raises DMA overruns without losing data (open). The low-pass (fs/8) matches its
+design within 0.7 dB on the triangle's harmonics and costs about 63 CPU cycles per
+sample, so it keeps up to 2 MSPS; at 3 MSPS and above halves go unprocessed.

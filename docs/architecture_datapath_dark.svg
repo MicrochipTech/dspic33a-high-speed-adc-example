@@ -133,7 +133,7 @@ svg{--bg:#11161c;--ink:#e3e8ee;--muted:#9aa6b4;--line:#3a4552;
 <circle class="st-pending" cx="1139" cy="401" r="5"><title>not tested with this version yet (changed since it was tested at 7b16260)</title></circle>
 <text class="t" x="990" y="408">capture_service()</text>
 <text class="s" x="990" y="422">sigproc_block() if on:</text>
-<text class="s" x="990" y="436">IIR low-pass fs/4</text>
+<text class="s" x="990" y="436">IIR low-pass fs/8</text>
 <path class="ar" d="M400 318 H450"/>
 <path class="ar" d="M855 164 V290"/>
 <path class="ar" d="M930 318 H980"/>

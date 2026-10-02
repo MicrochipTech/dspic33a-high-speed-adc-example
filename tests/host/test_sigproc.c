@@ -1,7 +1,7 @@
 /*
  * test_sigproc.c - src/app/sigproc.c's 4th-order Butterworth low-pass at
- * fs/4 (02.10.2026) on a host gcc: the gain at DC, in the pass band, at the
- * cut-off and in the stop band against the design (the numbers in
+ * fs/8 (02.10.2026; fs/4 that morning) on a host gcc: the gain at DC, in
+ * the pass band, at the cut-off and in the stop band against the design (the numbers in
  * sigproc.c's comment), no seam between blocks, the re-start on a gap, and
  * the clamp to 0..4095.
  */
@@ -60,18 +60,19 @@ int main(void)
     }
 
     /* ---- pass band, cut-off, stop band: |H| per sigproc.c's comment ---- */
-    const double g05 = gain_at(0.05), g20 = gain_at(0.20), g25 = gain_at(0.25);
-    const double g30 = gain_at(0.30), g375 = gain_at(0.375);
-    CHECK(fabs(g05 - 1.0) < 0.005);              /* 0 dB                       */
-    CHECK(fabs(g20 - 0.9633) < 0.005);           /* -0.32 dB                   */
-    CHECK(fabs(g25 - 0.70711) < 0.005);          /* -3.01 dB: the cut-off      */
-    CHECK(fabs(g30 - 0.2684) < 0.005);           /* -11.4 dB                   */
-    CHECK(fabs(g375 - 0.0294) < 0.003);          /* -30.6 dB (rounding: 0.5 LSB) */
+    const double g05 = gain_at(0.05), g10 = gain_at(0.10), g125 = gain_at(0.125);
+    const double g15 = gain_at(0.15), g20 = gain_at(0.20), g25 = gain_at(0.25);
+    CHECK(fabs(g05 - 0.9998) < 0.005);           /* 0 dB                       */
+    CHECK(fabs(g10 - 0.9352) < 0.005);           /* -0.58 dB                   */
+    CHECK(fabs(g125 - 0.70711) < 0.005);         /* -3.01 dB: the cut-off fs/8 */
+    CHECK(fabs(g15 - 0.4002) < 0.005);           /* -7.95 dB                   */
+    CHECK(fabs(g20 - 0.1051) < 0.003);           /* -19.6 dB                   */
+    CHECK(fabs(g25 - 0.0294) < 0.003);           /* -30.6 dB (rounding: 0.5 LSB) */
 
     /* ---- no seam: two blocks in a row = one block of twice the length ---- */
     {
         static uint16_t one[N], two[N];
-        sine(one, N, 0.11, 0u);
+        sine(one, N, 0.07, 0u);
         for (uint32_t i = 0; i < N; i++) { two[i] = one[i]; }
         run(one, N, true, 10u);                              /* one block      */
         run(two, N / 2u, true, 20u);                         /* two halves     */
