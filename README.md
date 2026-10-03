@@ -1286,3 +1286,13 @@ Two things that cost us time there, in case you build without the IDE:
    (`support/dsPIC33A/gld/p33AK512MPS512.gld` inside the pack). Without it the
    compiler links against a 30F architecture and stops with "incompatible with
    30Fxxxx output".
+
+## License
+
+Microchip's example license, see [LICENSE.txt](LICENSE.txt): you may use this
+software and its derivatives exclusively with Microchip products. Every source file
+carries the same notice in its header.
+
+One exception: the command parser `src/core/cmd_parser.c/.h`, taken from
+[zabooh/cmd_parser](https://github.com/zabooh/cmd_parser), is under the Apache License 2.0;
+its own header states the terms, and they apply to those two files.
